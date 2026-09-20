@@ -5613,6 +5613,63 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        // Per-app DNS profiles. Saving is side-effect free; runtime applies on next ZDT-D restart.
+        ("GET", ["api", "programs", "dnsprofiles", "config"]) => {
+            let res = crate::programs::dnsprofiles::load(Path::new(crate::programs::dnsprofiles::CONFIG_PATH));
+            match res {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data})),
+                Err(e) => write_err(stream, e),
+            }
+        }
+        ("PUT", ["api", "programs", "dnsprofiles", "config"]) => {
+            let res = (|| -> Result<crate::programs::dnsprofiles::ProfileDocument> {
+                use crate::programs::dnsprofiles as dns;
+                if body.len() > dns::MAX_BYTES { anyhow::bail!("dns_profile_store_too_large"); }
+                let document: dns::ProfileDocument = serde_json::from_slice(body)?;
+                dns::validate(&document)?;
+                let uids = crate::android::pkg_uid::resolve_uid_map(
+                    crate::android::pkg_uid::Mode::Default, &dns::packages(&document))?;
+                dns::validate_uids(&document, &uids)?;
+                dns::save(Path::new(dns::CONFIG_PATH), document)
+            })();
+            match res {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data, "runtime_available": true, "restart_required": true})),
+                Err(e) => write_err(stream, e),
+            }
+        }
+        ("POST", ["api", "programs", "dnsprofiles", "validate"]) => {
+            let res = (|| -> Result<serde_json::Value> {
+                use crate::programs::dnsprofiles as dns;
+                if body.len() > dns::MAX_BYTES { anyhow::bail!("dns_profile_store_too_large"); }
+                let document: dns::ProfileDocument = serde_json::from_slice(body)?;
+                dns::validate(&document)?;
+                let uids = crate::android::pkg_uid::resolve_uid_map(
+                    crate::android::pkg_uid::Mode::Default, &dns::packages(&document))?;
+                dns::validate_uids(&document, &uids)?;
+                let preview = dns::preview(&document)?;
+                Ok(json!({
+                    "uid_by_package": uids,
+                    "status": "runtime_ready_after_restart",
+                    "runtime": preview
+                }))
+            })();
+            // A validation failure is a normal result that the UI must display,
+            // not an empty success or a detail visible only in daemon logs.
+            match res {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "valid": true, "data": data})),
+                Err(e) => write_json(stream, 200, json!({"ok": true, "valid": false, "error": format!("{e:#}")})),
+            }
+        }
+
+
+        ("GET", ["api", "programs", "dnsprofiles", "status"]) => {
+            write_json(
+                stream,
+                200,
+                json!({"ok": true, "data": crate::programs::dnsprofiles::runtime_status()}),
+            )
+        }
+
         // --- dnscrypt enabled/config
         ("GET", ["api", "programs", "dnscrypt", "enabled"]) => {
             let p = active_json_path("dnscrypt");

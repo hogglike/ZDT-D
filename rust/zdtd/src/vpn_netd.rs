@@ -980,6 +980,13 @@ fn apply_one_profile(profile: &VpnNetdProfile, uid_ranges: &[String]) -> Result<
     ensure_endpoint_escape_routes(profile);
 
     if let Err(e) = set_dns_universal(profile.netid, &profile.tun, &profile.dns) {
+        if profile.owner_program == "dnsprofiles" {
+            bail!(
+                "vpn_netd: DNS is mandatory for per-app DNS profile {}/{}: {e:#}",
+                profile.owner_program,
+                profile.profile
+            );
+        }
         log::warn!("vpn_netd: profile {}/{} DNS was not applied: {e:#}", profile.owner_program, profile.profile);
     }
 
