@@ -208,6 +208,7 @@ pub fn stop_services_and_restore_iptables() -> Result<()> {
     // 1) stop background processes
     // Use `pidof` to avoid killing similarly-named processes.
     stop_process_groups_parallel()?;
+    crate::programs::dnsprofiles::cleanup_runtime_metadata();
     let _ = crate::programs::myprogram::stop_all();
     // Stop VPN profile engines only when they were launched from this module path.
     kill_exact_pids("openvpn --config <profile>/client.ovpn", &crate::programs::openvpn::main_pids_exact())?;

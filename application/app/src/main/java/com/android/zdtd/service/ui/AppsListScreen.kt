@@ -151,6 +151,15 @@ fun AppsListScreen(
       )
     }
 
+    item(key = "dns_profiles_entry") {
+      Card(onClick = { onOpenProgram("dnsprofiles") }, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+          Text("DNS-профили", style = MaterialTheme.typography.titleMedium)
+          Text("Per-app DoH · отдельный DNS для выбранных приложений")
+        }
+      }
+    }
+
     item(key = "optional_tools_entry") {
       OptionalToolsEntryCard(
         compact = compactCards,

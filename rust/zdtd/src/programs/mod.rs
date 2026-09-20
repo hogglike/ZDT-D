@@ -5,6 +5,7 @@ pub mod nfqws2;
 pub mod byedpi;
 pub mod dpitunnel;
 pub mod dnscrypt;
+pub mod dnsprofiles;
 pub mod operaproxy;
 pub mod singbox;
 pub mod hysteria2;
