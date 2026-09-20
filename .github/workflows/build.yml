@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - per-app-dns-stage2-test
   workflow_dispatch:
     inputs:
       build_type:
