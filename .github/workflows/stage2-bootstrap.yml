@@ -5,7 +5,11 @@ on:
     branches:
       - dnsprofiles-stage2
     paths:
-      - patches/dnsprofiles-stage2.patch.gz.b64
+      - patches/dnsprofiles-stage2.b64.part00
+      - patches/dnsprofiles-stage2.b64.part01
+      - patches/dnsprofiles-stage2.b64.part02
+      - patches/dnsprofiles-stage2.b64.part03
+      - patches/dnsprofiles-stage2.b64.part04
       - .github/workflows/stage2-bootstrap.yml
   workflow_dispatch:
 
@@ -25,7 +29,7 @@ jobs:
       - name: Decode and apply Stage2 patch
         run: |
           set -euo pipefail
-          base64 -d patches/dnsprofiles-stage2.patch.gz.b64 | gzip -d > /tmp/dnsprofiles-stage2.patch
+          cat patches/dnsprofiles-stage2.b64.part* | base64 -d | gzip -d > /tmp/dnsprofiles-stage2.patch
           git apply --check /tmp/dnsprofiles-stage2.patch
           git apply /tmp/dnsprofiles-stage2.patch
           git diff --check
@@ -48,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f patches/dnsprofiles-stage2.patch.gz.b64
+          rm -f patches/dnsprofiles-stage2.b64.part*
           rm -f .github/workflows/stage2-bootstrap.yml
           rmdir patches 2>/dev/null || true
           git config user.name "github-actions[bot]"
