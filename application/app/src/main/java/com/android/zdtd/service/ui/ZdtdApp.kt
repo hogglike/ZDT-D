@@ -1649,7 +1649,8 @@ private fun MainShell(
     tab == Tab.APPS && appsRoute == AppsRoute.Subscriptions -> stringResource(R.string.subscriptions_title)
     tab == Tab.APPS && appsRoute is AppsRoute.Program -> {
       val route = appsRoute as AppsRoute.Program
-      uiState.programs.firstOrNull { it.id == route.programId }?.name ?: route.programId
+      if (route.programId == "dnsprofiles") "DNS-профили"
+      else uiState.programs.firstOrNull { it.id == route.programId }?.name ?: route.programId
     }
     tab == Tab.APPS && appsRoute is AppsRoute.Profile -> {
       val route = appsRoute as AppsRoute.Profile

@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       build_type:
@@ -16,7 +19,7 @@ on:
           - Release
 
 concurrency:
-  group: zdt-d-service-build
+  group: zdt-d-service-build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -221,6 +224,26 @@ jobs:
       build_start_ts: ${{ steps.gate.outputs.build_start_ts }}
 
     steps:
+      - name: Check APK signing prerequisites
+        env:
+          ZDT_KEYSTORE_BASE64: ${{ secrets.ZDT_KEYSTORE_BASE64 }}
+          ZDT_KEYSTORE_PASSWORD: ${{ secrets.ZDT_KEYSTORE_PASSWORD }}
+          ZDT_KEY_ALIAS: ${{ secrets.ZDT_KEY_ALIAS }}
+          ZDT_KEY_PASSWORD: ${{ secrets.ZDT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in ZDT_KEYSTORE_BASE64 ZDT_KEYSTORE_PASSWORD ZDT_KEY_ALIAS ZDT_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required Actions secret is missing: $name"
+              missing=1
+            fi
+          done
+          if [[ "$missing" == 1 ]]; then
+            echo "APK signing secrets must be configured in this fork before the full native build." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Decide whether to compile
         id: gate
         env:
