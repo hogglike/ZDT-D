@@ -1,9 +1,10 @@
 //! Per-app DNS profiles.
 //!
-//! Each enabled profile gets its own sing-box TUN and Android netd VPN network.
-//! Selected app UIDs are attached to that network. netd points those UIDs at a
-//! synthetic DNS address inside the profile /30; sing-box hijacks port 53 from
-//! the TUN and resolves it through the configured DoH endpoint. All non-DNS
+//! Each enabled profile gets its own tun2socks TUN plus a local sing-box SOCKS
+//! endpoint and Android netd VPN network. Selected app UIDs are attached to
+//! that network. netd points those UIDs at a synthetic DNS address inside the
+//! profile /30; DNS packets traverse tun2socks into sing-box where port 53 is
+//! hijacked and resolved through the configured DoH endpoint. All non-DNS
 //! traffic exits through a DIRECT outbound, so this is a DNS policy layer, not
 //! a remote VPN/proxy.
 use anyhow::{bail, Context, Result};
@@ -13,7 +14,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddrV4, UdpSocket},
+    net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket},
     os::unix::{fs::OpenOptionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -34,6 +35,8 @@ pub const MAX_BYTES: usize = 256 * 1024;
 const ROOT: &str = "/data/adb/modules/ZDT-D/working_folder/dnsprofiles";
 const RUNTIME_ROOT: &str = "/data/adb/modules/ZDT-D/working_folder/dnsprofiles/runtime";
 const SINGBOX_BIN: &str = "/data/adb/modules/ZDT-D/bin/sing-box";
+const TUN2SOCKS_BIN: &str = "/data/adb/modules/ZDT-D/bin/tun2socks";
+const PROXY_PORT_BASE: u32 = 19500;
 const DNSCRYPT_ACTIVE: &str = "/data/adb/modules/ZDT-D/working_folder/dnscrypt/active.json";
 const NETID_BASE: u32 = NETID_DNSPROFILES.0;
 const NETID_MAX: u32 = NETID_DNSPROFILES.1;
@@ -104,10 +107,13 @@ struct RuntimePlan {
     tun_address: String,
     cidr: String,
     dns: String,
+    proxy_port: u16,
     root: PathBuf,
     config: PathBuf,
     log: PathBuf,
     pid: PathBuf,
+    tun2socks_log: PathBuf,
+    tun2socks_pid: PathBuf,
     app_in: PathBuf,
     app_out: PathBuf,
 }
@@ -385,6 +391,11 @@ fn build_plan(id: &str, profile: &DnsProfile, all_names: &[String]) -> Result<Ru
         .context("dnsprofiles CIDR overflow")?;
     let host = network.checked_add(1).context("dnsprofiles CIDR overflow")?;
     let dns = network.checked_add(2).context("dnsprofiles CIDR overflow")?;
+    let proxy_port_u32 = PROXY_PORT_BASE
+        .checked_add(index)
+        .context("dnsprofiles proxy port overflow")?;
+    let proxy_port = u16::try_from(proxy_port_u32)
+        .context("dnsprofiles proxy port out of range")?;
     let root = runtime_root(id);
     Ok(RuntimePlan {
         id: id.to_string(),
@@ -394,9 +405,12 @@ fn build_plan(id: &str, profile: &DnsProfile, all_names: &[String]) -> Result<Ru
         tun_address: format!("{}/30", u32_to_ipv4(host)),
         cidr: format!("{}/30", u32_to_ipv4(network)),
         dns: u32_to_ipv4(dns),
+        proxy_port,
         config: root.join("config.json"),
         log: root.join("sing-box.log"),
         pid: root.join("sing-box.pid"),
+        tun2socks_log: root.join("tun2socks.log"),
+        tun2socks_pid: root.join("tun2socks.pid"),
         app_in: root.join("app/uid/user_program"),
         app_out: root.join("app/out/user_program"),
         root,
@@ -452,9 +466,8 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
             "independent_cache": true
         },
         "inbounds": [{
-            "type": "tun", "tag": "dns-profile-tun", "interface_name": plan.tun,
-            "address": [plan.tun_address], "mtu": 1400,
-            "auto_route": false, "auto_redirect": false, "strict_route": false, "stack": "mixed"
+            "type": "mixed", "tag": "dns-profile-mixed",
+            "listen": "127.0.0.1", "listen_port": plan.proxy_port
         }],
         "outbounds": [{"type": "direct", "tag": "direct"}],
         "route": {
@@ -525,13 +538,22 @@ fn pid_matches_plan(pid: i32, plan: &RuntimePlan) -> bool {
     text.contains("sing-box") && text.contains(&plan.config.display().to_string())
 }
 
-fn stop_plan_process(plan: &RuntimePlan) {
-    let Some(pid) = read_pid(&plan.pid) else {
-        let _ = fs::remove_file(&plan.pid);
+fn pid_matches_tun2socks(pid: i32, plan: &RuntimePlan) -> bool {
+    let path = PathBuf::from("/proc").join(pid.to_string()).join("cmdline");
+    let Ok(raw) = fs::read(path) else { return false; };
+    let text = String::from_utf8_lossy(&raw).replace('\0', " ");
+    text.contains("tun2socks")
+        && text.contains(&format!("tun://{}", plan.tun))
+        && text.contains(&format!("socks5://127.0.0.1:{}", plan.proxy_port))
+}
+
+fn stop_pid_file(path: &Path, matches: impl Fn(i32) -> bool) {
+    let Some(pid) = read_pid(path) else {
+        let _ = fs::remove_file(path);
         return;
     };
-    if !pid_matches_plan(pid, plan) {
-        let _ = fs::remove_file(&plan.pid);
+    if !matches(pid) {
+        let _ = fs::remove_file(path);
         return;
     }
     unsafe {
@@ -549,7 +571,91 @@ fn stop_plan_process(plan: &RuntimePlan) {
             let _ = libc::kill(pid, libc::SIGKILL);
         }
     }
-    let _ = fs::remove_file(&plan.pid);
+    let _ = fs::remove_file(path);
+}
+
+fn wait_tcp_ready(port: u16, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    while Instant::now() < deadline {
+        if TcpStream::connect_timeout(&addr.into(), Duration::from_millis(400)).is_ok() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    bail!("dnsprofiles: local sing-box proxy port {port} did not become ready")
+}
+
+fn spawn_tun2socks(plan: &RuntimePlan) -> Result<i32> {
+    if let Some(pid) = read_pid(&plan.tun2socks_pid) {
+        if pid_matches_tun2socks(pid, plan) {
+            return Ok(pid);
+        }
+        let _ = fs::remove_file(&plan.tun2socks_pid);
+    }
+    if !Path::new(TUN2SOCKS_BIN).is_file() {
+        bail!("dnsprofiles: tun2socks binary missing: {TUN2SOCKS_BIN}");
+    }
+    let logf = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&plan.tun2socks_log)
+        .with_context(|| format!("open {}", plan.tun2socks_log.display()))?;
+    let logf_err = logf.try_clone()?;
+    let proxy = format!("socks5://127.0.0.1:{}", plan.proxy_port);
+    let mut cmd = Command::new(TUN2SOCKS_BIN);
+    cmd.arg("-device")
+        .arg(format!("tun://{}", plan.tun))
+        .arg("-proxy")
+        .arg(&proxy)
+        .arg("-loglevel")
+        .arg("info")
+        .current_dir(&plan.root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(logf))
+        .stderr(Stdio::from(logf_err));
+    unsafe {
+        cmd.pre_exec(|| {
+            let _ = libc::setsid();
+            Ok(())
+        });
+    }
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("dnsprofiles: spawn tun2socks for {}", plan.id))?;
+    let pid = i32::try_from(child.id()).unwrap_or(i32::MAX);
+    write_atomic(&plan.tun2socks_pid, format!("{pid}\n").as_bytes())?;
+    Ok(pid)
+}
+
+fn configure_tun_addr(plan: &RuntimePlan) -> Result<()> {
+    let (code, out) = shell::run_timeout(
+        "ip",
+        &["addr", "replace", &plan.tun_address, "dev", &plan.tun],
+        Capture::Both,
+        Duration::from_secs(3),
+    )
+    .context("dnsprofiles: configure TUN address")?;
+    if code != 0 {
+        bail!("dnsprofiles: ip addr replace failed for {}: {}", plan.tun, out.trim());
+    }
+    let (code, out) = shell::run_timeout(
+        "ip",
+        &["link", "set", "dev", &plan.tun, "up"],
+        Capture::Both,
+        Duration::from_secs(3),
+    )
+    .context("dnsprofiles: bring TUN up")?;
+    if code != 0 {
+        bail!("dnsprofiles: ip link set up failed for {}: {}", plan.tun, out.trim());
+    }
+    Ok(())
+}
+
+fn stop_plan_process(plan: &RuntimePlan) {
+    stop_pid_file(&plan.tun2socks_pid, |pid| pid_matches_tun2socks(pid, plan));
+    stop_pid_file(&plan.pid, |pid| pid_matches_plan(pid, plan));
 }
 
 fn stop_stale_owned_processes(document: &ProfileDocument) {
@@ -682,21 +788,29 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
     prepare_plan_files(plan)?;
     singbox_check(plan)?;
     let pid = spawn_plan(plan)?;
-    if let Err(e) = wait_tun_link(&plan.tun, TUN_WAIT)
-        .and_then(|_| wait_dns_ready(plan))
-    {
+    let start_result = (|| -> Result<()> {
+        wait_tcp_ready(plan.proxy_port, TUN_WAIT)?;
+        let tun_pid = spawn_tun2socks(plan)?;
+        wait_tun_link(&plan.tun, TUN_WAIT)?;
+        configure_tun_addr(plan)?;
+        wait_dns_ready(plan)?;
+        log::info!(
+            "dnsprofiles: profile={} ready singbox_pid={} tun2socks_pid={} netid={} tun={} dns={} proxy_port={} endpoint={}",
+            plan.id,
+            pid,
+            tun_pid,
+            plan.netid,
+            plan.tun,
+            plan.dns,
+            plan.proxy_port,
+            plan.profile.endpoint
+        );
+        Ok(())
+    })();
+    if let Err(e) = start_result {
         stop_plan_process(plan);
-        return Err(e).with_context(|| format!("dnsprofiles profile {} pid={pid}", plan.id));
+        return Err(e).with_context(|| format!("dnsprofiles profile {} singbox_pid={pid}", plan.id));
     }
-    log::info!(
-        "dnsprofiles: profile={} ready pid={} netid={} tun={} dns={} endpoint={}",
-        plan.id,
-        pid,
-        plan.netid,
-        plan.tun,
-        plan.dns,
-        plan.profile.endpoint
-    );
     Ok(())
 }
 
@@ -803,6 +917,7 @@ pub fn cleanup_runtime_metadata() {
     let Ok(entries) = fs::read_dir(RUNTIME_ROOT) else { return; };
     for entry in entries.flatten() {
         let _ = fs::remove_file(entry.path().join("sing-box.pid"));
+        let _ = fs::remove_file(entry.path().join("tun2socks.pid"));
     }
 }
 
@@ -814,6 +929,9 @@ pub fn runtime_status() -> RuntimeStatus {
     for (id, profile) in &document.profiles {
         if let Ok(plan) = build_plan(id, profile, &names) {
             let pid = read_pid(&plan.pid).filter(|pid| pid_matches_plan(*pid, &plan));
+            let tun2socks_running = read_pid(&plan.tun2socks_pid)
+                .map(|p| pid_matches_tun2socks(p, &plan))
+                .unwrap_or(false);
             let netd_applied = applied
                 .profiles
                 .iter()
@@ -825,7 +943,7 @@ pub fn runtime_status() -> RuntimeStatus {
                     netid: plan.netid,
                     tun: plan.tun,
                     dns: plan.dns,
-                    process_running: pid.is_some(),
+                    process_running: pid.is_some() && tun2socks_running,
                     netd_applied,
                     pid,
                     log_path: plan.log.display().to_string(),
