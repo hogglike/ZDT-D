@@ -26,6 +26,8 @@ REPLACEMENTS = [
     ("/data/adb/modules/ZDT-D", "/data/adb/modules/ZDT-D-Test"),
     ("/data/adb/ZDT-D", "/data/adb/ZDT-D-Test"),
     ("com.android.zdtd.service", "com.hogglike.zdtd.test"),
+    ('"ZDT-D"', '"ZDT-D-Test"'),
+    ('/ZDT-D/zygisk/', '/ZDT-D-Test/zygisk/'),
 ]
 
 SKIP_PARTS = {
