@@ -4885,6 +4885,13 @@ jobs:
           test -s "$MODULE_ZIP" || { echo "::error::module zip missing after central directory protection"; exit 1; }
           ls -lh "$MODULE_ZIP" "$RAW_MODULE_ZIP"
 
+      - name: Upload plain module ZIP for strict root managers
+        uses: actions/upload-artifact@v7
+        with:
+          name: zdt-test-module-plain
+          path: out/module/zdt_module.raw.zip
+          retention-days: 30
+
       - name: Upload module ZIP
         uses: actions/upload-artifact@v7
         with:
