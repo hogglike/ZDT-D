@@ -34,29 +34,14 @@ jobs:
           git apply /tmp/dnsprofiles-stage2.patch
           git diff --check
 
-      - name: Enable normal build workflow on this test branch
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path(".github/workflows/build.yml")
-          s = p.read_text()
-          needle = "  push:\n    branches:\n      - main\n"
-          repl = "  push:\n    branches:\n      - main\n      - dnsprofiles-stage2\n"
-          if needle not in s:
-              raise SystemExit("build workflow push branch block not found")
-          p.write_text(s.replace(needle, repl, 1))
-          PY
-
       - name: Commit real Stage2 source
         run: |
           set -euo pipefail
           rm -f patches/dnsprofiles-stage2.patch.gz.b64
           rm -f patches/dnsprofiles-stage2.b64.part*
-          rm -f .github/workflows/stage2-bootstrap.yml
           rmdir patches 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "dnsprofiles: implement per-app DoH runtime auto run compile"
+          git commit -m "dnsprofiles: implement per-app DoH runtime"
           git push origin HEAD:dnsprofiles-stage2
