@@ -19,6 +19,9 @@ const VPN_NETD_DIR: &str = "/data/adb/modules/ZDT-D/working_folder/vpn_netd";
 const NDC_TIMEOUT: Duration = Duration::from_secs(5);
 const IP_TIMEOUT: Duration = Duration::from_secs(3);
 const IPT_TIMEOUT: Duration = Duration::from_secs(5);
+const DNSRESOLVER_TIMEOUT: Duration = Duration::from_secs(10);
+const CONTROLLER_PACKAGE: &str = "com.android.zdtd.service";
+const DNSRESOLVER_BRIDGE_CLASS: &str = "com.android.zdtd.service.dns.DnsResolverBridge";
 // Цепочка ip6tables, которой временно закрывается IPv6 у приложений, привязанных
 // к VPN-профилям: netd умеет заводить в туннель только IPv4, и без этого запрета
 // IPv6-трафик выбранных приложений уходит мимо туннеля.
@@ -526,28 +529,104 @@ fn add_route_universal(netid: u32, tun: &str, dest: &str, gateway: Option<&str>)
     bail!("vpn_netd: route add failed netid={netid} dest={dest}: rc={code} out={out}");
 }
 
+fn controller_apk_path() -> Result<String> {
+    let (code, out) = shell::run_timeout(
+        "pm",
+        &["path", CONTROLLER_PACKAGE],
+        Capture::Both,
+        Duration::from_secs(5),
+    )
+    .context("vpn_netd: locate controller APK")?;
+    if code != 0 {
+        bail!("vpn_netd: pm path {} failed rc={} out={}", CONTROLLER_PACKAGE, code, trim_ndc_output(&out));
+    }
+    out.lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("package:"))
+        .find(|path| path.ends_with("/base.apk") || path.ends_with(".apk"))
+        .map(str::to_string)
+        .with_context(|| format!("vpn_netd: base APK path not found for {}", CONTROLLER_PACKAGE))
+}
+
+fn dnsresolver_bridge(args: &[String]) -> Result<String> {
+    let apk = controller_apk_path()?;
+    let mut argv = Vec::<String>::with_capacity(args.len() + 4);
+    argv.push(format!("CLASSPATH={apk}"));
+    argv.push("/system/bin/app_process".to_string());
+    argv.push("/system/bin".to_string());
+    argv.push(DNSRESOLVER_BRIDGE_CLASS.to_string());
+    argv.extend(args.iter().cloned());
+    let refs = argv.iter().map(String::as_str).collect::<Vec<_>>();
+    let (code, out) = shell::run_timeout(
+        "/system/bin/env",
+        &refs,
+        Capture::Both,
+        DNSRESOLVER_TIMEOUT,
+    )
+    .context("vpn_netd: run DnsResolver bridge")?;
+    let out = trim_ndc_output(&out);
+    if code == 0 && out.lines().any(|line| line.trim_start().starts_with("OK ")) {
+        return Ok(out);
+    }
+    bail!("vpn_netd: DnsResolver bridge failed rc={code} out={out}");
+}
+
+fn set_dns_via_binder(netid: u32, tun: &str, dns: &[String]) -> Result<()> {
+    if dns.len() != 1 {
+        bail!("vpn_netd: DnsResolver bridge currently requires exactly one DNS server");
+    }
+    let args = vec![
+        "set".to_string(),
+        netid.to_string(),
+        dns[0].clone(),
+        tun.to_string(),
+    ];
+    let out = dnsresolver_bridge(&args)?;
+    log::info!("vpn_netd: modern DnsResolver binder applied netid={} tun={} dns={}: {}", netid, tun, dns[0], out);
+    Ok(())
+}
+
+fn clear_dns_via_binder(netid: u32) {
+    let args = vec!["clear".to_string(), netid.to_string()];
+    match dnsresolver_bridge(&args) {
+        Ok(out) => log::info!("vpn_netd: modern DnsResolver binder cleared netid={}: {}", netid, out),
+        Err(e) => log::warn!("vpn_netd: modern DnsResolver cleanup failed netid={}: {e:#}", netid),
+    }
+}
+
 fn set_dns_universal(netid: u32, tun: &str, dns: &[String]) -> Result<()> {
+    // Android 10+ moved resolver configuration out of the legacy netd command
+    // listener into the modular dnsresolver Binder service. Prefer the Binder
+    // bridge bundled in our APK; retain ndc as a compatibility fallback for old
+    // Android releases.
+    let binder_error = match set_dns_via_binder(netid, tun, dns) {
+        Ok(()) => return Ok(()),
+        Err(e) => {
+            log::warn!("vpn_netd: modern DnsResolver binder failed, trying legacy ndc: {e:#}");
+            format!("{e:#}")
+        }
+    };
+
     let netid_s = netid.to_string();
     let mut setnetdns = vec!["resolver".to_string(), "setnetdns".to_string(), netid_s, String::new()];
     setnetdns.extend(dns.iter().cloned());
     let (code1, out1) = ndc_capture(&setnetdns)?;
     if ndc_is_ok(code1, &out1) {
-        log::info!("vpn_netd: resolver setnetdns applied netid={netid}");
+        log::info!("vpn_netd: legacy resolver setnetdns applied netid={netid}");
         return Ok(());
     }
 
-    // Older netd builds used interface DNS configuration before setnetdns.
-    // DNS remains warning-only for vpn_netd, but trying setifdns improves
-    // compatibility on these devices and records the result in ndc_history.log.
     let mut setifdns = vec!["resolver".to_string(), "setifdns".to_string(), tun.to_string(), String::new()];
     setifdns.extend(dns.iter().cloned());
     let (code2, out2) = ndc_capture(&setifdns)?;
     if ndc_is_ok(code2, &out2) {
-        log::info!("vpn_netd: resolver setifdns applied tun={tun} netid={netid}");
+        log::info!("vpn_netd: legacy resolver setifdns applied tun={tun} netid={netid}");
         return Ok(());
     }
 
-    bail!("vpn_netd: resolver DNS setup failed; setnetdns rc={code1} out={out1}; setifdns rc={code2} out={out2}");
+    bail!(
+        "vpn_netd: resolver DNS setup failed; binder={binder_error}; setnetdns rc={code1} out={out1}; setifdns rc={code2} out={out2}"
+    );
 }
 
 fn unique_endpoint_escape_ips(profile: &VpnNetdProfile) -> Vec<String> {
@@ -955,6 +1034,7 @@ fn sync_ipv6_block(profiles: &[AppliedProfile]) {
 fn remove_netd_profile(applied: &AppliedProfile) {
     remove_endpoint_escape_routes(applied);
     remove_uid_ranges(applied.netid, &applied.uid_ranges);
+    clear_dns_via_binder(applied.netid);
     let netid_s = applied.netid.to_string();
     ndc_quiet(vec!["network".into(), "interface".into(), "remove".into(), netid_s.clone(), applied.tun.clone()]);
     ndc_quiet(vec!["network".into(), "destroy".into(), netid_s]);
