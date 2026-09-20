@@ -1,11 +1,19 @@
 package com.android.zdtd.service.dns;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
+import android.os.IBinder;
+import android.os.Parcel;
+
 import java.lang.reflect.Method;
 
 /**
- * Root/app_process bridge for modern Android DnsResolver AIDL.
+ * Root/app_process bridge for Android's stable IDnsResolver AIDL.
+ *
+ * The hidden framework Java stubs (android.net.IDnsResolver$Stub and
+ * ResolverParamsParcel) are not present in the app_process boot class path on
+ * current OxygenOS/Android builds.  Talk to the stable Binder interface
+ * directly instead.  Stable AIDL keeps transaction order and parcel layout
+ * compatible; newly appended parcel fields are skipped by older readers using
+ * the size prefix.
  *
  * Usage:
  *   app_process /system/bin com.android.zdtd.service.dns.DnsResolverBridge set <netId> <dnsIp> <ifName>
@@ -14,100 +22,127 @@ import java.lang.reflect.Method;
 public final class DnsResolverBridge {
     private DnsResolverBridge() {}
 
-    private static void setFieldIfPresent(Object obj, String name, Object value) throws Exception {
-        try {
-            Field f = obj.getClass().getField(name);
-            f.set(obj, value);
-        } catch (NoSuchFieldException ignored) {
-            // Older frozen AIDL versions may not have newer optional fields.
-        }
-    }
+    private static final String DESCRIPTOR = "android.net.IDnsResolver";
 
-    private static Object resolver() throws Exception {
+    // Stable AIDL order (FIRST_CALL_TRANSACTION == 1):
+    // isAlive=1, registerEventListener=2, setResolverConfiguration=3,
+    // getResolverInfo=4, startPrefix64Discovery=5, stopPrefix64Discovery=6,
+    // getPrefix64=7, createNetworkCache=8, destroyNetworkCache=9,
+    // setLogSeverity=10, flushNetworkCache=11, ...
+    private static final int TRANSACTION_SET_RESOLVER_CONFIGURATION = 3;
+    private static final int TRANSACTION_CREATE_NETWORK_CACHE = 8;
+    private static final int TRANSACTION_DESTROY_NETWORK_CACHE = 9;
+    private static final int TRANSACTION_FLUSH_NETWORK_CACHE = 11;
+
+    private static IBinder resolverBinder() throws Exception {
         Class<?> sm = Class.forName("android.os.ServiceManager");
         Method getService = sm.getDeclaredMethod("getService", String.class);
         getService.setAccessible(true);
-        Object binder = getService.invoke(null, "dnsresolver");
-        if (binder == null) throw new IllegalStateException("dnsresolver service not found");
-
-        Class<?> stub = Class.forName("android.net.IDnsResolver$Stub");
-        Method asInterface = null;
-        for (Method m : stub.getDeclaredMethods()) {
-            if (m.getName().equals("asInterface") && m.getParameterTypes().length == 1) {
-                asInterface = m;
-                break;
-            }
+        Object value = getService.invoke(null, "dnsresolver");
+        if (!(value instanceof IBinder)) {
+            throw new IllegalStateException("dnsresolver service not found");
         }
-        if (asInterface == null) throw new NoSuchMethodException("IDnsResolver.Stub.asInterface");
-        asInterface.setAccessible(true);
-        Object r = asInterface.invoke(null, binder);
-        if (r == null) throw new IllegalStateException("dnsresolver binder interface unavailable");
-        return r;
+        return (IBinder) value;
     }
 
-    private static void invokeNoResult(Object target, String method, Class<?>[] sig, Object... args)
-            throws Exception {
-        Method m = target.getClass().getMethod(method, sig);
+    private static void transactInt(IBinder binder, int code, int value) throws Exception {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
         try {
-            m.invoke(target, args);
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof Exception) throw (Exception) cause;
-            throw e;
+            data.writeInterfaceToken(DESCRIPTOR);
+            data.writeInt(value);
+            if (!binder.transact(code, data, reply, 0)) {
+                throw new IllegalStateException("binder transaction " + code + " returned false");
+            }
+            reply.readException();
+        } finally {
+            reply.recycle();
+            data.recycle();
+        }
+    }
+
+    /**
+     * Serialize ResolverParamsParcel using stable-AIDL parcelable framing.
+     * Current AOSP field order is append-only.  The size prefix lets an older
+     * dnsresolver skip fields it does not know.
+     */
+    private static void writeResolverParams(Parcel p, int netId, String dnsIp, String ifName) {
+        final int start = p.dataPosition();
+        p.writeInt(0); // parcelable byte size, patched below
+
+        p.writeInt(netId);
+        p.writeInt(1800); // sampleValiditySeconds
+        p.writeInt(25);   // successThreshold
+        p.writeInt(8);    // minSamples
+        p.writeInt(64);   // maxSamples
+        p.writeInt(0);    // baseTimeoutMsec
+        p.writeInt(0);    // retryCount
+        p.writeStringArray(new String[]{dnsIp}); // servers
+        p.writeStringArray(new String[0]);        // domains
+        p.writeString("");                        // tlsName
+        p.writeStringArray(new String[0]);        // tlsServers
+        p.writeStringArray(new String[0]);        // tlsFingerprints
+        p.writeString("");                        // caCertificate
+        p.writeInt(0);                            // tlsConnectTimeoutMs
+        p.writeInt(0);                            // nullable ResolverOptionsParcel
+        p.writeIntArray(new int[]{4});            // transportTypes: TRANSPORT_VPN
+        p.writeBoolean(false);                    // meteredNetwork
+        p.writeInt(0);                            // nullable DohParamsParcel
+        p.writeStringArray(new String[]{ifName}); // interfaceNames
+
+        final int end = p.dataPosition();
+        p.setDataPosition(start);
+        p.writeInt(end - start);
+        p.setDataPosition(end);
+    }
+
+    private static void setResolverConfiguration(
+            IBinder binder, int netId, String dnsIp, String ifName) throws Exception {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(DESCRIPTOR);
+
+            // Parcel.writeTypedObject(non-null, 0) starts with a presence marker.
+            data.writeInt(1);
+            writeResolverParams(data, netId, dnsIp, ifName);
+
+            if (!binder.transact(TRANSACTION_SET_RESOLVER_CONFIGURATION, data, reply, 0)) {
+                throw new IllegalStateException("setResolverConfiguration transaction returned false");
+            }
+            reply.readException();
+        } finally {
+            reply.recycle();
+            data.recycle();
         }
     }
 
     private static void setResolver(int netId, String dnsIp, String ifName) throws Exception {
-        Object r = resolver();
+        IBinder binder = resolverBinder();
 
-        // Resolver configuration requires a named cache on modern Android.
+        // Recreate the named cache so a retry after a partial previous run is deterministic.
         try {
-            invokeNoResult(r, "destroyNetworkCache", new Class<?>[]{int.class}, netId);
+            transactInt(binder, TRANSACTION_DESTROY_NETWORK_CACHE, netId);
         } catch (Throwable ignored) {
-            // Best effort; the cache may not exist yet.
+            // Cache may not exist.
         }
-        invokeNoResult(r, "createNetworkCache", new Class<?>[]{int.class}, netId);
-
-        Class<?> pClass = Class.forName("android.net.ResolverParamsParcel");
-        Object p = pClass.getDeclaredConstructor().newInstance();
-
-        setFieldIfPresent(p, "netId", netId);
-        setFieldIfPresent(p, "sampleValiditySeconds", 1800);
-        setFieldIfPresent(p, "successThreshold", 25);
-        setFieldIfPresent(p, "minSamples", 8);
-        setFieldIfPresent(p, "maxSamples", 64);
-        setFieldIfPresent(p, "baseTimeoutMsec", 0);
-        setFieldIfPresent(p, "retryCount", 0);
-        setFieldIfPresent(p, "servers", new String[]{dnsIp});
-        setFieldIfPresent(p, "domains", new String[0]);
-        setFieldIfPresent(p, "tlsName", "");
-        setFieldIfPresent(p, "tlsServers", new String[0]);
-        setFieldIfPresent(p, "tlsFingerprints", new String[0]);
-        setFieldIfPresent(p, "caCertificate", "");
-        setFieldIfPresent(p, "tlsConnectTimeoutMs", 0);
-        setFieldIfPresent(p, "resolverOptions", null);
-        setFieldIfPresent(p, "transportTypes", new int[]{4}); // TRANSPORT_VPN
-        setFieldIfPresent(p, "meteredNetwork", false);
-        setFieldIfPresent(p, "dohParams", null);
-        setFieldIfPresent(p, "interfaceNames", new String[]{ifName});
-
-        invokeNoResult(r, "setResolverConfiguration", new Class<?>[]{pClass}, p);
+        transactInt(binder, TRANSACTION_CREATE_NETWORK_CACHE, netId);
+        setResolverConfiguration(binder, netId, dnsIp, ifName);
 
         try {
-            invokeNoResult(r, "flushNetworkCache", new Class<?>[]{int.class}, netId);
+            transactInt(binder, TRANSACTION_FLUSH_NETWORK_CACHE, netId);
         } catch (Throwable ignored) {
-            // Available on modern versions; not required on old frozen AIDL.
+            // Older frozen versions may not expose flushNetworkCache.
         }
 
         System.out.println("OK set netId=" + netId + " dns=" + dnsIp + " if=" + ifName);
     }
 
     private static void clearResolver(int netId) throws Exception {
-        Object r = resolver();
+        IBinder binder = resolverBinder();
         try {
-            invokeNoResult(r, "destroyNetworkCache", new Class<?>[]{int.class}, netId);
+            transactInt(binder, TRANSACTION_DESTROY_NETWORK_CACHE, netId);
         } catch (Throwable e) {
-            // Destroy is idempotent enough for cleanup; report but do not turn cleanup into a crash.
             System.out.println("WARN clear netId=" + netId + " " + e);
             return;
         }
@@ -117,12 +152,15 @@ public final class DnsResolverBridge {
     public static void main(String[] args) {
         try {
             if (args.length < 2) {
-                throw new IllegalArgumentException("usage: set <netId> <dnsIp> <ifName> | clear <netId>");
+                throw new IllegalArgumentException(
+                        "usage: set <netId> <dnsIp> <ifName> | clear <netId>");
             }
             String op = args[0];
             int netId = Integer.parseInt(args[1]);
             if ("set".equals(op)) {
-                if (args.length != 4) throw new IllegalArgumentException("set requires netId dnsIp ifName");
+                if (args.length != 4) {
+                    throw new IllegalArgumentException("set requires netId dnsIp ifName");
+                }
                 setResolver(netId, args[2], args[3]);
             } else if ("clear".equals(op)) {
                 clearResolver(netId);
@@ -131,7 +169,8 @@ public final class DnsResolverBridge {
             }
         } catch (Throwable t) {
             t.printStackTrace(System.err);
-            System.err.println("ERR " + t.getClass().getName() + ": " + String.valueOf(t.getMessage()));
+            System.err.println(
+                    "ERR " + t.getClass().getName() + ": " + String.valueOf(t.getMessage()));
             System.exit(2);
         }
     }
