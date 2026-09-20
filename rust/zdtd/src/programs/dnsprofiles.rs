@@ -629,6 +629,46 @@ fn spawn_tun2socks(plan: &RuntimePlan) -> Result<i32> {
     Ok(pid)
 }
 
+fn create_tun_device(plan: &RuntimePlan) -> Result<()> {
+    // xjasonlyu/tun2socks on Linux/Android opens an existing TUN device; it does
+    // not create the interface for us.  Create it explicitly before spawning
+    // tun2socks.  A stale interface from an interrupted previous run is removed
+    // first so the device is always owned by the new process.
+    let _ = shell::run_timeout(
+        "ip",
+        &["link", "del", "dev", &plan.tun],
+        Capture::None,
+        Duration::from_secs(2),
+    );
+
+    let attempts: [&[&str]; 2] = [
+        &["tuntap", "add", "mode", "tun", "dev", &plan.tun],
+        &["tuntap", "add", "dev", &plan.tun, "mode", "tun"],
+    ];
+    let mut errors = Vec::new();
+    for args in attempts {
+        match shell::run_timeout("ip", args, Capture::Both, Duration::from_secs(3)) {
+            Ok((0, _)) => return Ok(()),
+            Ok((code, out)) => errors.push(format!("ip {} rc={} out={}", args.join(" "), code, out.trim())),
+            Err(e) => errors.push(format!("ip {}: {e:#}", args.join(" "))),
+        }
+    }
+    bail!(
+        "dnsprofiles: failed to create TUN {}: {}",
+        plan.tun,
+        errors.join("; ")
+    )
+}
+
+fn delete_tun_device(plan: &RuntimePlan) {
+    let _ = shell::run_timeout(
+        "ip",
+        &["link", "del", "dev", &plan.tun],
+        Capture::None,
+        Duration::from_secs(2),
+    );
+}
+
 fn configure_tun_addr(plan: &RuntimePlan) -> Result<()> {
     let (code, out) = shell::run_timeout(
         "ip",
@@ -656,6 +696,7 @@ fn configure_tun_addr(plan: &RuntimePlan) -> Result<()> {
 fn stop_plan_process(plan: &RuntimePlan) {
     stop_pid_file(&plan.tun2socks_pid, |pid| pid_matches_tun2socks(pid, plan));
     stop_pid_file(&plan.pid, |pid| pid_matches_plan(pid, plan));
+    delete_tun_device(plan);
 }
 
 fn stop_stale_owned_processes(document: &ProfileDocument) {
@@ -790,9 +831,10 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
     let pid = spawn_plan(plan)?;
     let start_result = (|| -> Result<()> {
         wait_tcp_ready(plan.proxy_port, TUN_WAIT)?;
+        create_tun_device(plan)?;
+        configure_tun_addr(plan)?;
         let tun_pid = spawn_tun2socks(plan)?;
         wait_tun_link(&plan.tun, TUN_WAIT)?;
-        configure_tun_addr(plan)?;
         wait_dns_ready(plan)?;
         log::info!(
             "dnsprofiles: profile={} ready singbox_pid={} tun2socks_pid={} netid={} tun={} dns={} proxy_port={} endpoint={}",
