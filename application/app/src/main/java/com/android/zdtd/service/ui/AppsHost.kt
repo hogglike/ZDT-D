@@ -212,6 +212,11 @@ fun AppsHost(
         bottomContentPadding = bottomContentPadding,
       )
       is AppsRoute.Program -> when (r.programId) {
+        "dnsprofiles" -> DnsProfilesScreen(
+          actions = actions,
+          topContentPadding = topContentPadding,
+          bottomContentPadding = bottomContentPadding,
+        )
         "tgwsproxy" -> TgWsProxySettingsScreen(
           programs = programs,
           actions = actions,
