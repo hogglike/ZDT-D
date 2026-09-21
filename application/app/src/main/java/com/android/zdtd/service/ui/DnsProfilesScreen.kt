@@ -76,19 +76,54 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
   val current = document
   val profiles = current?.optJSONObject("profiles")
   val ids = profiles?.keys()?.asSequence()?.toList()?.sorted().orEmpty()
+  val enabledCount = ids.count { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
+  val assignedApps = ids.sumOf { profiles?.optJSONObject(it)?.optJSONArray("apps")?.length() ?: 0 }
+  val runningCount = ids.count { id ->
+    val rs = runtimeStatus?.optJSONObject("profiles")?.optJSONObject(id)
+    rs?.optBoolean("netd_applied") == true && rs.optBoolean("process_running")
+  }
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topContentPadding + 12.dp, bottom = bottomContentPadding + 16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     item {
-      Text("DNS-профили", style = MaterialTheme.typography.headlineSmall)
-      Text("Выбранные приложения получают отдельный Android netId/TUN и свой DoH. Остальные приложения остаются на системном DNS и обычном интернете.")
-      Text("После изменения профиля перезапусти ZDT-D. Глобальный DNSCrypt должен быть выключен; строгий Android Private DNS не поддерживается одновременно с этим режимом.")
-      runtimeStatus?.let { st ->
-        if (st.optBoolean("global_dnscrypt_enabled")) Text("⚠ Глобальный DNSCrypt включён — per-app DNS не запустится.", color = MaterialTheme.colorScheme.error)
-        val pdns = st.optString("private_dns_mode", "unknown")
-        if (pdns == "hostname") Text("⚠ Android Private DNS в строгом режиме — выключи его перед запуском.", color = MaterialTheme.colorScheme.error)
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+      ) {
+        Column(
+          Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Text("DNS-профили", style = MaterialTheme.typography.headlineSmall)
+          Text(
+            "Отдельный DoH для выбранных приложений. Остальные приложения и клиенты раздачи используют обычную системную сеть.",
+            style = MaterialTheme.typography.bodyMedium,
+          )
+          Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            DnsMetricCard("Профили", ids.size.toString(), Modifier.weight(1f))
+            DnsMetricCard("Активно", "${runningCount}/${enabledCount}", Modifier.weight(1f))
+            DnsMetricCard("Приложения", assignedApps.toString(), Modifier.weight(1f))
+          }
+          Text(
+            "Изменения применяются после перезапуска ZDT-D. DNS-профили не должны управлять раздачей или системным IPv4 forwarding.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          runtimeStatus?.let { st ->
+            if (st.optBoolean("global_dnscrypt_enabled")) {
+              Text("⚠ Глобальный DNSCrypt включён — per-app DNS не запустится.", color = MaterialTheme.colorScheme.error)
+            }
+            val pdns = st.optString("private_dns_mode", "unknown")
+            if (pdns == "hostname") {
+              Text("⚠ Android Private DNS в строгом режиме — выключи его перед запуском.", color = MaterialTheme.colorScheme.error)
+            }
+          }
+        }
       }
     }
     item {
