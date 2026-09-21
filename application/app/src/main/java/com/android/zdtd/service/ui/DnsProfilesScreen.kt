@@ -136,12 +136,19 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
     }
     items(ids, key = { it }) { id ->
       val profile = profiles?.optJSONObject(id) ?: JSONObject()
-      Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)),
+      ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {
-              Text(profile.optString("display_name"), style = MaterialTheme.typography.titleMedium)
-              Text("DoH · приложений: ${profile.optJSONArray("apps")?.length() ?: 0}")
+              Text(profile.optString("display_name"), style = MaterialTheme.typography.titleLarge)
+              Text(
+                "DoH · приложений: ${profile.optJSONArray("apps")?.length() ?: 0}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
             }
             Switch(
               checked = profile.optBoolean("enabled"),
@@ -153,13 +160,29 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
               enabled = !busy && !loading && (profile.optJSONArray("apps")?.length() ?: 0) > 0,
             )
           }
-          Text(profile.optString("endpoint"))
+          Text(
+            profile.optString("endpoint"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
           runtimeStatus?.optJSONObject("profiles")?.optJSONObject(id)?.let { rs ->
             val applied = rs.optBoolean("netd_applied")
             val running = rs.optBoolean("process_running")
-            Text(if (profile.optBoolean("enabled")) {
-              if (applied && running) "● Работает · ${rs.optString("tun")} · DNS ${rs.optString("dns")}" else "○ Включён в настройках · нужен перезапуск/проверь журнал"
-            } else "Выключен")
+            val enabled = profile.optBoolean("enabled")
+            val stateText = when {
+              !enabled -> "○ Выключен"
+              applied && running -> "● Работает · netId ${rs.optInt("netid")} · ${rs.optString("tun")} · DNS ${rs.optString("dns")}"
+              else -> "● Требует применения · перезапусти ZDT-D или проверь журнал"
+            }
+            Text(
+              stateText,
+              style = MaterialTheme.typography.bodyMedium,
+              color = when {
+                !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+                applied && running -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.error
+              },
+            )
           }
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { editId = id; error = null }, enabled = !busy && !loading) { Text("Изменить") }
@@ -253,6 +276,23 @@ private fun DnsProfileEditor(
     dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
   )
   if (showApps) DnsProfileAppPicker(selected, onDismiss = { showApps = false }, onSave = { selected = it; showApps = false })
+}
+
+@Composable
+private fun DnsMetricCard(title: String, value: String, modifier: Modifier = Modifier) {
+  Card(
+    modifier = modifier,
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+  ) {
+    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+      Text(
+        title,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Text(value, style = MaterialTheme.typography.titleMedium)
+    }
+  }
 }
 
 private fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }
