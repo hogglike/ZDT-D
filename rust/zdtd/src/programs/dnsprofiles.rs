@@ -3,9 +3,10 @@
 //! Each enabled profile gets its own tun2socks TUN plus a local sing-box SOCKS
 //! endpoint and Android netd VPN network. Selected app UIDs are attached to
 //! that network. netd points those UIDs at a synthetic DNS address inside the
-//! profile /30. That synthetic address is also installed as a /32 local address
-//! and served directly by a sing-box DNS inbound, so DNS does not depend on
-//! SOCKS UDP support in tun2socks. Non-DNS traffic still traverses the TUN via
+//! profile /30. The DNS listener binds directly to the TUN's own IPv4 address,
+//! so no extra address is installed on loopback. This avoids collisions with
+//! tethering/VPN Hotspot tools that treat non-loopback addresses on `lo` as
+//! user-managed static IPs. Non-DNS traffic still traverses the TUN via
 //! tun2socks and exits through sing-box DIRECT.
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -390,7 +391,10 @@ fn build_plan(id: &str, profile: &DnsProfile, all_names: &[String]) -> Result<Ru
         .checked_add(offset)
         .context("dnsprofiles CIDR overflow")?;
     let host = network.checked_add(1).context("dnsprofiles CIDR overflow")?;
-    let dns = network.checked_add(2).context("dnsprofiles CIDR overflow")?;
+    // Reuse the TUN host address as the profile DNS listener. Keeping DNS on the
+    // TUN avoids adding a synthetic non-loopback address to `lo`, which breaks
+    // coexistence with tethering helpers such as VPN Hotspot.
+    let dns = host;
     let proxy_port_u32 = PROXY_PORT_BASE
         .checked_add(index)
         .context("dnsprofiles proxy port overflow")?;
@@ -635,35 +639,6 @@ fn spawn_tun2socks(plan: &RuntimePlan) -> Result<i32> {
     Ok(pid)
 }
 
-fn configure_dns_alias(plan: &RuntimePlan) -> Result<()> {
-    let cidr = format!("{}/32", plan.dns);
-    let (code, out) = shell::run_timeout(
-        "ip",
-        &["addr", "replace", &cidr, "dev", "lo"],
-        Capture::Both,
-        Duration::from_secs(3),
-    )
-    .context("dnsprofiles: configure local DNS alias")?;
-    if code != 0 {
-        bail!(
-            "dnsprofiles: failed to add local DNS alias {} on lo: {}",
-            cidr,
-            out.trim()
-        );
-    }
-    Ok(())
-}
-
-fn delete_dns_alias(plan: &RuntimePlan) {
-    let cidr = format!("{}/32", plan.dns);
-    let _ = shell::run_timeout(
-        "ip",
-        &["addr", "del", &cidr, "dev", "lo"],
-        Capture::None,
-        Duration::from_secs(2),
-    );
-}
-
 fn create_tun_device(plan: &RuntimePlan) -> Result<()> {
     // xjasonlyu/tun2socks on Linux/Android opens an existing TUN device; it does
     // not create the interface for us.  Create it explicitly before spawning
@@ -732,7 +707,6 @@ fn stop_plan_process(plan: &RuntimePlan) {
     stop_pid_file(&plan.tun2socks_pid, |pid| pid_matches_tun2socks(pid, plan));
     stop_pid_file(&plan.pid, |pid| pid_matches_plan(pid, plan));
     delete_tun_device(plan);
-    delete_dns_alias(plan);
 }
 
 fn stop_stale_owned_processes(document: &ProfileDocument) {
@@ -864,21 +838,27 @@ fn wait_dns_ready(plan: &RuntimePlan) -> Result<()> {
 fn start_plan(plan: &RuntimePlan) -> Result<()> {
     prepare_plan_files(plan)?;
     singbox_check(plan)?;
-    configure_dns_alias(plan)?;
+
+    // The DNS listener now binds to the TUN address itself, so create/configure
+    // the interface before sing-box starts. No loopback alias is needed.
+    create_tun_device(plan)?;
+    if let Err(e) = configure_tun_addr(plan) {
+        delete_tun_device(plan);
+        return Err(e);
+    }
+
     let pid = match spawn_plan(plan) {
         Ok(pid) => pid,
         Err(e) => {
-            delete_dns_alias(plan);
+            delete_tun_device(plan);
             return Err(e);
         }
     };
     let start_result = (|| -> Result<()> {
         wait_tcp_ready(plan.proxy_port, TUN_WAIT)?;
-        // Verify DoH through the profile-local DNS listener before involving TUN/netd.
-        // This keeps DNS independent from tun2socks UDP/SOCKS behavior.
+        // Verify the local DNS listener and upstream DoH before handing the TUN
+        // to Android netd.
         wait_dns_ready(plan)?;
-        create_tun_device(plan)?;
-        configure_tun_addr(plan)?;
         let tun_pid = spawn_tun2socks(plan)?;
         wait_tun_link(&plan.tun, TUN_WAIT)?;
         log::info!(
