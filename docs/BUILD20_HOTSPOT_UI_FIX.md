@@ -86,3 +86,5 @@ installation.
 7. If the system hotspot still switches off, capture before/after evidence with
    `collect_hotspot_debug.sh`; the remaining failure will then be in the vendor
    SoftAP path rather than the DNS profile route shape.
+8. Archive the Release workflow artifacts before installing the candidate on
+   the phone, so the exact APK and module ZIP remain available for comparison.
