@@ -6,9 +6,8 @@
 //! profile /30. The DNS listener binds directly to the TUN's own IPv4 address,
 //! so no extra address is installed on loopback. This avoids collisions with
 //! tethering/VPN Hotspot tools that treat non-loopback addresses on `lo` as
-//! user-managed static IPs. The netd network carries only the profile-local
-//! route; ordinary app and tethering traffic falls through to Android's normal
-//! default network.
+//! user-managed static IPs. Selected apps use the proven full-route netd VPN
+//! policy; users can suspend all DNS profiles before enabling tethering.
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -66,6 +65,8 @@ pub struct DnsProfile {
 pub struct ProfileDocument {
     pub schema_version: u32,
     pub revision: u64,
+    #[serde(default)]
+    pub suspend_for_tethering: bool,
     pub profiles: BTreeMap<String, DnsProfile>,
 }
 
@@ -74,6 +75,7 @@ impl Default for ProfileDocument {
         Self {
             schema_version: 1,
             revision: 0,
+            suspend_for_tethering: false,
             profiles: BTreeMap::new(),
         }
     }
@@ -94,6 +96,7 @@ pub struct RuntimeProfileStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeStatus {
     pub runtime_available: bool,
+    pub suspended_for_tethering: bool,
     pub global_dnscrypt_enabled: bool,
     pub private_dns_mode: String,
     pub restart_required_after_edit: bool,
@@ -317,7 +320,10 @@ pub fn save(path: &Path, mut document: ProfileDocument) -> Result<ProfileDocumen
 
 pub fn has_enabled_profiles() -> bool {
     load(Path::new(CONFIG_PATH))
-        .map(|d| d.profiles.values().any(|p| p.enabled && !p.apps.is_empty()))
+        .map(|d| {
+            !d.suspend_for_tethering
+                && d.profiles.values().any(|p| p.enabled && !p.apps.is_empty())
+        })
         .unwrap_or(false)
 }
 
@@ -360,7 +366,7 @@ fn ensure_runtime_prerequisites() -> Result<()> {
 
 pub fn validate_start_plan() -> Result<()> {
     let document = load(Path::new(CONFIG_PATH))?;
-    if !document.profiles.values().any(|p| p.enabled) {
+    if document.suspend_for_tethering || !document.profiles.values().any(|p| p.enabled) {
         return Ok(());
     }
     ensure_runtime_prerequisites()?;
@@ -885,6 +891,11 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
 pub fn start_profiles_for_netd() -> Result<Vec<VpnNetdProfile>> {
     fs::create_dir_all(ROOT)?;
     let document = load(Path::new(CONFIG_PATH))?;
+    if document.suspend_for_tethering {
+        stop_stale_owned_processes(&document);
+        crate::logging::user_info("DNS-профили: приостановлены для режима раздачи");
+        return Ok(Vec::new());
+    }
     if !document.profiles.values().any(|p| p.enabled) {
         return Ok(Vec::new());
     }
@@ -895,6 +906,7 @@ pub fn start_profiles_for_netd() -> Result<Vec<VpnNetdProfile>> {
     let enabled_only = ProfileDocument {
         schema_version: document.schema_version,
         revision: document.revision,
+        suspend_for_tethering: false,
         profiles: document
             .profiles
             .iter()
@@ -949,6 +961,9 @@ pub fn start_profiles_for_netd() -> Result<Vec<VpnNetdProfile>> {
 
 pub fn enabled_tun_claims() -> Vec<(String, String)> {
     let Ok(document) = load(Path::new(CONFIG_PATH)) else { return Vec::new(); };
+    if document.suspend_for_tethering {
+        return Vec::new();
+    }
     let names = document.profiles.keys().cloned().collect::<Vec<_>>();
     document
         .profiles
@@ -960,6 +975,9 @@ pub fn enabled_tun_claims() -> Vec<(String, String)> {
 
 pub fn enabled_cidr_claims() -> Vec<(String, String)> {
     let Ok(document) = load(Path::new(CONFIG_PATH)) else { return Vec::new(); };
+    if document.suspend_for_tethering {
+        return Vec::new();
+    }
     let names = document.profiles.keys().cloned().collect::<Vec<_>>();
     document
         .profiles
@@ -971,6 +989,9 @@ pub fn enabled_cidr_claims() -> Vec<(String, String)> {
 
 pub fn is_running() -> bool {
     let Ok(document) = load(Path::new(CONFIG_PATH)) else { return false; };
+    if document.suspend_for_tethering {
+        return false;
+    }
     let names = document.profiles.keys().cloned().collect::<Vec<_>>();
     document.profiles.iter().any(|(id, p)| {
         if !p.enabled {
@@ -1021,11 +1042,121 @@ pub fn runtime_status() -> RuntimeStatus {
     }
     RuntimeStatus {
         runtime_available: true,
+        suspended_for_tethering: document.suspend_for_tethering,
         global_dnscrypt_enabled: global_dnscrypt_enabled(),
         private_dns_mode: private_dns_mode(),
         restart_required_after_edit: true,
         profiles,
     }
+}
+
+/// Run read-only live checks against the currently applied DNS runtime.
+/// The DNS probe sends a real UDP query for example.com to the profile-local
+/// listener; interface counters are included so the companion shell capture
+/// can compare traffic before and after opening selected applications.
+pub fn runtime_diagnostics() -> Result<Value> {
+    let document = load(Path::new(CONFIG_PATH))?;
+    let names = document.profiles.keys().cloned().collect::<Vec<_>>();
+    let applied = crate::vpn_netd::read_applied_snapshot().unwrap_or_default();
+    let route_dump = shell::run_timeout(
+        "ip",
+        &["-4", "route", "show", "table", "all"],
+        Capture::Stdout,
+        Duration::from_secs(3),
+    )
+    .ok()
+    .filter(|(code, _)| *code == 0)
+    .map(|(_, out)| out)
+    .unwrap_or_default();
+
+    let mut enabled_profiles = 0usize;
+    let mut tested_profiles = 0usize;
+    let mut passed_profiles = 0usize;
+    let mut profiles = serde_json::Map::new();
+
+    for (id, profile) in &document.profiles {
+        let plan = build_plan(id, profile, &names)?;
+        let singbox_pid = read_pid(&plan.pid).filter(|pid| pid_matches_plan(*pid, &plan));
+        let tun2socks_running = read_pid(&plan.tun2socks_pid)
+            .map(|pid| pid_matches_tun2socks(pid, &plan))
+            .unwrap_or(false);
+        let process_running = singbox_pid.is_some() && tun2socks_running;
+        let netd_applied = applied
+            .profiles
+            .iter()
+            .any(|p| p.owner_program == "dnsprofiles" && p.profile == *id && p.netid == plan.netid);
+        let default_route_present = route_dump.lines().any(|line| {
+            line.trim_start().starts_with("default ")
+                && line.split_whitespace().collect::<Vec<_>>().windows(2).any(|pair| {
+                    pair[0] == "dev" && pair[1] == plan.tun.as_str()
+                })
+        });
+        let interface_stats = shell::run_timeout(
+            "ip",
+            &["-s", "link", "show", "dev", plan.tun.as_str()],
+            Capture::Both,
+            Duration::from_secs(3),
+        )
+        .ok()
+        .filter(|(code, _)| *code == 0)
+        .map(|(_, out)| out.trim().to_string());
+        let uid_result = pkg_uid::resolve_uid_map(UidMode::Default, &profile.apps);
+        let (uid_by_package, uid_error) = match uid_result {
+            Ok(uids) => (json!(uids), Value::Null),
+            Err(e) => (Value::Null, json!(format!("{e:#}"))),
+        };
+
+        let should_probe = profile.enabled && !document.suspend_for_tethering && process_running;
+        let dns_query_ok = if should_probe {
+            tested_profiles += 1;
+            let ip: Ipv4Addr = plan.dns.parse().context("dnsprofiles generated DNS is invalid")?;
+            let ok = dns_probe_once(ip);
+            if ok {
+                passed_profiles += 1;
+            }
+            Some(ok)
+        } else {
+            None
+        };
+        if profile.enabled {
+            enabled_profiles += 1;
+        }
+
+        profiles.insert(
+            id.clone(),
+            json!({
+                "enabled": profile.enabled,
+                "selected_apps": profile.apps,
+                "uid_by_package": uid_by_package,
+                "uid_resolution_error": uid_error,
+                "endpoint": profile.endpoint,
+                "netid": plan.netid,
+                "tun": plan.tun,
+                "dns": plan.dns,
+                "singbox_pid": singbox_pid,
+                "process_running": process_running,
+                "netd_applied": netd_applied,
+                "default_route_present": default_route_present,
+                "dns_query_sent": should_probe,
+                "dns_query_ok": dns_query_ok,
+                "interface_stats": interface_stats,
+                "log_path": plan.log,
+            }),
+        );
+    }
+
+    Ok(json!({
+        "runtime_available": true,
+        "suspended_for_tethering": document.suspend_for_tethering,
+        "probe_name": "example.com",
+        "enabled_profiles": enabled_profiles,
+        "tested_profiles": tested_profiles,
+        "passed_profiles": passed_profiles,
+        "all_enabled_dns_probes_ok": enabled_profiles > 0
+            && tested_profiles == enabled_profiles
+            && passed_profiles == enabled_profiles,
+        "profiles": profiles,
+    }))
 }
 
 pub fn preview(document: &ProfileDocument) -> Result<Value> {
@@ -1048,6 +1179,7 @@ pub fn preview(document: &ProfileDocument) -> Result<Value> {
     }
     Ok(json!({
         "runtime_available": true,
+        "suspended_for_tethering": document.suspend_for_tethering,
         "restart_required_after_edit": true,
         "global_dnscrypt_enabled": global_dnscrypt_enabled(),
         "private_dns_mode": private_dns_mode(),
@@ -1118,6 +1250,13 @@ mod tests {
         let mut value = serde_json::to_value(fixture()).unwrap();
         value["profiles"]["xbox"]["policy"] = "fallback".into();
         assert!(serde_json::from_value::<ProfileDocument>(value).is_err());
+    }
+    #[test]
+    fn old_documents_default_to_dns_profiles_enabled() {
+        let mut value = serde_json::to_value(fixture()).unwrap();
+        value.as_object_mut().unwrap().remove("suspend_for_tethering");
+        let document = serde_json::from_value::<ProfileDocument>(value).unwrap();
+        assert!(!document.suspend_for_tethering);
     }
     #[test]
     fn rejects_unsafe_or_ambiguous_urls() {

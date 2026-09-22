@@ -1,5 +1,10 @@
 # Build 20 candidate — per-app DNS / hotspot compatibility
 
+> Superseded by the Build 21 approach. Phone testing showed that the route-less
+> split overlay can black-hole selected-app traffic on OxygenOS. Build 21 restores
+> the Build 15 full-route policy and adds an explicit DNS suspension switch for
+> tethering.
+
 Base branch: `per-app-dns-stage2-test`  
 Base commit: `71ddaeb7622d35ead165a6cbd449ef43243855b6`
 

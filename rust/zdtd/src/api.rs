@@ -5669,6 +5669,12 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
                 json!({"ok": true, "data": crate::programs::dnsprofiles::runtime_status()}),
             )
         }
+        ("POST", ["api", "programs", "dnsprofiles", "diagnose"]) => {
+            match crate::programs::dnsprofiles::runtime_diagnostics() {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data})),
+                Err(e) => write_err(stream, e),
+            }
+        }
 
         // --- dnscrypt enabled/config
         ("GET", ["api", "programs", "dnscrypt", "enabled"]) => {

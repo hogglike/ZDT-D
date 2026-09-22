@@ -26,8 +26,6 @@ const DNSRESOLVER_BRIDGE_CLASS: &str = "com.android.zdtd.service.dns.DnsResolver
 // к VPN-профилям: netd умеет заводить в туннель только IPv4, и без этого запрета
 // IPv6-трафик выбранных приложений уходит мимо туннеля.
 const V6_CHAIN: &str = "ZDT_VPN_NETD_V6";
-const DNS_PROFILES_OWNER: &str = "dnsprofiles";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProfileNetworkPolicy {
     secure: bool,
@@ -35,23 +33,15 @@ struct ProfileNetworkPolicy {
     block_ipv6: bool,
 }
 
-fn profile_network_policy(owner_program: &str) -> ProfileNetworkPolicy {
-    if owner_program == DNS_PROFILES_OWNER {
-        // Per-app DNS is a split DNS overlay, not a traffic VPN. Keep the
-        // profile-local DNS route in netd, but let all other destinations fall
-        // through to Android's normal network. This also keeps the synthetic
-        // network out of tethering/VPN Hotspot upstream handling.
-        ProfileNetworkPolicy {
-            secure: false,
-            add_default_route: false,
-            block_ipv6: false,
-        }
-    } else {
-        ProfileNetworkPolicy {
-            secure: true,
-            add_default_route: true,
-            block_ipv6: true,
-        }
+fn profile_network_policy(_owner_program: &str) -> ProfileNetworkPolicy {
+    // Android netd does not reliably fall through from a UID-bound VPN network
+    // when that network has no default route (notably on OxygenOS). Keep the
+    // proven full-tunnel policy for every selected-app profile. DNS profiles
+    // can be suspended as a whole from their own UI before enabling tethering.
+    ProfileNetworkPolicy {
+        secure: true,
+        add_default_route: true,
+        block_ipv6: true,
     }
 }
 
@@ -1006,11 +996,10 @@ fn clear_ipv6_block_unlocked() {
     let _ = ip6tables_ok(&["-X", V6_CHAIN]);
 }
 
-/// Временное решение для полноценных traffic-VPN профилей: netd заводит в
-/// туннель только IPv4, поэтому IPv6 закрывается только их выбранным
-/// приложениям. Split-DNS профили намеренно исключены: их обычный IPv4/IPv6
-/// трафик должен идти через системную сеть. Всё best-effort: нет ip6tables или
-/// модуля owner — только предупреждение, запуск не рушим.
+/// netd заводит выбранные приложения в TUN только по IPv4, поэтому IPv6
+/// временно закрывается их UID, чтобы трафик не обходил профиль. Всё
+/// best-effort: нет ip6tables или модуля owner — только предупреждение, запуск
+/// не рушим.
 fn sync_ipv6_block(profiles: &[AppliedProfile]) {
     let _guard = crate::xtables_lock::lock();
     clear_ipv6_block_unlocked();
@@ -1419,13 +1408,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dns_profiles_use_bypassable_split_overlay() {
+    fn dns_profiles_keep_full_tunnel_policy() {
         assert_eq!(
-            profile_network_policy(DNS_PROFILES_OWNER),
+            profile_network_policy("dnsprofiles"),
             ProfileNetworkPolicy {
-                secure: false,
-                add_default_route: false,
-                block_ipv6: false,
+                secure: true,
+                add_default_route: true,
+                block_ipv6: true,
             }
         );
     }

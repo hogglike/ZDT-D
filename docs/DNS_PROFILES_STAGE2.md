@@ -11,15 +11,17 @@ Each enabled DNS profile gets:
 - one deterministic TUN (`zdt_dnsN`) with a local sing-box DNS listener;
 - one isolated `/30` from `10.253.240.0/26`;
 - the profile DNS listener on the TUN host address in that `/30`;
-- a bypassable split-overlay netd network with only the profile-local `/30` route;
-- normal Android fallthrough for all non-DNS traffic;
+- a secure netd VPN network with the profile-local `/30` and IPv4 default route;
+- full selected-app traffic through tun2socks, matching the proven Build 15 policy;
 - Android package -> UID resolution performed on-device;
 - UID binding through the existing `vpn_netd` builder;
-- no DNS-profile IPv6 block: normal IPv4 and IPv6 traffic stays on the system network.
+- an IPv6 block for selected UIDs so traffic cannot bypass the IPv4 TUN.
 
 Unselected applications are not attached to the profile network and keep the
 normal Android Wi-Fi/mobile DNS path. Tethering clients are never added to the
-profile UID range and use the ordinary tethering upstream.
+profile UID range. A top-level `suspend_for_tethering` switch can prevent every
+DNS profile from starting while the system hotspot is in use without deleting
+profile or app assignments.
 
 ## Current scope
 
@@ -60,10 +62,10 @@ claim conflicts. Before binding UIDs, the starter:
    through the configured DoH endpoint;
 8. returns a `VpnNetdProfile` to the common netd builder.
 
-The common builder treats `owner_program == "dnsprofiles"` specially: it creates
-a bypassable VPN-type netd table and deliberately does not add `0.0.0.0/0`.
-Only the local `/30` is routed into `zdt_dnsN`, so Android's standard default
-network remains the route for normal app traffic and hotspot clients.
+The common builder uses the same secure full-route netd policy as Build 15.
+Build 20's route-less split overlay was removed because OxygenOS can keep a
+UID bound to that network without falling through to the system default route,
+which black-holed Gemini, Grok and ChatGPT traffic.
 
 For `owner_program == "dnsprofiles"`, netd DNS setup is mandatory rather than a
 warning-only operation. If `resolver setnetdns/setifdns` fails, that profile is
@@ -71,9 +73,11 @@ not bound to its apps.
 
 ## UI
 
-The DNS Profiles screen now has a real enable switch. It shows the persisted
-state plus runtime state (`process_running`, `netd_applied`, TUN and resolver
-address) from `/api/programs/dnsprofiles/status`.
+The DNS Profiles screen has per-profile enable switches and a master “Режим
+раздачи” switch. The master switch preserves every profile but prevents DNS
+runtime/netd setup after the next ZDT-D restart. The screen also exposes a live
+test that sends an actual query for `example.com` to each running profile-local
+resolver and reports process, UID, route and interface-counter state.
 
 The validation endpoint remains side-effect free and returns a preview of the
 future `netId`, TUN, CIDR and DNS address.
@@ -91,7 +95,11 @@ future `netId`, TUN, CIDR and DNS address.
 6. Open DNS Profiles and confirm the card says `Работает`.
 7. Verify Chrome/Gemini use the expected Xbox-DNS behavior while YouTube or
    another unselected browser remains on the system resolver.
-8. If it fails, collect:
+8. For hotspot testing, enable “Режим раздачи”, restart ZDT-D, then enable the
+   system hotspot. Disable the switch and restart ZDT-D to restore profiles.
+9. If it fails, run the bundled capture as root:
+   `sh /data/adb/modules/ZDT-D-Test/diagnose_dns_hotspot_runtime.sh 75`.
+10. The detailed runtime files remain available at:
    - `/data/adb/modules/ZDT-D/working_folder/log/zdtd.log`
    - `/data/adb/modules/ZDT-D/working_folder/dnsprofiles/runtime/xbox/sing-box.log`
    - `/data/adb/modules/ZDT-D/working_folder/vpn_netd/last_ndc.out`
