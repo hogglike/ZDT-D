@@ -41,6 +41,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
@@ -58,12 +59,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import com.android.zdtd.service.R
+import com.android.zdtd.service.ZdtdActions
 import com.android.zdtd.service.api.ApiModels
 import com.android.zdtd.service.tgwsproxy.TgWsProxyComponentState
 import java.util.Locale
+import org.json.JSONObject
+
+private const val DnsProfilesConfigPath = "/api/programs/dnsprofiles/config"
+private const val DnsProfilesStatusPath = "/api/programs/dnsprofiles/status"
+
+private enum class DnsProfilesEntryHealth { READY, WORKING, NEEDS_RESTART, ERROR }
 
 @Composable
 fun AppsListScreen(
+  actions: ZdtdActions,
   programs: List<ApiModels.Program>,
   daemonOnline: Boolean,
   tgWsProxy: TgWsProxyComponentState,
@@ -85,6 +94,27 @@ fun AppsListScreen(
   val sectionGap = if (isShortHeight) 6.dp else 8.dp
   var query by rememberSaveable { mutableStateOf("") }
   val q = query.trim()
+  var dnsConfig by remember { mutableStateOf<JSONObject?>(null) }
+  var dnsStatus by remember { mutableStateOf<JSONObject?>(null) }
+  var dnsConfigLoaded by remember { mutableStateOf(false) }
+  var dnsStatusLoaded by remember { mutableStateOf(false) }
+
+  LaunchedEffect(daemonOnline) {
+    dnsConfig = null
+    dnsStatus = null
+    dnsConfigLoaded = !daemonOnline
+    dnsStatusLoaded = !daemonOnline
+    if (daemonOnline) {
+      actions.loadJsonData(DnsProfilesConfigPath) {
+        dnsConfig = it
+        dnsConfigLoaded = true
+      }
+      actions.loadJsonData(DnsProfilesStatusPath) {
+        dnsStatus = it
+        dnsStatusLoaded = true
+      }
+    }
+  }
 
   val all = remember(programs, tgWsProxy.installed) {
     if (tgWsProxy.installed && programs.none { it.id == "tgwsproxy" }) {
@@ -152,12 +182,14 @@ fun AppsListScreen(
     }
 
     item(key = "dns_profiles_entry") {
-      Card(onClick = { onOpenProgram("dnsprofiles") }, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-          Text("DNS-профили", style = MaterialTheme.typography.titleMedium)
-          Text("Per-app DoH · отдельный DNS для выбранных приложений")
-        }
-      }
+      DnsProfilesEntryCard(
+        compact = compactCards,
+        daemonOnline = daemonOnline,
+        config = dnsConfig,
+        status = dnsStatus,
+        loaded = dnsConfigLoaded && dnsStatusLoaded,
+        onClick = { onOpenProgram("dnsprofiles") },
+      )
     }
 
     item(key = "optional_tools_entry") {
@@ -289,6 +321,100 @@ fun AppsListScreen(
     }
 
     item { Spacer(Modifier.height(4.dp)) }
+  }
+}
+
+@Composable
+private fun DnsProfilesEntryCard(
+  compact: Boolean,
+  daemonOnline: Boolean,
+  config: JSONObject?,
+  status: JSONObject?,
+  loaded: Boolean,
+  onClick: () -> Unit,
+) {
+  val profiles = config?.optJSONObject("profiles")
+  val ids = profiles?.keys()?.asSequence()?.toList().orEmpty()
+  val enabledCount = ids.count { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
+  val appCount = ids.sumOf { profiles?.optJSONObject(it)?.optJSONArray("apps")?.length() ?: 0 }
+  val runtimeProfiles = status?.optJSONObject("profiles")
+  val activeCount = ids.count { id ->
+    val runtime = runtimeProfiles?.optJSONObject(id)
+    profiles?.optJSONObject(id)?.optBoolean("enabled") == true &&
+      runtime != null && runtime.optBoolean("netd_applied") && runtime.optBoolean("process_running")
+  }
+  val blocked = status?.optBoolean("global_dnscrypt_enabled") == true ||
+    status?.optString("private_dns_mode") == "hostname"
+  val health = when {
+    !daemonOnline || (loaded && (config == null || status == null)) || blocked -> DnsProfilesEntryHealth.ERROR
+    !loaded -> null
+    enabledCount == 0 -> DnsProfilesEntryHealth.READY
+    activeCount == enabledCount -> DnsProfilesEntryHealth.WORKING
+    else -> DnsProfilesEntryHealth.NEEDS_RESTART
+  }
+  val accentColor = when (health) {
+    DnsProfilesEntryHealth.WORKING -> Color(0xFF2E7D32)
+    DnsProfilesEntryHealth.NEEDS_RESTART -> MaterialTheme.colorScheme.tertiary
+    DnsProfilesEntryHealth.ERROR -> MaterialTheme.colorScheme.error
+    DnsProfilesEntryHealth.READY, null -> MaterialTheme.colorScheme.primary
+  }
+  val statusLabel = when (health) {
+    DnsProfilesEntryHealth.WORKING -> "Работает"
+    DnsProfilesEntryHealth.NEEDS_RESTART -> "Нужен перезапуск"
+    DnsProfilesEntryHealth.ERROR -> if (daemonOnline) "Ошибка настройки" else "Демон не подключён"
+    DnsProfilesEntryHealth.READY -> "Готов к настройке"
+    null -> "Загрузка состояния"
+  }
+
+  Card(
+    onClick = onClick,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 2.dp),
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
+    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.34f)),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth()
+        .background(Brush.horizontalGradient(listOf(accentColor.copy(alpha = 0.16f), MaterialTheme.colorScheme.surface.copy(alpha = 0.64f))))
+        .padding(horizontal = if (compact) 11.dp else 13.dp, vertical = if (compact) 10.dp else 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Surface(
+        modifier = Modifier.size(if (compact) 48.dp else 54.dp),
+        shape = CircleShape,
+        color = accentColor.copy(alpha = 0.14f),
+        contentColor = accentColor,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.36f)),
+      ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          Icon(Icons.Outlined.Dns, contentDescription = null, modifier = Modifier.size(if (compact) 24.dp else 27.dp))
+        }
+      }
+      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("DNS-профили", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Text(
+          "Per-app DoH · системная сеть для остальных приложений и раздачи",
+          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+          style = MaterialTheme.typography.bodySmall,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          "Профили ${ids.size}  ·  Активно $activeCount  ·  Приложения $appCount",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        ProgramBadgeRow(
+          label = statusLabel,
+          containerColor = accentColor.copy(alpha = 0.14f),
+          contentColor = accentColor,
+        )
+      }
+      Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f), modifier = Modifier.size(22.dp))
+    }
   }
 }
 

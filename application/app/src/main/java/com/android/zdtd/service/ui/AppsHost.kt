@@ -118,6 +118,7 @@ fun AppsHost(
   ) { r ->
     when (r) {
       AppsRoute.List -> AppsListScreen(
+        actions = actions,
         programs = programs,
         daemonOnline = daemonOnline,
         tgWsProxy = tgWsProxy,

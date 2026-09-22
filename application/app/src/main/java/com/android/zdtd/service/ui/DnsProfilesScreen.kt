@@ -32,6 +32,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
   var editId by remember { mutableStateOf<String?>(null) }
   var deleteId by remember { mutableStateOf<String?>(null) }
   var diagnostics by remember { mutableStateOf<String?>(null) }
+  var showDiagnostics by remember { mutableStateOf(false) }
   var runtimeStatus by remember { mutableStateOf<JSONObject?>(null) }
 
   fun reload() {
@@ -64,6 +65,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
             editId = null
             deleteId = null
             diagnostics = null
+            showDiagnostics = false
             reload()
           } else {
             error = "Сохранение отклонено. Если настройки изменены в другом окне, обнови список. Подробности — в журнале."
@@ -199,7 +201,9 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
     DnsProfileEditor(
       originalId = editing, original = profiles?.optJSONObject(editing), busy = busy,
       error = error, diagnostics = diagnostics,
-      onDismiss = { if (!busy) { editId = null; error = null; diagnostics = null } },
+      showDiagnostics = showDiagnostics,
+      onToggleDiagnostics = { showDiagnostics = !showDiagnostics },
+      onDismiss = { if (!busy) { editId = null; error = null; diagnostics = null; showDiagnostics = false } },
       onSubmit = { id, profile, save ->
         if (editing.isEmpty() && profiles?.has(id) == true) {
           error = "Профиль с таким ID уже существует."
@@ -235,6 +239,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
 @Composable
 private fun DnsProfileEditor(
   originalId: String, original: JSONObject?, busy: Boolean, error: String?, diagnostics: String?,
+  showDiagnostics: Boolean, onToggleDiagnostics: () -> Unit,
   onDismiss: () -> Unit, onSubmit: (String, JSONObject, Boolean) -> Unit,
 ) {
   var id by remember(originalId) { mutableStateOf(originalId.ifEmpty { "xbox" }) }
@@ -265,10 +270,22 @@ private fun DnsProfileEditor(
         }
         OutlinedButton(onClick = { showApps = true }, enabled = !busy) { Text("Приложения: ${selected.size}") }
         if (selected.isNotEmpty()) TextButton(onClick = { selected = emptySet(); enabled = false }, enabled = !busy) { Text("Очистить назначения") }
-        Text("Один DoH upstream. Обычный трафик выбранных приложений идёт DIRECT. Встроенный DoH самого приложения этот профиль не переопределяет.")
+        Text("Один DoH upstream. Обычный трафик выбранных приложений и клиенты раздачи используют системную сеть. Встроенный DoH самого приложения этот профиль не переопределяет.")
         OutlinedButton(onClick = { onSubmit(id.trim(), payload(), false) }, enabled = !busy) { Text("Проверить настройки и UID") }
         Text("Проверка валидирует настройки/UID и показывает будущие netId/TUN. Реальный DoH проверяется при запуске профиля.")
-        diagnostics?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        diagnostics?.let {
+          TextButton(onClick = onToggleDiagnostics) {
+            Text(if (showDiagnostics) "Скрыть технические данные" else "Показать технические данные")
+          }
+          if (showDiagnostics) {
+            Surface(
+              color = MaterialTheme.colorScheme.surfaceVariant,
+              shape = MaterialTheme.shapes.small,
+            ) {
+              Text(it, modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+            }
+          }
+        }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
       }
     },
