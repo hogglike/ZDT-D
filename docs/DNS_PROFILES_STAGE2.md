@@ -8,17 +8,18 @@ This stage replaces the draft-only DNS Profiles backend with an actual runtime.
 Each enabled DNS profile gets:
 
 - one deterministic Android `netId` from the reserved `28200..28999` block;
-- one deterministic sing-box TUN (`zdt_dnsN`);
+- one deterministic TUN (`zdt_dnsN`) with a local sing-box DNS listener;
 - one isolated `/30` from `10.253.240.0/26`;
-- the profile DNS address at the second host in that `/30`;
-- a sing-box TUN rule that hijacks port 53 and resolves it through the profile DoH URL;
-- a DIRECT outbound for all non-DNS traffic;
+- the profile DNS listener on the TUN host address in that `/30`;
+- a bypassable split-overlay netd network with only the profile-local `/30` route;
+- normal Android fallthrough for all non-DNS traffic;
 - Android package -> UID resolution performed on-device;
 - UID binding through the existing `vpn_netd` builder;
-- IPv6 protection through the existing `vpn_netd` selected-UID chain.
+- no DNS-profile IPv6 block: normal IPv4 and IPv6 traffic stays on the system network.
 
 Unselected applications are not attached to the profile network and keep the
-normal Android Wi-Fi/mobile DNS path.
+normal Android Wi-Fi/mobile DNS path. Tethering clients are never added to the
+profile UID range and use the ordinary tethering upstream.
 
 ## Current scope
 
@@ -52,12 +53,17 @@ claim conflicts. Before binding UIDs, the starter:
 1. validates the stored profile document;
 2. resolves enabled package UIDs on the phone;
 3. stops stale DNS-profile-owned sing-box processes;
-4. generates a sing-box TUN configuration;
+4. generates the local sing-box DNS/proxy configuration;
 5. runs `sing-box check`;
-6. starts sing-box and waits for the TUN;
-7. sends a DNS probe to the synthetic resolver address, which must traverse the
-   TUN and succeed through the configured DoH endpoint;
+6. creates the TUN, starts sing-box/tun2socks and waits for readiness;
+7. sends a DNS probe to the profile-local resolver address, which must succeed
+   through the configured DoH endpoint;
 8. returns a `VpnNetdProfile` to the common netd builder.
+
+The common builder treats `owner_program == "dnsprofiles"` specially: it creates
+a bypassable VPN-type netd table and deliberately does not add `0.0.0.0/0`.
+Only the local `/30` is routed into `zdt_dnsN`, so Android's standard default
+network remains the route for normal app traffic and hotspot clients.
 
 For `owner_program == "dnsprofiles"`, netd DNS setup is mandatory rather than a
 warning-only operation. If `resolver setnetdns/setifdns` fails, that profile is
