@@ -6,8 +6,9 @@
 //! profile /30. The DNS listener binds directly to the TUN's own IPv4 address,
 //! so no extra address is installed on loopback. This avoids collisions with
 //! tethering/VPN Hotspot tools that treat non-loopback addresses on `lo` as
-//! user-managed static IPs. Non-DNS traffic still traverses the TUN via
-//! tun2socks and exits through sing-box DIRECT.
+//! user-managed static IPs. The netd network carries only the profile-local
+//! route; ordinary app and tethering traffic falls through to Android's normal
+//! default network.
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
