@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,10 +28,14 @@ private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList
 private data class ModeApp(val packageName: String, val label: String)
 
 class ConnectionModesActivity : ComponentActivity() {
+  private val refreshTick = mutableIntStateOf(0)
+  override fun onResume() { super.onResume(); refreshTick.intValue++ }
+  @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContent { MaterialTheme { Screen() } }
   }
+  @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
   @Composable
   private fun Screen() {
     val scope = rememberCoroutineScope()
@@ -51,15 +56,15 @@ class ConnectionModesActivity : ComponentActivity() {
     suspend fun load(resetDraft: Boolean) {
       try {
         val value = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes") }
-        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod25.") }
+        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod26.") }
         snapshot = value
         if (resetDraft) { draft = JSONObject(value.getJSONObject("config").toString()); dirty = false }
         status = value.getJSONObject("status")
         message = ""
       } catch (e: Exception) { message = e.message.orEmpty() }
     }
+    LaunchedEffect(refreshTick.intValue) { load(!dirty) }
     LaunchedEffect(Unit) {
-      load(true)
       apps = withContext(Dispatchers.IO) {
         @Suppress("DEPRECATION")
         packageManager.getInstalledApplications(0).filter { it.uid % 100000 >= 10000 && !it.packageName.startsWith(packageName.substringBeforeLast('.')) }
@@ -76,15 +81,31 @@ class ConnectionModesActivity : ComponentActivity() {
     val nodes = snapshot.optJSONArray("nodes").objects()
     Surface(Modifier.fillMaxSize()) {
       Column(Modifier.safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Режимы подписки · mod25", style = MaterialTheme.typography.headlineSmall)
+        Text("Режимы подписки · mod26", style = MaterialTheme.typography.headlineSmall)
         Text("Подписку добавляй на экране «Подписки». Её существующее автообновление сохраняется. При обновлении список серверов режима обновится автоматически.")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           ModeClient.modes.forEach { mode ->
-            Button(onClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.switch(this@ConnectionModesActivity, mode) }, modifier = Modifier.weight(1f),
-              colors = ButtonDefaults.buttonColors(containerColor = Color(ModeState.color(mode, status.optString("mode"), status.optString("state"))), contentColor = Color.Black)) { Text(ModeState.title(mode)) }
+            Surface(modifier = Modifier.weight(1f).combinedClickable(
+              onClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.switch(this@ConnectionModesActivity, mode) },
+              onLongClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.pickServer(this@ConnectionModesActivity, mode) }),
+              shape = MaterialTheme.shapes.large, color = Color(ModeState.color(mode, status.optString("mode"), status.optString("state")))) {
+              Text(ModeState.title(mode), Modifier.padding(horizontal = 4.dp, vertical = 14.dp), color = Color.Black, maxLines = 1, style = MaterialTheme.typography.labelMedium)
+            }
           }
         }
         Text(status.optString("message", "Выключено"), color = if (status.optString("state") == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        val probes = status.optJSONArray("probe_results").objects()
+        if (probes.isNotEmpty()) {
+          Text("Результаты последней проверки:", style = MaterialTheme.typography.titleSmall)
+          probes.forEach { result ->
+            Text("${if (result.optBoolean("ok")) "✓" else "×"} ${result.optString("url")}\n${if (result.isNull("http_status")) "Без HTTP-ответа" else "HTTP ${result.optInt("http_status")}"} · ${result.optLong("ms")} мс${if (result.optString("error").isBlank()) "" else "\n${result.optString("error")}"}", style = MaterialTheme.typography.bodySmall)
+          }
+        }
+        if (status.optString("state") == "error") OutlinedButton(onClick = {
+          val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+          clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod26", JSONObject().put("version", "4.2.0-mod26").put("status", status).toString(2)))
+          message = "Диагностика скопирована; ссылка подписки и ключи серверов не включены"
+        }) { Text("Скопировать диагностику ошибки") }
         if (status.optInt("total") > 0 && status.optString("state") == "connecting") Text("Попытка ${status.optInt("attempt")} из ${status.optInt("total")} · круг ${status.optInt("round")}")
         OutlinedButton(onClick = { ModeClient.switch(this@ConnectionModesActivity, "") }, modifier = Modifier.fillMaxWidth()) { Text("Отключить режим") }
         HorizontalDivider()
@@ -94,7 +115,30 @@ class ConnectionModesActivity : ComponentActivity() {
         }
         if (settings != null) {
           val selectedApps = settings.optJSONArray("apps").strings()
-          Text(if (editMode == "white") "Последний рабочий сервер — первым; затем остальные кандидаты по порядку. Максимум два полных круга, успех — ответ хотя бы от 2 из 3 зарубежных сайтов." else "Этот режим запоминает отдельный сервер и отдельный список приложений. Автоматического перебора других серверов нет.")
+          Text(if (editMode == "white") "Последний рабочий сервер — первым; затем остальные кандидаты по порядку. Максимум два полных круга при включённой проверке сайтов. При отключённой проверке применяется первый выбранный сервер без перебора." else "Этот режим запоминает отдельный сервер и отдельный список приложений. Автоматического перебора других серверов нет.")
+          HorizontalDivider()
+          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Проверять сайты перед подключением", Modifier.weight(1f).padding(top = 10.dp))
+            Switch(settings.optBoolean("check_enabled", true), onCheckedChange = { change("check_enabled", it) })
+          }
+          Text(if (settings.optBoolean("check_enabled", true)) "Проверка применяется только к этому режиму. Каждый сайт можно выключить отдельно. HTTP-код 0: подходит любой ответ 200–399; можно задать точный код." else "Сервер и маршруты будут применены без проверки доступа к сайтам. Зелёный цвет означает, что режим применён; работоспособность интернета не подтверждена.", style = MaterialTheme.typography.bodySmall)
+          val sites = settings.optJSONArray("check_sites").objects()
+          sites.forEachIndexed { index, site ->
+            fun editSite(field: String, value: Any) {
+              val copy = JSONArray(settings.optJSONArray("check_sites").toString())
+              copy.getJSONObject(index).put(field, value); change("check_sites", copy)
+            }
+            Row(Modifier.fillMaxWidth()) {
+              Checkbox(site.optBoolean("enabled", true), onCheckedChange = { editSite("enabled", it) })
+              OutlinedTextField(site.optString("url"), onValueChange = { editSite("url", it) }, label = { Text("HTTPS-адрес ${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
+              TextButton(onClick = { change("check_sites", JSONArray(sites.filterIndexed { i, _ -> i != index })) }) { Text("×") }
+            }
+            OutlinedTextField(site.optInt("expected_status").toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) editSite("expected_status", it.toIntOrNull() ?: 0) }, label = { Text("HTTP-код · 0 = автоматически") }, singleLine = true)
+          }
+          TextButton(enabled = sites.size < 12, onClick = { change("check_sites", JSONArray(sites + JSONObject().put("url", "https://example.com/").put("enabled", true).put("expected_status", 0))) }) { Text("Добавить сайт") }
+          OutlinedTextField(settings.optInt("min_success", 2).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) change("min_success", it.toIntOrNull() ?: 0) }, label = { Text("Сколько успешных ответов требуется") }, singleLine = true)
+          OutlinedTextField(settings.optInt("timeout_seconds", 8).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) change("timeout_seconds", it.toIntOrNull() ?: 0) }, label = { Text("Таймаут одного сайта · 2–30 секунд") }, singleLine = true)
+          HorizontalDivider()
           val policies = listOf("selected" to "Только выбранные приложения", "all" to "Все приложения", "except_dns" to "Все, кроме приложений DNS", "blacklist" to "Чёрный список: все, кроме выбранных")
           policies.forEach { (policy, label) ->
             Row(Modifier.fillMaxWidth().clickable { change("app_policy", policy) }) {
@@ -148,17 +192,20 @@ class ConnectionModesActivity : ComponentActivity() {
         if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
         HorizontalDivider()
         Text("Задержка серверов", style = MaterialTheme.typography.titleMedium)
-        Text("Это время HTTPS-запросов через сервер, включая TLS и ответ сайта, а не ICMP-пинг. Успех требует ответа 2 из 3 сайтов; прямого обхода прокси нет.")
+        Text("URL-тест ядра: один запрос через каждый сервер, включая VLESS/Reality. Он не зависит от проверки режима и не переключает текущий сервер. Это не ICMP-пинг.")
+        OutlinedTextField(draft.optString("latency_url", "https://www.gstatic.com/generate_204"), onValueChange = { draft = JSONObject(draft.toString()).put("latency_url", it); dirty = true }, label = { Text("HTTPS-адрес для задержки всех серверов") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(draft.optInt("latency_timeout_seconds", 8).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) { draft = JSONObject(draft.toString()).put("latency_timeout_seconds", it.toIntOrNull() ?: 0); dirty = true } }, label = { Text("Таймаут задержки · 2–30 секунд") }, singleLine = true)
+        Text("Изменения адреса и таймаута сохраняются кнопкой «Сохранить настройки» выше.", style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = {
           ContextCompat.startForegroundService(this@ConnectionModesActivity, Intent(this@ConnectionModesActivity, ModeActionService::class.java).putExtra("ping", true).putExtra("mode", status.optString("mode")))
-        }, enabled = status.optString("state") != "connecting", modifier = Modifier.fillMaxWidth()) { Text("Проверить задержку всех серверов") }
+        }, enabled = !dirty && status.optString("state") != "connecting", modifier = Modifier.fillMaxWidth()) { Text("Проверить задержку всех серверов") }
         OutlinedButton(onClick = { scope.launch { load(false) } }) { Text("Обновить список и статус") }
         nodes.forEach { n ->
           val p = status.optJSONObject("pings")?.optJSONObject(n.optString("key"))
-          val delay = when { !n.optBoolean("supported") -> "не поддерживается этим ядром (в т.ч. XHTTP)"; p == null -> "не проверен"; p.isNull("ms") -> "нет ответа 2 из 3 сайтов"; else -> "${p.optLong("ms")} мс · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(p.optLong("time") * 1000))}" }
+          val delay = when { !n.optBoolean("supported") -> "не поддерживается этим ядром (в т.ч. XHTTP)"; p == null -> "не проверен"; p.isNull("ms") -> "н/д · ${p.optString("error", "Нет ответа на адрес URL-теста")}"; else -> "${p.optLong("ms")} мс · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(p.optLong("time") * 1000))}" }
           Text("${n.optString("name")} · ${n.optString("protocol")}\n$delay", style = MaterialTheme.typography.bodyMedium)
         }
-        Text("При смене сети и каждые 60 секунд активный режим проверяет доступность. После двух неудачных кругов он останавливается до ручного повторного включения. Режимы действуют на телефон; настройки раздачи остаются системными.", style = MaterialTheme.typography.bodySmall)
+        Text("При смене сети и каждые 60 секунд активный режим проверяет доступность, если его проверка включена. После двух неудачных кругов он останавливается до ручного повторного включения. Режимы действуют на телефон; настройки раздачи остаются системными.", style = MaterialTheme.typography.bodySmall)
       }
     }
     if (appDialog && settings != null) {

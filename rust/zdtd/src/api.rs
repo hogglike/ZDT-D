@@ -7149,6 +7149,11 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
             match (method.as_str(), path.as_str()) {
                 ("GET", "/api/connection-modes") => modes::snapshot(),
                 ("GET", "/api/connection-modes/status") => Ok(json!({"ok":true,"status":modes::status()})),
+                ("POST", "/api/connection-modes/select-server") => {
+                    let input:serde_json::Value=serde_json::from_slice(&body)?;
+                    modes::choose_server(input["mode"].as_str().unwrap_or(""),input["key"].as_str().unwrap_or(""))?;
+                    Ok(json!({"ok":true}))
+                },
                 ("PUT", "/api/connection-modes") => {
                     let config: modes::Config = serde_json::from_slice(&body)?;
                     Ok(json!({"ok":true,"config":modes::save(config)?}))

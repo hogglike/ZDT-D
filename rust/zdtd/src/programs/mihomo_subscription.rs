@@ -1256,23 +1256,30 @@ fn endpoint_text(host: &str, port: u16) -> String {
 
 fn tls_json(definition: &JsonValue, default_enabled: bool) -> Option<JsonValue> {
     if let Some(tls) = definition.get("tls").filter(|value| value.is_object()) {
-        return Some(tls.clone());
+        let mut tls=tls.clone();
+        if tls.get("enabled").is_none() {tls["enabled"]=json!(true);}
+        if tls.get("reality").and_then(|v|v.get("enabled")).and_then(JsonValue::as_bool)==Some(true) && tls.get("utls").is_none() {
+            tls["utls"]=json!({"enabled":true,"fingerprint":"chrome"});
+        }
+        return Some(tls);
     }
     let security = json_string_any(definition, &["security", "tls"]);
-    let enabled = default_enabled || security.eq_ignore_ascii_case("tls") || security.eq_ignore_ascii_case("reality") || bool_any(definition, &["tls"]);
+    let has_reality=definition.get("reality-opts").is_some() || definition.get("reality_opts").is_some() || !json_string_any(definition,&["pbk","public-key","public_key","publicKey"]).is_empty();
+    let enabled = default_enabled || has_reality || security.eq_ignore_ascii_case("tls") || security.eq_ignore_ascii_case("reality") || bool_any(definition, &["tls"]);
     if !enabled { return None; }
-    let sni = json_string_any(definition, &["sni", "servername", "server-name", "peer"]);
+    let sni = json_string_any(definition, &["sni", "servername", "server-name", "server_name", "serverName", "peer"]);
     let mut tls = json!({"enabled": true, "insecure": bool_any(definition, &["skip-cert-verify", "allowInsecure", "insecure"])});
     if !sni.is_empty() { tls["server_name"] = json!(sni); }
-    let fp = json_string_any(definition, &["client-fingerprint", "fp"]);
+    let fp = json_string_any(definition, &["client-fingerprint", "fingerprint", "fp"]);
     if !fp.is_empty() { tls["utls"] = json!({"enabled": true, "fingerprint": fp}); }
     let reality = definition.get("reality-opts").or_else(|| definition.get("reality_opts"));
     let public_key = reality.map(|v| json_string_any(v, &["public-key", "public_key"]))
-        .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["pbk", "public-key"]));
+        .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["pbk", "public-key", "public_key", "publicKey"]));
     if !public_key.is_empty() {
         let short_id = reality.map(|v| json_string_any(v, &["short-id", "short_id"]))
-            .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["sid", "short-id"]));
+            .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["sid", "short-id", "short_id", "shortId"]));
         tls["reality"] = json!({"enabled": true, "public_key": public_key, "short_id": short_id});
+        if fp.is_empty() {tls["utls"]=json!({"enabled":true,"fingerprint":"chrome"});}
     }
     Some(tls)
 }

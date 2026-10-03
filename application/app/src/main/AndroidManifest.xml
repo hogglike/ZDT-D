@@ -57,6 +57,7 @@
 
 
         <activity android:name=".modes.ConnectionModesActivity" android:exported="false" />
+        <activity android:name=".modes.ModeServerPickerActivity" android:exported="false" />
         <activity android:name=".modes.ModeSwitchActivity" android:exported="false" android:excludeFromRecents="true" />
         <service android:name=".modes.ModeActionService" android:exported="false" android:foregroundServiceType="dataSync" />
         <receiver android:name=".modes.ModeStatusReceiver" android:exported="true">

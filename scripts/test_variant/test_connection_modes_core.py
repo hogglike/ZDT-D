@@ -99,6 +99,8 @@ def main():
                 type(self).requests += 1
                 self.send_response(204)
                 self.end_headers()
+            def do_HEAD(self):
+                self.do_GET()
             def log_message(self, *args):
                 pass
 
@@ -108,15 +110,30 @@ def main():
         origin.socket = tls.wrap_socket(origin.socket, server_side=True)
         threading.Thread(target=origin.serve_forever, daemon=True).start()
         fixture = socks_fixture()
-        test_port, live_port, control_port, tproxy_port, dead_port = [port() for _ in range(5)]
+        test_port, live_port, control_port, tproxy_port, dead_port, reality_port = [port() for _ in range(6)]
         cfg = json.loads((ROOT / "rust/zdtd/src/programs/mode_core.json").read_text())
+        cfg["certificate"]["certificate_path"] = [str(cert)]
+        reality = json.loads(Path(sys.argv[2]).read_text()) if len(sys.argv)>2 else None
         cfg["inbounds"][0]["listen_port"] = tproxy_port
         cfg["inbounds"][1]["listen_port"] = test_port
         # Fixture transport exercises the same final MODE routing without OS rules.
         cfg["inbounds"].append({"type": "mixed", "tag": "fixture-live", "listen": "127.0.0.1", "listen_port": live_port})
         cfg["experimental"]["clash_api"] = {"external_controller": f"127.0.0.1:{control_port}", "secret": "fixture-token"}
         cfg["outbounds"] = [{"type": "socks", "tag": tag, "server": "127.0.0.1", "server_port": target} for tag, target in [("good", fixture.getsockname()[1]), ("dead", dead_port)]]
-        cfg["outbounds"] += [{"type": "selector", "tag": group, "outbounds": ["good", "dead"], "default": "good", "interrupt_exist_connections": True} for group in ["MODE", "TEST"]]
+        if reality:
+            client = reality["client"]
+            client["server_port"] = reality_port
+            client["tag"] = "reality-good"
+            cfg["outbounds"].append(client)
+            bad = json.loads(json.dumps(client)); bad["tag"] = "reality-bad"
+            key = bad["tls"]["reality"]["public_key"]
+            bad["tls"]["reality"]["public_key"] = ("A" if key[0]!="A" else "B") + key[1:]
+            cfg["outbounds"].append(bad)
+            cfg["inbounds"].append({"type":"vless", "tag":"fixture-reality", "listen":"127.0.0.1", "listen_port":reality_port,
+                "users":[{"uuid":client["uuid"],"flow":client["flow"]}],
+                "tls":{"enabled":True,"server_name":"localhost","reality":{"enabled":True,"handshake":{"server":"127.0.0.1","server_port":origin.server_port},"private_key":reality["private_key"],"short_id":["abcd"]}}})
+        tags = [outbound["tag"] for outbound in cfg["outbounds"]]
+        cfg["outbounds"] += [{"type": "selector", "tag": group, "outbounds": tags, "default": "good", "interrupt_exist_connections": True} for group in ["MODE", "TEST"]]
         path = work / "core.json"
         path.write_text(json.dumps(cfg))
         subprocess.run([binary, "check", "-c", str(path)], check=True)
@@ -168,6 +185,33 @@ def main():
                 except ssl.SSLCertVerificationError:
                     pass
                 print("PASS: probe transport validates TLS certificates", flush=True)
+                def delay(key):
+                    query = urllib.parse.urlencode({"url":f"https://localhost:{origin.server_port}/generate_204", "timeout":4000})
+                    req = urllib.request.Request(f"http://127.0.0.1:{control_port}/proxies/{key}/delay?{query}",headers={"Authorization":"Bearer fixture-token"})
+                    with opener.open(req, timeout=6) as response:
+                        value = json.load(response)
+                        assert value["delay"] >= 0
+                import urllib.parse
+                delay("good")
+                try:
+                    delay("dead")
+                    raise AssertionError("Failed server acquired valid latency")
+                except urllib.error.HTTPError:
+                    pass
+                request(live_port)
+                print("PASS: independent one-URL core latency returns milliseconds; failed node stays unavailable; MODE stays unchanged", flush=True)
+                if reality:
+                    api("TEST", {"name":"reality-good"}).close()
+                    request(test_port)
+                    delay("reality-good")
+                    api("TEST", {"name":"reality-bad"}).close()
+                    try:
+                        request(test_port)
+                        raise AssertionError("Wrong Reality public key reached origin")
+                    except (OSError, http.client.HTTPException):
+                        pass
+                    request(live_port)
+                    print("PASS: actual VLESS/Reality Vision handshake and TLS traffic with production-rendered node; wrong key rejected", flush=True)
             finally:
                 process.terminate()
                 process.wait(timeout=5)

@@ -59,3 +59,14 @@ mod tests {
         assert!(!include_app("selected", false, false));
     }
 }
+
+/// Optional checks do not veto manual application; latency uses its own URL.
+pub fn checks_pass(enabled:bool,successes:usize,required:usize)->bool { !enabled || (required>0 && successes>=required) }
+pub fn http_ok(code:u16,expected:u16)->bool {if expected==0 {(200..400).contains(&code)}else{code==expected}}
+#[cfg(test)] mod check_tests {
+ use super::*;
+ #[test] fn optional_checks_and_threshold_are_independent() {
+  assert!(checks_pass(false,0,2));assert!(!checks_pass(true,1,2));assert!(checks_pass(true,1,1));assert!(!checks_pass(true,3,0));
+  assert!(http_ok(301,0));assert!(!http_ok(403,0));assert!(http_ok(403,403));assert!(!http_ok(200,204));
+ }
+}

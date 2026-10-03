@@ -44,6 +44,9 @@ object ModeClient {
   fun failure(context: Context, mode: String, message: String) {
     cache(context, JSONObject().put("mode", mode).put("state", "error").put("message", message))
   }
+  fun pickServer(context: Context, mode: String) {
+    context.startActivity(Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+  }
   fun switch(context: Context, mode: String) {
     context.startActivity(Intent(context, ModeSwitchActivity::class.java).putExtra("mode", mode).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
   }
@@ -142,7 +145,10 @@ class ModeWidgetProvider : android.appwidget.AppWidgetProvider() {
         val views = RemoteViews(context.packageName, R.layout.widget_connection_modes)
         views.setTextViewText(R.id.mode_message, status.optString("message", "Открой настройки режимов"))
         val buttons = listOf(R.id.mode_white, R.id.mode_normal, R.id.mode_browser)
+        val pickers = listOf(R.id.pick_white, R.id.pick_normal, R.id.pick_browser)
         ModeClient.modes.forEachIndexed { index, mode ->
+          views.setOnClickPendingIntent(pickers[index], PendingIntent.getActivity(context, 20100 + index,
+            Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
           views.setInt(buttons[index], "setBackgroundColor", ModeState.color(mode, status.optString("mode"), status.optString("state")))
           views.setOnClickPendingIntent(buttons[index], PendingIntent.getActivity(context, 19972 + index,
             Intent(context, ModeSwitchActivity::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))

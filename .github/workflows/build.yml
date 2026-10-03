@@ -103,7 +103,8 @@ jobs:
           curl -fL --retry 3 https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64.tar.gz -o /tmp/zdt-mode-core.tar.gz
           echo "12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f  /tmp/zdt-mode-core.tar.gz" | sha256sum -c -
           tar -xzf /tmp/zdt-mode-core.tar.gz -C /tmp
-          sudo python3 scripts/test_variant/test_connection_modes_core.py /tmp/sing-box-1.14.1-linux-amd64/sing-box
+          python3 scripts/test_variant/test_subscription_renderer.py /tmp/sing-box-1.14.1-linux-amd64/sing-box /tmp/zdt-reality-fixture.json
+          sudo python3 scripts/test_variant/test_connection_modes_core.py /tmp/sing-box-1.14.1-linux-amd64/sing-box /tmp/zdt-reality-fixture.json
 
       - name: Detect tracked build paths
         id: detect
