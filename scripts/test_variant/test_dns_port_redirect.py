@@ -46,6 +46,11 @@ def serve(address, port, rcode, protocol):
     sock.bind((address, port))
     if protocol == "tcp":
         sock.listen(8)
+    else:
+        # A wildcard listener must reply from the query's destination address.
+        # Otherwise a connected UDP client correctly rejects its response.
+        pktinfo = getattr(socket, "IP_PKTINFO", 8)  # Linux UAPI IP_PKTINFO
+        sock.setsockopt(socket.IPPROTO_IP, pktinfo, 1)
 
     def response(data):
         assert len(data) >= 12
@@ -54,8 +59,11 @@ def serve(address, port, rcode, protocol):
     def loop():
         while True:
             if protocol == "udp":
-                data, peer = sock.recvfrom(4096)
-                sock.sendto(response(data), peer)
+                data, control, _, peer = sock.recvmsg(4096, 1024)
+                destination = next(info[8:12] for level, kind, info in control
+                                   if level == socket.IPPROTO_IP and kind == pktinfo)
+                outgoing = struct.pack("I", 0) + destination + bytes(4)
+                sock.sendmsg([response(data)], [(socket.IPPROTO_IP, pktinfo, outgoing)], 0, peer)
             else:
                 conn, _ = sock.accept()
                 with conn:
