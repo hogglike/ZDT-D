@@ -37,7 +37,8 @@ fn main() {
 }
 '''
  (work/'src/main.rs').write_text(main+'\n'+functions+'\n'+mode_types)
- out=json.loads(subprocess.check_output(['cargo','run','--quiet','--manifest-path',str(work/'Cargo.toml'),'--',public],text=True))
+ host=re.search(r'^host: (.+)$',subprocess.check_output(['rustc','-vV'],text=True),re.M).group(1)
+ out=json.loads(subprocess.check_output(['cargo','run','--quiet','--target',host,'--manifest-path',str(work/'Cargo.toml'),'--',public],text=True,cwd=work))
  Path(sys.argv[2]).write_text(json.dumps({'client':out,'private_key':private,'public_key':public}))
  Path(sys.argv[2]).chmod(0o600)
  print('PASS: production VLESS/Reality renderer preserves Vision/SNI/keys; Clash and native TLS defaults; mod25 settings migration',flush=True)
