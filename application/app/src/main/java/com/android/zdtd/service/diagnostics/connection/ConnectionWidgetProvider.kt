@@ -4,6 +4,9 @@ import android.app.PendingIntent
 import android.appwidget.*
 import android.content.*
 import android.graphics.Color
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.widget.RemoteViews
 import com.android.zdtd.service.R
 import java.text.SimpleDateFormat
@@ -36,8 +39,20 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
       manager.getAppWidgetIds(ComponentName(context, ConnectionWidgetProvider::class.java)).forEach { id ->
         val views = RemoteViews(context.packageName, R.layout.widget_connection_health)
         views.setTextViewText(R.id.health_time, state)
-        views.setTextViewText(R.id.health_results, text)
-        views.setTextColor(R.id.health_results, if (time == 0L || age > 60 * 60 * 1000) Color.GRAY else Color.rgb(35, 35, 35))
+        val colored = SpannableString(text)
+        if (rows != null) {
+          var offset = 0
+          text.split("\n").forEachIndexed { index, line ->
+            val color = if (age > 60 * 60 * 1000) Color.GRAY else when (rows.getJSONObject(index).optString("state")) {
+              "ok" -> Color.rgb(40, 116, 59)
+              "off" -> Color.GRAY
+              else -> Color.rgb(173, 24, 48)
+            }
+            colored.setSpan(ForegroundColorSpan(color), offset, offset + line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            offset += line.length + 1
+          }
+        }
+        views.setTextViewText(R.id.health_results, colored)
         views.setOnClickPendingIntent(R.id.health_check, check)
         views.setOnClickPendingIntent(R.id.health_root, open)
         manager.updateAppWidget(id, views)

@@ -121,9 +121,13 @@ class ConnectionHealthJobService : JobService() {
   companion object {
     fun schedule(context: Context, enabled: Boolean) {
       val scheduler = context.getSystemService(JobScheduler::class.java)
-      if (enabled) scheduler.schedule(JobInfo.Builder(2382, ComponentName(context, ConnectionHealthJobService::class.java))
-        .setPeriodic(30 * 60 * 1000L).build())
-      else scheduler.cancel(2382)
+      if (enabled) {
+        // Widget refreshes must not postpone the already scheduled periodic job.
+        if (scheduler.getPendingJob(2382) == null) {
+          scheduler.schedule(JobInfo.Builder(2382, ComponentName(context, ConnectionHealthJobService::class.java))
+            .setPeriodic(30 * 60 * 1000L).build())
+        }
+      } else scheduler.cancel(2382)
     }
   }
 }

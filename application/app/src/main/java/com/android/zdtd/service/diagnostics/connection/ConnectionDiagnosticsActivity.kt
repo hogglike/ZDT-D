@@ -38,9 +38,8 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
   }
   override fun onStart() {
     super.onStart()
-    getSystemService(ConnectivityManager::class.java).registerNetworkCallback(
-      NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
+    // Track the selected network rather than every available (possibly idle) one.
+    getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(callback)
   }
   override fun onStop() {
     networkChange?.cancel()
