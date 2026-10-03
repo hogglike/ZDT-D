@@ -27,6 +27,13 @@ pub fn include_app(policy: &str, selected: bool, is_dns: bool) -> bool {
     }
 }
 
+/// A NAT ACCEPT ends this table, preserving the original TPROXY destination.
+/// Matching only the unique mode mark leaves DNS and foreign scopes alone.
+pub fn nat_bypass_args(operation:&str, chain:&str, mark:&str) -> Vec<String> {
+    ["-t", "nat", operation, chain, "-m", "mark", "--mark", mark, "-j", "ACCEPT"]
+        .iter().map(|s|s.to_string()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -76,6 +76,7 @@ impl Default for Config {
     }
 }
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+static REJECTED_NODES: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 pub fn config() -> Result<Config> {
     let path = root().join("config.json");
     if !path.exists() { return Ok(Config::default()); }
@@ -107,7 +108,10 @@ fn nodes() -> Result<Vec<Node>> {
         let mut identity = n.definition.clone();
         if let Some(obj) = identity.as_object_mut() { for k in ["name", "tag", "remarks", "_zdt_share_link"] { obj.remove(k); } }
         let key = format!("n_{}", &hex::encode(Sha256::digest(format!("{id}\0{}", identity)))[..24]);
-        let mut outbound = if n.targets.iter().any(|t|t=="sing-box") || n.protocol == "hysteria2" {
+        let transport=n.definition.get("transport").and_then(|v|v.get("type")).and_then(Value::as_str).unwrap_or(&n.transport);
+        let supported_transport=["", "tcp", "ws", "grpc", "http", "httpupgrade"].contains(&transport);
+        let rejected=REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).contains(&key);
+        let mut outbound = if !rejected && supported_transport && (n.targets.iter().any(|t|t=="sing-box") || n.protocol == "hysteria2") {
             subscriptions::singbox_outbound(&n).ok()
         } else { None };
         if let Some(v) = &mut outbound { v["tag"] = json!(key); }
@@ -143,7 +147,11 @@ fn candidates(settings: &ModeSettings, all: &[Node], white: bool) -> Vec<Node> {
     }
     out
 }
-fn cleanup_routes() -> Result<()> { iptables_tproxy::cleanup_scope(&root().join("uids.txt"), PORT, ProtoChoice::TcpUdp, None, &options()) }
+fn cleanup_routes() -> Result<()> {
+    let nat_result=iptables_tproxy::cleanup_connection_mode_nat();
+    let route_result=iptables_tproxy::cleanup_scope(&root().join("uids.txt"), PORT, ProtoChoice::TcpUdp, None, &options());
+    nat_result?; route_result
+}
 fn apply_apps(settings: &ModeSettings) -> Result<usize> {
     let (rc, out) = shell::run_timeout("cmd", &["package","list","packages","-U"], Capture::Stdout, Duration::from_secs(8))?;
     if rc!=0 { bail!("Не удалось получить UID приложений"); }
@@ -176,22 +184,40 @@ impl Core {
 }
 impl Drop for Core { fn drop(&mut self) { self.stop(); } }
 fn core_fingerprint(all: &[Node]) -> String { hex::encode(Sha256::digest(serde_json::to_vec(&all.iter().filter_map(|n| n.outbound.as_ref()).collect::<Vec<_>>()).unwrap_or_default())) }
-fn start_core(all: &[Node]) -> Result<Core> {
-    let mut outbounds: Vec<Value> = all.iter().filter_map(|n| n.outbound.clone()).collect();
+fn render_core(all:&[Node]) -> Result<Value> {
+    let mut outbounds:Vec<Value>=all.iter().filter_map(|n|n.outbound.clone()).collect();
     if outbounds.is_empty() { bail!("Нет поддерживаемых серверов. Обнови подписку; XHTTP пока не поддерживается этим ядром"); }
-    let tags:Vec<String> = outbounds.iter().filter_map(|v|v["tag"].as_str().map(str::to_string)).collect();
+    let tags:Vec<String>=outbounds.iter().filter_map(|v|v["tag"].as_str().map(str::to_string)).collect();
     for tag in ["MODE", "TEST"] { outbounds.push(json!({"type":"selector","tag":tag,"outbounds":tags,"default":tags[0],"interrupt_exist_connections":true})); }
-    let token=crate::settings::read_or_create_token()?;
     let mut cfg:Value=serde_json::from_str(include_str!("mode_core.json"))?;
     cfg["outbounds"]=json!(outbounds);
-    cfg["experimental"]["clash_api"]["secret"]=json!(token);
-    let path=root().join("config.runtime.json"); write_private(&path,&cfg.to_string())?;
-    let (code,check_log) = shell::run_timeout(BIN,&["check","-c",path.to_str().context("config path")?],Capture::Both,Duration::from_secs(8))?;
-    if code!=0 { let _=write_private(&root().join("sing-box.log"),&check_log); bail!("Ядро отклонило конфигурацию сервера. См. журнал режимов; проверь протокол подписки"); }
+    cfg["experimental"]["clash_api"]["secret"]=json!(crate::settings::read_or_create_token()?);
+    Ok(cfg)
+}
+fn check_core(all:&[Node],path:&Path) -> Result<bool> {
+    write_private(path,&render_core(all)?.to_string())?;
+    let (code,diagnostic)=shell::run_timeout(BIN,&["check","-c",path.to_str().context("config path")?],Capture::Both,Duration::from_secs(8))?;
+    if code!=0 { let _=write_private(&root().join("sing-box.log"),&diagnostic); }
+    Ok(code==0)
+}
+fn start_core(all: &mut [Node]) -> Result<Core> {
+    let path=root().join("config.runtime.json");
+    if !check_core(all,&path)? {
+        // A malformed or obsolete node must not disable every other server.
+        let validation=root().join("validation.runtime.json");
+        for n in all.iter_mut().filter(|n|n.outbound.is_some()) {
+            if !check_core(std::slice::from_ref(n),&validation)? {
+                REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).insert(n.key.clone());
+                n.outbound=None;
+            }
+        }
+        if !check_core(all,&path)? { bail!("Ядро отклонило конфигурацию режимов. См. журнал режимов"); }
+    }
     let log=fs::File::create(root().join("sing-box.log"))?;
+    log.set_permissions(fs::Permissions::from_mode(0o600))?;
     let child=Command::new(BIN).args(["run","-c"]).arg(&path).stdin(Stdio::null()).stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log)).spawn()?;
-    write_private(&root().join("core.pid"),&child.id().to_string())?;
     let mut core=Core{child,fingerprint:core_fingerprint(all)};
+    write_private(&root().join("core.pid"),&core.child.id().to_string())?;
     for _ in 0..40 {
         if !core.alive() { bail!("Ядро режимов остановилось. Возможно, занят порт 19972–19974"); }
         if std::net::TcpStream::connect_timeout(&format!("127.0.0.1:{CONTROL_PORT}").parse()?,Duration::from_millis(100)).is_ok() { return Ok(core); }
@@ -317,15 +343,20 @@ pub fn start_worker(state:daemon::SharedState) {
                 was_running=false;
                 thread::sleep(Duration::from_secs(1));continue;
             }
-            if !was_running { was_running=true;if let Ok(c)=config() {if !c.active.is_empty(){let _=request(&c.active,false);}} }
+            if !was_running {
+                was_running=true;
+                let g=GENERATION.load(Ordering::SeqCst);
+                let pending=REQUEST.lock().unwrap_or_else(|e|e.into_inner()).is_some();
+                if !pending { if let Ok(c)=config() {if !c.active.is_empty(){retry_if_current(g,&c.active);}} }
+            }
             let req=REQUEST.lock().unwrap_or_else(|e|e.into_inner()).take();
             if let Some((g,mode,ping))=req {
                 let result=(||->Result<()> {
                     if mode.is_empty()&&!ping { let _=cleanup_routes();core=None;clear_active();update(g,json!({"state":"idle","message":"Выключено"}));return Ok(()); }
-                    let all=nodes()?;
+                    let mut all=nodes()?;
                     let rebuild=core.as_mut().map(|c|!c.alive()||c.fingerprint!=core_fingerprint(&all)).unwrap_or(true);
-                    if rebuild { let _=cleanup_routes();core=None;core=Some(start_core(&all)?); }
-                    if !current(g){return Ok(());}
+                    if rebuild { let _=cleanup_routes();core=None;core=Some(start_core(&mut all)?); }
+                    if !current(g){if status()["state"]=="idle" {core=None;} return Ok(());}
                     if ping {
                         for n in all.iter().filter(|n|n.outbound.is_some()) {
                             if !current(g){return Ok(());}

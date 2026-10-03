@@ -76,11 +76,13 @@ def serve(address, port, rcode, protocol):
     return sock
 
 
-def query(address, protocol, expected):
+def query(address, protocol, expected, dest_port=53, mark=0):
     request = packet()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if protocol == "udp" else socket.SOCK_STREAM) as sock:
         sock.settimeout(3)
-        sock.connect((address, 53))
+        if mark:
+            sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_MARK", 36), mark)
+        sock.connect((address, dest_port))
         if protocol == "udp":
             sock.send(request)
             result = sock.recv(4096)
@@ -141,6 +143,27 @@ def namespace_tests(driver):
         query("127.0.0.2", protocol, 2)
         print(f"PASS: {protocol} profiles return their own DNS replies; system DNS is untouched", flush=True)
 
+    # A mode's scoped mark must also win over older NAT/DNAT proxy rules.
+    # Real packets prove that other marks and unmarked DNS keep their old paths.
+    scope_mark = "0x03000000/0xff000000"
+    for protocol in ("udp", "tcp"):
+        sockets.append(serve("10.253.240.1", 5353, 1, protocol))
+        old_proxy = ["-t", "nat", "-A", "OUTPUT", "-d", "10.253.240.1", "-p", protocol, "--dport", "5353", "-j", "DNAT", "--to-destination", "10.253.240.1:19600"]
+        run("iptables", *old_proxy)
+        query("10.253.240.1", protocol, 3, 5353)
+    for operation in ("-I",):
+        args = run(driver, "--mode-nat", operation, scope_mark).stdout.strip().split("\t")
+        run("iptables", *args)
+    for protocol in ("udp", "tcp"):
+        query("10.253.240.1", protocol, 1, 5353, 0x03000000)
+        query("10.253.240.1", protocol, 3, 5353, 0x05000000)
+        query("10.253.240.1", protocol, 3)
+    args = run(driver, "--mode-nat", "-D", scope_mark).stdout.strip().split("\t")
+    run("iptables", *args)
+    for protocol in ("udp", "tcp"):
+        query("10.253.240.1", protocol, 3, 5353, 0x03000000)
+    print("PASS: mode mark overrides old DNAT only for its own traffic; DNS/foreign scopes and cleanup survive", flush=True)
+
     for address, port in (("10.253.240.1", 19600), ("10.253.240.5", 19601)):
         for protocol in ("udp", "tcp"):
             rule("-D", address, port, protocol)
@@ -162,7 +185,9 @@ def main():
         driver_src = directory / "driver.rs"
         driver_src.write_text(
             '#[path = ' + json.dumps(str(HELPER)) + '] mod redirect;\n'
+            '#[path = ' + json.dumps(str(ROOT / "rust/zdtd/src/programs/mode_policy.rs")) + '] mod modes;\n'
             'fn main() { let a: Vec<String> = std::env::args().collect();\n'
+            'if a[1]=="--mode-nat" {println!("{}", modes::nat_bypass_args(&a[2], "OUTPUT", &a[3]).join("\\t"));return;}\n'
             'println!("{}", redirect::rule_args(&a[1], &a[2], a[3].parse().unwrap(), &a[4]).join("\\t")); }\n'
         )
         tests = directory / "unit-tests"

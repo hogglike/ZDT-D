@@ -42,7 +42,8 @@ encrypted subscriptions, HWID restrictions and unsupported transports require
 separate compatibility work. No provider link or credentials are exposed in the
 mode catalog or Android preference cache; generated core/config files are 0600.
 
-Selected IPv4 TCP/UDP application traffic uses scoped TPROXY and dedicated ports
+Selected mode-marked packets bypass older per-app DNAT rules in nat OUTPUT;
+other scopes and unmarked DNS preserve their paths. Selected IPv4 TCP/UDP application traffic uses scoped TPROXY and dedicated ports
 19972–19974. UDP/TCP 53, loopback and existing LAN bypasses remain outside it.
 DNS high-port listeners and mod24 DNAT rules remain unchanged. Android chooses
 hotspot upstream; these modes do not add VPN sharing to connected hotspot clients.

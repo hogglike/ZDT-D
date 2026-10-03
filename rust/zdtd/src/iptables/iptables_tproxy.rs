@@ -42,6 +42,7 @@ const XT_WAIT_SECS: &str = "5";
 const OUT_CHAIN: &str = "ZDT_TPROXY_OUT";
 const PRE_CHAIN: &str = "ZDT_TPROXY_PRE";
 const DIVERT_CHAIN: &str = "ZDT_TPROXY_DIVERT";
+const MODE_NAT_CHAIN: &str = "ZDT_MODE_NAT";
 
 /// IPv4 ranges that must never be TPROXY'd: they have to reach the local stack
 /// or the LAN directly.  Covers CGNAT/RFC1918 private space, link-local,
@@ -317,7 +318,27 @@ pub fn apply_connection_mode(uid_file: &Path, dest_port: u16, opt: &DpiTunnelOpt
     let chain = scoped_out_chain_name(&scope);
     delete_rule_all("mangle", OUT_CHAIN, &["-j", &chain])?;
     // Preserve the two loopback bypasses and every intranet bypass before modes.
-    insert_rule_at("mangle", OUT_CHAIN, INTRANET_V4.len() + 3, &["-j", &chain])
+    insert_rule_at("mangle", OUT_CHAIN, INTRANET_V4.len() + 3, &["-j", &chain])?;
+    // mangle ACCEPT does not stop nat OUTPUT. Prevent a pre-existing per-app
+    // DNAT proxy from rewriting the destination after this mode marks it.
+    ensure_chain("nat", MODE_NAT_CHAIN)?;
+    let (rc,out)=ipt_run_timeout(&["-t","nat","-F",MODE_NAT_CHAIN],Capture::Both,IPT_CMD_TIMEOUT)?;
+    if rc!=0 { anyhow::bail!("mode NAT chain: {}",out.trim()); }
+    let mark=mark_mask_hex(mark_from_slot(alloc_slot_for_scope(&scope)?));
+    let args=crate::programs::mode_policy::nat_bypass_args("-A",MODE_NAT_CHAIN,&mark);
+    let refs:Vec<&str>=args.iter().map(String::as_str).collect();
+    let (rc,out)=ipt_run_timeout(&refs,Capture::Both,IPT_CMD_TIMEOUT)?;
+    if rc!=0 { anyhow::bail!("mode NAT bypass: {}",out.trim()); }
+    delete_rule_all("nat","OUTPUT", &["-j",MODE_NAT_CHAIN])?;
+    insert_rule_at("nat","OUTPUT",1,&["-j",MODE_NAT_CHAIN])
+}
+
+pub fn cleanup_connection_mode_nat() -> Result<()> {
+    let _guard=xtables_lock::lock();
+    delete_rule_all("nat","OUTPUT", &["-j",MODE_NAT_CHAIN])?;
+    let _=ipt_run_timeout(&["-t","nat","-F",MODE_NAT_CHAIN],Capture::None,IPT_CMD_TIMEOUT);
+    let _=ipt_run_timeout(&["-t","nat","-X",MODE_NAT_CHAIN],Capture::None,IPT_CMD_TIMEOUT);
+    Ok(())
 }
 
 fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions, explicit_mode: bool) -> std::result::Result<(), TproxyApplyError> {
