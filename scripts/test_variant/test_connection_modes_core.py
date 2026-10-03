@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -191,7 +192,6 @@ def main():
                     with opener.open(req, timeout=6) as response:
                         value = json.load(response)
                         assert value["delay"] >= 0
-                import urllib.parse
                 delay("good")
                 try:
                     delay("dead")
