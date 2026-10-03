@@ -1122,6 +1122,8 @@ APatch: 10700+</string>
     <string name="opera_args_api_proxy_desc">پروکسی SOCKS5/HTTP(S) که opera-proxy برای دسترسی به API بک‌اند Opera استفاده می‌کند. می‌توانید یک URL پروکسی، چند URL جداشده با ویرگول، URL فهرست متنی پروکسی یا مسیر مطلق فایل فهرست پروکسی ذخیره‌شده روی دستگاه را مشخص کنید.</string>
     <string name="opera_args_api_proxy_invalid">از URL پروکسی با طرح http://، https://، socks5:// یا socks5h:// استفاده کنید. همچنین می‌توانید URL ‏http(s) فهرست متنی پروکسی یا مسیر مطلق فایل محلی که با / شروع می‌شود استفاده کنید.</string>
     <string name="opera_args_api_proxy_hint">قالب: http://، https://، socks5:// یا socks5h://[login:password@]host[:port]. چند پروکسی را می‌توان با ویرگول جدا کرد. همچنین می‌توانید URL ‏http(s) فهرست متنی یا مسیر محلی مطلق مانند /sdcard/proxies.txt یا /storage/emulated/0/proxies.txt را بچسبانید. فایل‌های محلی در هر بار شروع Opera-proxy از دستگاه خوانده می‌شوند. آدرس‌های بدون طرح پشتیبانی نمی‌شوند مگر اینکه مسیر مطلق فایل باشند. اگر پروکسی سالمی پیدا نشود یا فهرست قابل دانلود/خواندن نباشد، Opera-proxy بدون api-proxy شروع می‌شود.</string>
+    <string name="non_root_opera_api_proxy_choose_file">انتخاب فایل محلی فهرست پراکسی</string>
+    <string name="non_root_opera_api_proxy_import_failed">وارد کردن فهرست پراکسی انتخاب‌شده ممکن نشد. مطمئن شوید فایل متنی قابل‌خواندن و حداکثر ۱ مگابایت است.</string>
     <string name="opera_args_server_selection_title">انتخاب سرور</string>
     <string name="opera_args_dl_limit_hint">حد دانلود بر حسب بایت برای آزمون سرعت سرور. پیش‌فرض: 204800 ‏(200 KB)</string>
     <string name="opera_args_misc_title">زمان‌بندی و جزئیات</string>
@@ -2410,4 +2412,164 @@ APatch: 10700+</string>
     <string name="subscription_manual_target">مقصد: %1$s</string>
     <string name="subscription_copy_config">کپی پیکربندی</string>
     <string name="subscription_copy_failed">آماده‌سازی پیکربندی برای کپی ممکن نشد.</string>
+
+    <!-- Non-root runtime -->
+    <string name="setup_continue_without_root">ادامه بدون روت</string>
+    <string name="setup_non_root_warning_title">حالت محدود</string>
+    <string name="setup_non_root_warning_body">در آستانه ادامه بدون دسترسی روت هستید. فقط قابلیت‌هایی که از طریق VPN اندروید و سرویس‌های پراکسی محلی کار می‌کنند در دسترس خواهند بود.\n\nقابلیت‌های حفاظتی، امنیتی و سایر امکاناتی که به دسترسی سیستمی نیاز دارند در دسترس نخواهند بود. اجرای خودکار مؤلفه‌های سیستم و یکپارچه‌سازی پیشرفته ابزارها نیز محدود می‌شود.</string>
+    <string name="non_root_home_title">حالت بدون روت</string>
+    <string name="non_root_home_body">ZDT-D بدون دسترسی سیستمی در حال اجرا است. کنترل‌های VPN و پراکسی در اینجا پیکربندی می‌شوند.</string>
+    <string name="non_root_home_restrictions">حفاظت سطح سیستم، قابلیت‌های امنیتی، اجرای خودکار و یکپارچه‌سازی پیشرفته ابزارها در این حالت در دسترس نیستند.</string>
+
+    <string name="non_root_current_mode">حالت فعلی</string>
+    <string name="non_root_work_mode_title">حالت کار</string>
+    <string name="non_root_mode_direct">ابزار</string>
+    <string name="non_root_mode_cascade">زنجیره</string>
+    <string name="non_root_mode_direct_desc">اتصال مستقیم به برنامه پراکسی انتخاب‌شده.</string>
+    <string name="non_root_mode_cascade_desc">HEV ترافیک را از طریق T2S به پروفایل‌های پراکسی فعال می‌فرستد.</string>
+    <string name="non_root_direct_opera_desc">پراکسی مستقیم non-root. نشانی روی 127.0.0.1 ثابت است.</string>
+    <string name="non_root_loopback_port_hint">فقط نشانی محلی 127.0.0.1 استفاده می‌شود. پورت‌ها از 10000 شروع می‌شوند.</string>
+    <string name="non_root_port_error">یک پورت آزاد بین 10000 تا 65535 انتخاب کنید.</string>
+    <string name="non_root_cascade_intro">T2S مسیریاب زنجیره است. ساخت پروفایل و تنظیمات مسیر در اینجا نمایش داده می‌شود.</string>
+
+    <string name="non_root_byedpi_restart_after_opera">راه‌اندازی مجدد پس از اجرای Opera</string>
+    <string name="non_root_byedpi_restart_after_opera_desc">پس از آماده شدن Opera Proxy، ByeDPI را با آرگومان‌های راه‌اندازی مجدد اجرا می‌کند. در حالت خاموش، ByeDPI فقط یک‌بار اجرا می‌شود.</string>
+
+    <string name="non_root_create_profile">ایجاد پروفایل</string>
+    <string name="non_root_profile_tool_label">ابزار</string>
+    <string name="non_root_profile_name">نام پروفایل</string>
+    <string name="non_root_profile_settings">تنظیمات پروفایل</string>
+    <string name="non_root_profile_enabled">فعال</string>
+    <string name="non_root_profile_enabled_desc">این پروفایل را در مسیر Cascade نگه دارید و هنگام اجرای Cascade آن را راه‌اندازی کنید.</string>
+    <string name="non_root_profile_title_fmt">%1$s — %2$s</string>
+    <string name="non_root_delete_profile_title">پروفایل حذف شود؟</string>
+    <string name="non_root_delete_profile_body">پروفایل «%1$s» و تنظیمات ذخیره‌شده آن حذف می‌شوند.</string>
+    <string name="non_root_cascade_opera_desc">تنظیمات Opera Proxy برای این پروفایل Cascade.</string>
+    <string name="non_root_t2s_settings">تنظیمات T2S</string>
+    <string name="non_root_t2s_backend_mode">حالت backend</string>
+    <string name="non_root_t2s_route_title">مسیر Cascade</string>
+    <string name="non_root_t2s_route_hint">≡ را نگه دارید و بکشید تا ترتیب تغییر کند. پروفایل‌های غیرفعال جای خود را حفظ می‌کنند.</string>
+    <string name="non_root_t2s_route_empty">برای ساخت مسیر Cascade حداقل یک پروفایل proxy ایجاد کنید.</string>
+    <string name="non_root_t2s_palette_title">عناصر مسیر</string>
+    <string name="non_root_t2s_palette_hint">≡ را نگه دارید و عنصر را به بالا بکشید تا به مسیر اضافه شود. عنصر سرویس افزوده‌شده را برای حذف به پایین بکشید.</string>
+    <string name="non_root_t2s_group">گروه ;</string>
+    <string name="non_root_t2s_direct">حالت مستقیم 0</string>
+    <string name="non_root_t2s_block_direct">مسدود کردن مستقیم 0</string>
+    <string name="non_root_t2s_group_short">; · گروه</string>
+    <string name="non_root_t2s_direct_short">0 · حالت مستقیم</string>
+    <string name="non_root_t2s_block_direct_short">0 · مسدود کردن مستقیم</string>
+    <string name="non_root_t2s_group_help">نقطه‌ویرگول گروه‌های اولویت backend را جدا می‌کند. آن را بین دو پروفایل proxy قرار دهید.</string>
+    <string name="non_root_t2s_direct_help">حالت مستقیم از مقدار T2S برابر 0 در ابتدای مسیر استفاده می‌کند.</string>
+    <string name="non_root_t2s_block_direct_help">مسدود کردن مستقیم از مقدار T2S برابر 0 در انتهای مسیر استفاده می‌کند.</string>
+    <string name="non_root_t2s_group_position">بین دو پروفایل proxy قرار دهید. برای حذف به پایین بکشید.</string>
+    <string name="non_root_t2s_direct_position">فقط در ابتدای مسیر. برای حذف به پایین بکشید.</string>
+    <string name="non_root_t2s_block_direct_position">فقط در انتهای مسیر. برای حذف به پایین بکشید.</string>
+    <string name="non_root_t2s_drag_handle">کشیدن</string>
+    <string name="non_root_t2s_help">راهنما</string>
+    <string name="non_root_t2s_stats_title">آمار T2S</string>
+    <string name="non_root_direct_stats_empty">حالت مستقیم هنوز پنل آمار جداگانه ندارد.</string>
+    <!-- Non-root T2S runtime settings -->
+    <string name="non_root_t2s_runtime_settings">تنظیمات اجرای T2S</string>
+    <string name="non_root_t2s_idle_timeout">مهلت بیکاری (ثانیه)</string>
+    <string name="non_root_t2s_buffer_size">اندازه بافر (بایت)</string>
+    <string name="non_root_t2s_download_limit">محدودیت دانلود (Mbit/s، 0 = نامحدود)</string>
+    <string name="non_root_t2s_peer_coordination">هماهنگی نمونه‌ها</string>
+    <string name="non_root_t2s_peer_coordination_desc">بررسی سلامت بین نمونه‌های T2S با بک‌اندهای یکسان هماهنگ شود.</string>
+    <string name="non_root_t2s_serialize_connects">سری‌سازی اتصال‌های بک‌اند</string>
+    <string name="non_root_t2s_serialize_connects_desc">از هم‌پوشانی handshake با یک بک‌اند حساس جلوگیری می‌کند.</string>
+    <string name="non_root_t2s_connect_stagger">فاصله اتصال بک‌اند (میلی‌ثانیه)</string>
+
+    <string name="non_root_t2s_stopped">T2S متوقف است. برای دیدن آمار API حالت Cascade را اجرا کنید.</string>
+
+    <!-- Non-root VPN lifecycle progress -->
+    <string name="non_root_runtime_logs_title">راه‌اندازی / توقف VPN</string>
+    <string name="non_root_service_state_running">سرویس: در حال اجرا</string>
+    <string name="non_root_service_state_starting">سرویس: در حال راه‌اندازی</string>
+    <string name="non_root_service_state_stopping">سرویس: در حال توقف</string>
+    <string name="non_root_service_state_stopped">سرویس: متوقف</string>
+    <string name="non_root_service_state_error">سرویس: خطا</string>
+    <string name="non_root_switch_root_title">به حالت روت تغییر کند؟</string>
+    <string name="non_root_switch_root_body">می‌خواهید به حالت روت تغییر دهید؟ راه‌انداز موجود در مرحله درخواست دسترسی روت باز می‌شود.</string>
+    <string name="non_root_log_preparing_runtime">در حال آماده‌سازی محیط بدون روت…</string>
+    <string name="non_root_log_start_mode">در حال راه‌اندازی حالت %1$s…</string>
+    <string name="non_root_log_start_component">در حال راه‌اندازی %1$s…</string>
+    <string name="non_root_log_component_ready">%1$s آماده است.</string>
+    <string name="non_root_log_restart_component">در حال راه‌اندازی مجدد %1$s…</string>
+    <string name="non_root_log_create_vpn_interface">در حال ایجاد رابط VPN…</string>
+    <string name="non_root_log_vpn_running">VPN در حال اجرا است.</string>
+    <string name="non_root_log_stop_requested">در حال توقف VPN…</string>
+    <string name="non_root_log_stop_component">در حال توقف %1$s…</string>
+    <string name="non_root_log_close_vpn_interface">در حال بستن رابط VPN…</string>
+    <string name="non_root_log_stop_proxy_processes">در حال توقف فرایندهای پروکسی…</string>
+    <string name="non_root_log_vpn_stopped">VPN متوقف شد.</string>
+    <string name="non_root_log_error">خطا: %1$s</string>
+
+    <string name="non_root_t2s_advanced_settings">T2S پیشرفته</string>
+    <string name="non_root_profiles_empty_title">هنوز نمایه‌ای وجود ندارد</string>
+    <string name="non_root_profiles_empty_body">یک نمایه Opera Proxy بسازید. همان نمایه‌ها در حالت ابزار و آبشاری استفاده می‌شوند.</string>
+    <string name="non_root_opera_server_title">سرور Opera</string>
+    <string name="non_root_opera_server_desc">هر نمایه برنامه از یک سرور Opera Proxy و یک SNI استفاده می‌کند.</string>
+    <string name="non_root_profile_opera_desc">تنظیمات سرور Opera Proxy برای این نمایه.</string>
+    <string name="non_root_group_name_title">نام‌گذاری گروه</string>
+    <string name="non_root_group_name_label">نام گروه</string>
+    <string name="non_root_group_rename">تغییر نام گروه</string>
+    <string name="non_root_t2s_group_unnamed">گروه</string>
+
+    <string name="non_root_server_count_fmt">%1$d سرور</string>
+    <string name="non_root_servers_title">سرورها</string>
+    <string name="non_root_servers_desc">سرورهای این پروفایل به backendهای محلی SOCKS5 برای T2S تبدیل می‌شوند.</string>
+    <string name="non_root_add_server">افزودن سرور</string>
+    <string name="non_root_servers_empty">هنوز سروری وجود ندارد. برای استفاده از این پروفایل یک سرور اضافه کنید.</string>
+    <string name="non_root_delete_server_title">سرور حذف شود؟</string>
+    <string name="non_root_delete_server_body">«%1$s» از این پروفایل حذف شود؟</string>
+    <string name="non_root_server_name">نام سرور</string>
+    <string name="non_root_local_socks_port">پورت محلی SOCKS5</string>
+    <string name="non_root_mieru_rpc_port">Mieru RPC port</string>
+    <string name="non_root_log_level">Log level</string>
+    <string name="non_root_singbox_import">درون‌ریزی پیکربندی sing-box</string>
+    <string name="non_root_singbox_import_source">پیوند یا JSON</string>
+    <string name="non_root_import_config">درون‌ریزی پیکربندی</string>
+    <string name="non_root_direct_multi_server_disabled">چند سرور · از Cascade استفاده کنید</string>
+    <string name="non_root_additional_tools">ابزارهای اضافی</string>
+    <string name="non_root_tgws_title">Telegram WS Proxy</string>
+    <string name="non_root_vps_desc">مدیریت سرورهای VPS و درون‌ریزی کلاینت‌های ساخته‌شده به پروفایل‌ها.</string>
+
+    <string name="non_root_vps_import_title">افزودن کلاینت VPS به ZDT-D</string>
+    <string name="non_root_vps_import_new_profile">ایجاد پروفایل جدید</string>
+    <string name="non_root_vps_import_existing">افزودن سرور به پروفایل موجود</string>
+    <string name="non_root_vps_import_unsupported">این سرویس VPS را نمی‌توان به پروفایل backend بدون root درون‌ریزی کرد.</string>
+
+    <string name="non_root_error_hysteria_server_required">در پیکربندی Hysteria2 باید سرور مشخص شود.</string>
+    <string name="non_root_error_wireproxy_empty">پیکربندی WireProxy نمی‌تواند خالی باشد.</string>
+    <string name="non_root_error_import_failed">وارد کردن پیکربندی ممکن نشد.</string>
+    <string name="non_root_error_invalid_socks_port">یک پورت معتبر SOCKS5 بین 10000 تا 65535 انتخاب کنید.</string>
+    <string name="non_root_error_invalid_rpc_port">یک پورت معتبر Mieru RPC بین 10000 تا 65535 انتخاب کنید.</string>
+    <string name="non_root_error_rpc_port_conflict">پورت Mieru RPC باید با پورت SOCKS5 متفاوت باشد.</string>
+    <string name="non_root_tgws_secret_error">کلید باید دقیقاً 32 نویسهٔ هگزادسیمال داشته باشد.</string>
+    <string name="non_root_tgws_faketls_error">دامنهٔ SNI برای FakeTLS الزامی است.</string>
+
+    <string name="non_root_app_routing_title">مسیریابی برنامه‌ها</string>
+    <string name="non_root_app_routing_body">انتخاب کنید کدام برنامه‌ها از مسیر VPN ‏ZDT-D استفاده کنند.</string>
+    <string name="non_root_app_routing_all">همه برنامه‌ها</string>
+    <string name="non_root_app_routing_all_desc">تمام ترافیک برنامه‌ها به‌جز خود ZDT-D از VPN عبور می‌کند.</string>
+    <string name="non_root_app_routing_only_selected">فقط برنامه‌های انتخاب‌شده</string>
+    <string name="non_root_app_routing_only_selected_desc">فقط برنامه‌های علامت‌خورده از مسیر VPN استفاده می‌کنند.</string>
+    <string name="non_root_app_routing_exclude_selected">همه به‌جز انتخاب‌شده‌ها</string>
+    <string name="non_root_app_routing_exclude_selected_desc">برنامه‌های علامت‌خورده مسیر VPN را دور می‌زنند.</string>
+    <string name="non_root_app_routing_select_apps">انتخاب برنامه‌ها</string>
+    <string name="non_root_app_routing_selected_count">انتخاب‌شده: %1$d</string>
+    <string name="non_root_app_routing_only_selected_empty_hint">پیش از شروع VPN حداقل یک برنامه را انتخاب کنید.</string>
+    <string name="non_root_app_routing_self_excluded">ZDT-D همیشه از مسیر VPN خودش مستثنا است.</string>
+    <string name="non_root_app_routing_picker_title">انتخاب برنامه‌ها</string>
+    <string name="non_root_app_routing_restart_title">اتصال دوباره VPN؟</string>
+    <string name="non_root_app_routing_restart_body">تنظیمات مسیریابی برنامه‌ها تغییر کرده است. برای اعمال روی اتصال فعلی، VPN را دوباره متصل کنید.</string>
+    <string name="non_root_app_routing_restart_later">بعداً</string>
+    <string name="non_root_app_routing_restart_now">اتصال دوباره</string>
+    <string name="non_root_app_routing_only_selected_empty_error">در حالت «فقط برنامه‌های انتخاب‌شده» حداقل یک برنامه نصب‌شده را انتخاب کنید.</string>
+
+    <string name="non_root_tgws_plugin_title">افزونه TGWS</string>
+    <string name="non_root_tgws_plugin_not_installed">افزونه TGWS نصب نشده است. برای دانلود و نصب مستقیم از ZDT-D روی نصب بزنید.</string>
+    <string name="non_root_tgws_plugin_install_permission_required">برای ادامه نصب افزونه TGWS، به ZDT-D اجازه نصب برنامه‌های ناشناس را بدهید.</string>
+    <string name="non_root_tgws_plugin_installed_fmt">افزونه نصب‌شده: %1$s</string>
+    <string name="non_root_tgws_plugin_latest_fmt">افزونه موجود: %1$s</string>
 </resources>

@@ -28,7 +28,12 @@ import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
+  companion object {
+    const val EXTRA_OPEN_ROOT_SETUP = "com.android.zdtd.service.extra.OPEN_ROOT_SETUP"
+  }
+
   private val vm: MainViewModel by viewModels()
+  private var redirectedToNonRoot = false
 
   private val unknownSourcesLauncher = registerForActivityResult(
     ActivityResultContracts.StartActivityForResult()
@@ -66,9 +71,19 @@ class MainActivity : AppCompatActivity() {
     // Capture crashes to a local file so we can diagnose issues even without logcat.
     CrashLogger.install(applicationContext)
 
+    // Non-root is a separate application runtime/activity. Root-only backup and
+    // daemon flows must not be entered while the limited runtime is selected.
+    if (RootConfigManager(applicationContext).isNonRootRuntimeMode()) {
+      redirectedToNonRoot = true
+      startActivity(Intent(this, NonRootActivity::class.java))
+      finish()
+      return
+    }
+
     // Detect a true cold start from launcher (to show the optional module update prompt).
     val fromLauncher = intent?.action == Intent.ACTION_MAIN && (intent?.categories?.contains(Intent.CATEGORY_LAUNCHER) == true)
-    vm.onAppStart(fromLauncher)
+    val openRootSetup = intent?.getBooleanExtra(EXTRA_OPEN_ROOT_SETUP, false) == true
+    vm.onAppStart(fromLauncher, forceRootSetup = openRootSetup)
     handleIncomingBackupIntent(intent)
 
     // Handle update events (open browser / request permission / install APK).
@@ -130,10 +145,25 @@ class MainActivity : AppCompatActivity() {
             backupFlow = vm.backup,
             programUpdatesFlow = vm.programUpdates,
             actions = remember(vm) { vm },
+            onContinueWithoutRoot = ::enterNonRootMode,
           )
         }
       }
     }
+  }
+
+  private fun enterNonRootMode() {
+    val config = RootConfigManager(applicationContext)
+    config.setRuntimeMode("non_root")
+    runCatching { NonRootRuntimeStore(applicationContext).ensureLayout() }
+      .onFailure {
+        Toast.makeText(this, it.message ?: getString(R.string.common_error), Toast.LENGTH_LONG).show()
+        config.setRuntimeMode("root")
+        return
+      }
+    redirectedToNonRoot = true
+    startActivity(Intent(this, NonRootActivity::class.java))
+    finish()
   }
 
   private fun applyInitialStatusBarAppearance() {
@@ -214,16 +244,16 @@ class MainActivity : AppCompatActivity() {
 
   override fun onStart() {
     super.onStart()
-    vm.setAppVisible(true)
+    if (!redirectedToNonRoot) vm.setAppVisible(true)
   }
 
   override fun onStop() {
-    vm.setAppVisible(false)
+    if (!redirectedToNonRoot) vm.setAppVisible(false)
     super.onStop()
   }
 
   override fun onResume() {
     super.onResume()
-    vm.onAppResumed()
+    if (!redirectedToNonRoot) vm.onAppResumed()
   }
 }

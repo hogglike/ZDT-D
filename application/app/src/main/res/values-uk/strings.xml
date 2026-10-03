@@ -1122,6 +1122,8 @@ APatch: 10700+</string>
     <string name="opera_args_api_proxy_desc">Проксі SOCKS5/HTTP(S), який opera-proxy використовує для доступу до бекенд-API Opera. Можна вказати одну URL-адресу проксі, кілька URL через кому, URL текстового списку проксі або абсолютний шлях до файлу списку проксі, уже збереженого на пристрої.</string>
     <string name="opera_args_api_proxy_invalid">Використовуйте URL проксі зі схемою: http://, https://, socks5:// або socks5h://. Також можна використати http(s)-URL текстового списку проксі або абсолютний шлях до локального файлу, що починається з /.</string>
     <string name="opera_args_api_proxy_hint">Формат: http://, https://, socks5:// або socks5h://[login:password@]host[:port]. Кілька проксі можна розділити комами. Також можна вставити http(s)-URL текстового списку або абсолютний локальний шлях, наприклад /sdcard/proxies.txt чи /storage/emulated/0/proxies.txt. Локальні файли зчитуються з пристрою під час кожного запуску Opera-proxy. Адреси без схеми не підтримуються, якщо це не абсолютні шляхи до файлів. Якщо робочий проксі не знайдено або список неможливо завантажити/прочитати, Opera-proxy запускається без api-proxy.</string>
+    <string name="non_root_opera_api_proxy_choose_file">Вибрати локальний файл списку проксі</string>
+    <string name="non_root_opera_api_proxy_import_failed">Не вдалося імпортувати вибраний список проксі. Переконайтеся, що це читабельний текстовий файл розміром не більше 1 МБ.</string>
     <string name="opera_args_server_selection_title">Вибір сервера</string>
     <string name="opera_args_dl_limit_hint">Ліміт завантаження в байтах для тесту швидкості сервера. Типово: 204800 (200 KB)</string>
     <string name="opera_args_misc_title">Часові параметри й деталізація</string>
@@ -2412,4 +2414,164 @@ APatch: 10700+</string>
     <string name="subscription_manual_target">Призначення: %1$s</string>
     <string name="subscription_copy_config">Копіювати конфігурацію</string>
     <string name="subscription_copy_failed">Не вдалося підготувати конфігурацію для копіювання.</string>
+
+    <!-- Non-root runtime -->
+    <string name="setup_continue_without_root">Продовжити без root</string>
+    <string name="setup_non_root_warning_title">Обмежений режим</string>
+    <string name="setup_non_root_warning_body">Ви збираєтеся продовжити без root-доступу. Будуть доступні лише функції, що працюють через Android VPN і локальні проксі-сервіси.\n\nЗахист, функції безпеки та інші можливості, що потребують системного доступу, будуть недоступні. Автоматичний запуск системних компонентів і розширена інтеграція інструментів також будуть обмежені.</string>
+    <string name="non_root_home_title">Режим без root</string>
+    <string name="non_root_home_body">ZDT-D працює без системного доступу. Тут буде налаштовано керування VPN і проксі.</string>
+    <string name="non_root_home_restrictions">Системний захист, функції безпеки, автоматичний запуск і розширена інтеграція інструментів у цьому режимі недоступні.</string>
+
+    <string name="non_root_current_mode">Поточний режим</string>
+    <string name="non_root_work_mode_title">Режим роботи</string>
+    <string name="non_root_mode_direct">Інструмент</string>
+    <string name="non_root_mode_cascade">Каскад</string>
+    <string name="non_root_mode_direct_desc">Підключення напряму до вибраної proxy-програми.</string>
+    <string name="non_root_mode_cascade_desc">HEV спрямовує трафік через T2S до ввімкнених proxy-профілів.</string>
+    <string name="non_root_direct_opera_desc">Прямий non-root proxy. Адресу зафіксовано: 127.0.0.1.</string>
+    <string name="non_root_loopback_port_hint">Використовується лише локальна адреса 127.0.0.1. Порти починаються з 10000.</string>
+    <string name="non_root_port_error">Виберіть вільний порт від 10000 до 65535.</string>
+    <string name="non_root_cascade_intro">T2S — маршрутизатор каскаду. Тут з’являться створення профілів і налаштування маршруту.</string>
+
+    <string name="non_root_byedpi_restart_after_opera">Перезапускати після запуску Opera</string>
+    <string name="non_root_byedpi_restart_after_opera_desc">Перезапускати ByeDPI з аргументами перезапуску після готовності Opera Proxy. Якщо вимкнено, ByeDPI запускається лише один раз.</string>
+
+    <string name="non_root_create_profile">Створити профіль</string>
+    <string name="non_root_profile_tool_label">Інструмент</string>
+    <string name="non_root_profile_name">Назва профілю</string>
+    <string name="non_root_profile_settings">Налаштування профілю</string>
+    <string name="non_root_profile_enabled">Увімкнено</string>
+    <string name="non_root_profile_enabled_desc">Зберігати цей профіль у маршруті Cascade і запускати його під час роботи Cascade.</string>
+    <string name="non_root_profile_title_fmt">%1$s — %2$s</string>
+    <string name="non_root_delete_profile_title">Видалити профіль?</string>
+    <string name="non_root_delete_profile_body">Профіль «%1$s» і його збережені налаштування буде видалено.</string>
+    <string name="non_root_cascade_opera_desc">Налаштування Opera Proxy для цього профілю Cascade.</string>
+    <string name="non_root_t2s_settings">Налаштування T2S</string>
+    <string name="non_root_t2s_backend_mode">Режим backend</string>
+    <string name="non_root_t2s_route_title">Маршрут Cascade</string>
+    <string name="non_root_t2s_route_hint">Утримуйте ≡ і перетягуйте, щоб змінити порядок. Вимкнені профілі зберігають своє місце.</string>
+    <string name="non_root_t2s_route_empty">Створіть принаймні один proxy-профіль, щоб побудувати маршрут Cascade.</string>
+    <string name="non_root_t2s_palette_title">Елементи маршруту</string>
+    <string name="non_root_t2s_palette_hint">Утримуйте ≡ і перетягніть елемент угору, щоб додати його до маршруту. Доданий службовий елемент перетягніть униз для видалення.</string>
+    <string name="non_root_t2s_group">Група ;</string>
+    <string name="non_root_t2s_direct">Прямий режим 0</string>
+    <string name="non_root_t2s_block_direct">Блокування прямого 0</string>
+    <string name="non_root_t2s_group_short">; · Група</string>
+    <string name="non_root_t2s_direct_short">0 · Прямий режим</string>
+    <string name="non_root_t2s_block_direct_short">0 · Блокування прямого</string>
+    <string name="non_root_t2s_group_help">Крапка з комою розділяє priority-групи backend. Розміщуйте її між двома proxy-профілями.</string>
+    <string name="non_root_t2s_direct_help">Прямий режим використовує значення T2S 0 на початку маршруту.</string>
+    <string name="non_root_t2s_block_direct_help">Блокування прямого використовує значення T2S 0 наприкінці маршруту.</string>
+    <string name="non_root_t2s_group_position">Розміщується між двома proxy-профілями. Перетягніть униз для видалення.</string>
+    <string name="non_root_t2s_direct_position">Лише на початку маршруту. Перетягніть униз для видалення.</string>
+    <string name="non_root_t2s_block_direct_position">Лише наприкінці маршруту. Перетягніть униз для видалення.</string>
+    <string name="non_root_t2s_drag_handle">Перетягнути</string>
+    <string name="non_root_t2s_help">Довідка</string>
+    <string name="non_root_t2s_stats_title">Статистика T2S</string>
+    <string name="non_root_direct_stats_empty">Для прямого режиму окрему панель статистики ще не додано.</string>
+    <!-- Non-root T2S runtime settings -->
+    <string name="non_root_t2s_runtime_settings">Параметри роботи T2S</string>
+    <string name="non_root_t2s_idle_timeout">Тайм-аут простою (секунди)</string>
+    <string name="non_root_t2s_buffer_size">Розмір буфера (байти)</string>
+    <string name="non_root_t2s_download_limit">Обмеження завантаження (Мбіт/с, 0 = без обмеження)</string>
+    <string name="non_root_t2s_peer_coordination">Координація екземплярів</string>
+    <string name="non_root_t2s_peer_coordination_desc">Координувати перевірки стану між екземплярами T2S з однаковими backend-ами.</string>
+    <string name="non_root_t2s_serialize_connects">Послідовні підключення до backend</string>
+    <string name="non_root_t2s_serialize_connects_desc">Не допускати одночасних SOCKS-рукостискань з одним нестабільним backend.</string>
+    <string name="non_root_t2s_connect_stagger">Затримка між підключеннями до backend (мс)</string>
+
+    <string name="non_root_t2s_stopped">T2S зупинено. Запустіть каскад, щоб переглянути статистику API.</string>
+
+    <!-- Non-root VPN lifecycle progress -->
+    <string name="non_root_runtime_logs_title">Запуск / зупинка VPN</string>
+    <string name="non_root_service_state_running">Служба: запущена</string>
+    <string name="non_root_service_state_starting">Служба: запускається</string>
+    <string name="non_root_service_state_stopping">Служба: зупиняється</string>
+    <string name="non_root_service_state_stopped">Служба: зупинена</string>
+    <string name="non_root_service_state_error">Служба: помилка</string>
+    <string name="non_root_switch_root_title">Перейти в root-режим?</string>
+    <string name="non_root_switch_root_body">Бажаєте перейти в root-режим? Відкриється наявний майстер встановлення на екрані запиту root-доступу.</string>
+    <string name="non_root_log_preparing_runtime">Підготовка non-root runtime…</string>
+    <string name="non_root_log_start_mode">Запуск режиму %1$s…</string>
+    <string name="non_root_log_start_component">Запуск %1$s…</string>
+    <string name="non_root_log_component_ready">%1$s готовий.</string>
+    <string name="non_root_log_restart_component">Перезапуск %1$s…</string>
+    <string name="non_root_log_create_vpn_interface">Створення VPN-інтерфейсу…</string>
+    <string name="non_root_log_vpn_running">VPN запущено.</string>
+    <string name="non_root_log_stop_requested">Зупинка VPN…</string>
+    <string name="non_root_log_stop_component">Зупинка %1$s…</string>
+    <string name="non_root_log_close_vpn_interface">Закриття VPN-інтерфейсу…</string>
+    <string name="non_root_log_stop_proxy_processes">Зупинка proxy-процесів…</string>
+    <string name="non_root_log_vpn_stopped">VPN зупинено.</string>
+    <string name="non_root_log_error">Помилка: %1$s</string>
+
+    <string name="non_root_t2s_advanced_settings">Розширені T2S</string>
+    <string name="non_root_profiles_empty_title">Профілів поки немає</string>
+    <string name="non_root_profiles_empty_body">Створіть профіль Opera Proxy. Ті самі профілі використовуються в режимах «Інструмент» і «Каскад».</string>
+    <string name="non_root_opera_server_title">Сервер Opera</string>
+    <string name="non_root_opera_server_desc">Один профіль застосунку використовує один сервер Opera Proxy і один SNI.</string>
+    <string name="non_root_profile_opera_desc">Налаштування сервера Opera Proxy для цього профілю.</string>
+    <string name="non_root_group_name_title">Назва групи</string>
+    <string name="non_root_group_name_label">Ім’я групи</string>
+    <string name="non_root_group_rename">Перейменувати групу</string>
+    <string name="non_root_t2s_group_unnamed">Група</string>
+
+    <string name="non_root_server_count_fmt">Серверів: %1$d</string>
+    <string name="non_root_servers_title">Сервери</string>
+    <string name="non_root_servers_desc">Сервери цього профілю стають локальними SOCKS5 backend для T2S.</string>
+    <string name="non_root_add_server">Додати сервер</string>
+    <string name="non_root_servers_empty">Серверів ще немає. Додайте сервер, щоб використовувати профіль.</string>
+    <string name="non_root_delete_server_title">Видалити сервер?</string>
+    <string name="non_root_delete_server_body">Видалити «%1$s» із цього профілю?</string>
+    <string name="non_root_server_name">Назва сервера</string>
+    <string name="non_root_local_socks_port">Локальний порт SOCKS5</string>
+    <string name="non_root_mieru_rpc_port">RPC-порт Mieru</string>
+    <string name="non_root_log_level">Рівень журналу</string>
+    <string name="non_root_singbox_import">Імпорт конфігурації sing-box</string>
+    <string name="non_root_singbox_import_source">Посилання або JSON</string>
+    <string name="non_root_import_config">Імпортувати конфігурацію</string>
+    <string name="non_root_direct_multi_server_disabled">Кілька серверів · використовуйте Каскад</string>
+    <string name="non_root_additional_tools">Додаткові інструменти</string>
+    <string name="non_root_tgws_title">Telegram WS Proxy</string>
+    <string name="non_root_vps_desc">Керуйте VPS-серверами та імпортуйте створені клієнти у профілі.</string>
+
+    <string name="non_root_vps_import_title">Додати VPS-клієнт у ZDT-D</string>
+    <string name="non_root_vps_import_new_profile">Створити новий профіль</string>
+    <string name="non_root_vps_import_existing">Додати сервер до наявного профілю</string>
+    <string name="non_root_vps_import_unsupported">Цю службу VPS не можна імпортувати в backend-профіль non-root.</string>
+
+    <string name="non_root_error_hysteria_server_required">У конфігурації Hysteria2 потрібно вказати сервер.</string>
+    <string name="non_root_error_wireproxy_empty">Конфігурація WireProxy не може бути порожньою.</string>
+    <string name="non_root_error_import_failed">Не вдалося імпортувати конфігурацію.</string>
+    <string name="non_root_error_invalid_socks_port">Виберіть коректний порт SOCKS5 від 10000 до 65535.</string>
+    <string name="non_root_error_invalid_rpc_port">Виберіть коректний RPC-порт Mieru від 10000 до 65535.</string>
+    <string name="non_root_error_rpc_port_conflict">RPC-порт Mieru має відрізнятися від порту SOCKS5.</string>
+    <string name="non_root_tgws_secret_error">Секрет має містити рівно 32 шістнадцяткові символи.</string>
+    <string name="non_root_tgws_faketls_error">Потрібно вказати SNI-домен FakeTLS.</string>
+
+    <string name="non_root_app_routing_title">Маршрутизація застосунків</string>
+    <string name="non_root_app_routing_body">Виберіть, які застосунки використовуватимуть VPN-маршрут ZDT-D.</string>
+    <string name="non_root_app_routing_all">Усі застосунки</string>
+    <string name="non_root_app_routing_all_desc">Увесь трафік застосунків проходить через VPN, крім самого ZDT-D.</string>
+    <string name="non_root_app_routing_only_selected">Лише вибрані</string>
+    <string name="non_root_app_routing_only_selected_desc">Через VPN проходять лише позначені застосунки.</string>
+    <string name="non_root_app_routing_exclude_selected">Усі, крім вибраних</string>
+    <string name="non_root_app_routing_exclude_selected_desc">Позначені застосунки обходять VPN-маршрут.</string>
+    <string name="non_root_app_routing_select_apps">Вибрати застосунки</string>
+    <string name="non_root_app_routing_selected_count">Вибрано: %1$d</string>
+    <string name="non_root_app_routing_only_selected_empty_hint">Перед запуском VPN виберіть хоча б один застосунок.</string>
+    <string name="non_root_app_routing_self_excluded">ZDT-D завжди виключено з власного VPN-маршруту.</string>
+    <string name="non_root_app_routing_picker_title">Вибір застосунків</string>
+    <string name="non_root_app_routing_restart_title">Перепідключити VPN?</string>
+    <string name="non_root_app_routing_restart_body">Налаштування маршрутизації застосунків змінено. Перепідключіть VPN, щоб застосувати їх до поточного з’єднання.</string>
+    <string name="non_root_app_routing_restart_later">Пізніше</string>
+    <string name="non_root_app_routing_restart_now">Перепідключити</string>
+    <string name="non_root_app_routing_only_selected_empty_error">У режимі «Лише вибрані» виберіть хоча б один встановлений застосунок.</string>
+
+    <string name="non_root_tgws_plugin_title">Плагін TGWS</string>
+    <string name="non_root_tgws_plugin_not_installed">Плагін TGWS не встановлено. Натисніть «Встановити», щоб завантажити й установити його безпосередньо із ZDT-D.</string>
+    <string name="non_root_tgws_plugin_install_permission_required">Дозвольте ZDT-D встановлювати програми з невідомих джерел, щоб продовжити встановлення плагіна TGWS.</string>
+    <string name="non_root_tgws_plugin_installed_fmt">Встановлений плагін: %1$s</string>
+    <string name="non_root_tgws_plugin_latest_fmt">Доступний плагін: %1$s</string>
 </resources>

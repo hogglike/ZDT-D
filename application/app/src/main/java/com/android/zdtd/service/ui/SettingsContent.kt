@@ -61,11 +61,56 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Close
 import com.android.zdtd.service.AppUpdateUiState
+import com.android.zdtd.service.NonRootAppRoutingMode
+import com.android.zdtd.service.NonRootVpnState
 import com.android.zdtd.service.R
 import kotlin.math.roundToInt
 
 // Settings UI content extracted from AppUpdateUi.kt for easier maintenance.
 // Same package (com.android.zdtd.service.ui) — no call-site import changes needed.
+
+@Composable
+fun NonRootSettingsContent(
+  languageMode: String,
+  onLanguageModeChange: (String) -> Unit,
+  themeMode: String,
+  onThemeModeChange: (String) -> Unit,
+  appRoutingMode: NonRootAppRoutingMode,
+  appRoutingPackages: Set<String>,
+  vpnState: NonRootVpnState,
+  onAppRoutingModeChange: (NonRootAppRoutingMode) -> Unit,
+  onAppRoutingPackagesChange: (Set<String>) -> Unit,
+  onRestartVpn: () -> Unit,
+) {
+  val compactWidth = rememberIsCompactWidth()
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .verticalScroll(rememberScrollState())
+      .padding(16.dp),
+    verticalArrangement = Arrangement.spacedBy(18.dp),
+  ) {
+    SettingsLanguageSection(
+      languageMode = languageMode,
+      compactWidth = compactWidth,
+      onLanguageModeChange = onLanguageModeChange,
+    )
+    SettingsThemeSection(
+      themeMode = themeMode,
+      compactWidth = compactWidth,
+      onThemeModeChange = onThemeModeChange,
+    )
+    NonRootAppRoutingSection(
+      mode = appRoutingMode,
+      selectedPackages = appRoutingPackages,
+      vpnState = vpnState,
+      onModeChange = onAppRoutingModeChange,
+      onPackagesChange = onAppRoutingPackagesChange,
+      onRestartVpn = onRestartVpn,
+    )
+    Spacer(Modifier.height(8.dp))
+  }
+}
 
 @Composable
 fun AppUpdateSettings(

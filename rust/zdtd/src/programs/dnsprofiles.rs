@@ -622,11 +622,11 @@ fn spawn_tun2socks(plan: &RuntimePlan) -> Result<i32> {
     let logf_err = logf.try_clone()?;
     let proxy = format!("socks5://127.0.0.1:{}", plan.proxy_port);
     let mut cmd = Command::new(TUN2SOCKS_BIN);
-    cmd.arg("-device")
+    cmd.arg("--device")
         .arg(format!("tun://{}", plan.tun))
-        .arg("-proxy")
+        .arg("--proxy")
         .arg(&proxy)
-        .arg("-loglevel")
+        .arg("--loglevel")
         .arg("info")
         .current_dir(&plan.root)
         .stdin(Stdio::null())

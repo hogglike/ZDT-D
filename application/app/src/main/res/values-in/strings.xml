@@ -1122,6 +1122,8 @@ Perlindungan tidak berfungsi dalam mode hotspot. Jika hotspot diaktifkan dan sin
     <string name="opera_args_api_proxy_desc">Proxy SOCKS5/HTTP(S) yang digunakan opera-proxy untuk mengakses API backend Opera. Anda dapat menentukan satu URL proxy, beberapa URL proxy yang dipisahkan koma, URL ke daftar proxy teks biasa, atau jalur absolut ke file daftar proxy yang sudah tersimpan di perangkat.</string>
     <string name="opera_args_api_proxy_invalid">Gunakan URL proxy dengan skema: http://, https://, socks5://, atau socks5h://. Anda juga dapat menggunakan URL http(s) ke daftar proxy teks biasa atau jalur file lokal absolut yang diawali /.</string>
     <string name="opera_args_api_proxy_hint">Format: http://, https://, socks5:// atau socks5h://[login:password@]host[:port]. Beberapa proxy dapat dipisahkan dengan koma. Anda juga dapat menempel URL http(s) ke daftar teks biasa atau jalur lokal absolut seperti /sdcard/proxies.txt atau /storage/emulated/0/proxies.txt. File lokal dibaca dari perangkat setiap kali Opera-proxy dimulai. Alamat tanpa skema tidak didukung kecuali berupa jalur file absolut. Jika tidak ada proxy yang berfungsi atau daftar tidak dapat diunduh/dibaca, Opera-proxy dimulai tanpa api-proxy.</string>
+    <string name="non_root_opera_api_proxy_choose_file">Pilih file daftar proxy lokal</string>
+    <string name="non_root_opera_api_proxy_import_failed">Daftar proxy yang dipilih tidak dapat diimpor. Pastikan file berupa teks yang dapat dibaca dan berukuran maksimal 1 MB.</string>
     <string name="opera_args_server_selection_title">Pemilihan server</string>
     <string name="opera_args_dl_limit_hint">Batas unduhan dalam byte untuk uji kecepatan server. Default: 204800 (200 KB)</string>
     <string name="opera_args_misc_title">Waktu &amp; verbositas</string>
@@ -2409,4 +2411,164 @@ Penyebab yang tersisa kemungkinan berada di sisi daemon/API. Periksa log daemon 
     <string name="subscription_manual_target">Tujuan: %1$s</string>
     <string name="subscription_copy_config">Salin konfigurasi</string>
     <string name="subscription_copy_failed">Konfigurasi tidak dapat disiapkan untuk disalin.</string>
+
+    <!-- Non-root runtime -->
+    <string name="setup_continue_without_root">Lanjutkan tanpa root</string>
+    <string name="setup_non_root_warning_title">Mode terbatas</string>
+    <string name="setup_non_root_warning_body">Anda akan melanjutkan tanpa akses root. Hanya fitur yang bekerja melalui VPN Android dan layanan proxy lokal yang akan tersedia.\n\nPerlindungan, fitur keamanan, dan fungsi lain yang memerlukan akses sistem tidak akan tersedia. Mulai otomatis komponen sistem dan integrasi alat lanjutan juga akan dibatasi.</string>
+    <string name="non_root_home_title">Mode tanpa root</string>
+    <string name="non_root_home_body">ZDT-D berjalan tanpa akses sistem. Kontrol VPN dan proxy akan dikonfigurasi di sini.</string>
+    <string name="non_root_home_restrictions">Perlindungan tingkat sistem, fitur keamanan, mulai otomatis, dan integrasi alat lanjutan tidak tersedia dalam mode ini.</string>
+
+    <string name="non_root_current_mode">Mode saat ini</string>
+    <string name="non_root_work_mode_title">Mode kerja</string>
+    <string name="non_root_mode_direct">Alat</string>
+    <string name="non_root_mode_cascade">Kaskade</string>
+    <string name="non_root_mode_direct_desc">Hubungkan langsung ke program proxy yang dipilih.</string>
+    <string name="non_root_mode_cascade_desc">HEV mengirim lalu lintas melalui T2S ke profil proxy yang diaktifkan.</string>
+    <string name="non_root_direct_opera_desc">Proxy non-root langsung. Alamat dikunci ke 127.0.0.1.</string>
+    <string name="non_root_loopback_port_hint">Hanya alamat lokal 127.0.0.1 yang digunakan. Port dimulai dari 10000.</string>
+    <string name="non_root_port_error">Pilih port kosong dari 10000 hingga 65535.</string>
+    <string name="non_root_cascade_intro">T2S adalah router kaskade. Pembuatan profil dan pengaturan rute akan muncul di sini.</string>
+
+    <string name="non_root_byedpi_restart_after_opera">Mulai ulang setelah Opera dimulai</string>
+    <string name="non_root_byedpi_restart_after_opera_desc">Mulai ulang ByeDPI dengan argumen mulai ulang setelah Opera Proxy siap. Jika dinonaktifkan, ByeDPI hanya dimulai sekali.</string>
+
+    <string name="non_root_create_profile">Buat profil</string>
+    <string name="non_root_profile_tool_label">Alat</string>
+    <string name="non_root_profile_name">Nama profil</string>
+    <string name="non_root_profile_settings">Pengaturan profil</string>
+    <string name="non_root_profile_enabled">Diaktifkan</string>
+    <string name="non_root_profile_enabled_desc">Pertahankan profil ini di rute Cascade dan jalankan saat Cascade aktif.</string>
+    <string name="non_root_profile_title_fmt">%1$s — %2$s</string>
+    <string name="non_root_delete_profile_title">Hapus profil?</string>
+    <string name="non_root_delete_profile_body">Profil “%1$s” dan pengaturan tersimpannya akan dihapus.</string>
+    <string name="non_root_cascade_opera_desc">Pengaturan Opera Proxy untuk profil Cascade ini.</string>
+    <string name="non_root_t2s_settings">Pengaturan T2S</string>
+    <string name="non_root_t2s_backend_mode">Mode backend</string>
+    <string name="non_root_t2s_route_title">Rute Cascade</string>
+    <string name="non_root_t2s_route_hint">Tahan ≡ lalu seret untuk mengubah urutan. Profil yang dinonaktifkan tetap pada posisinya.</string>
+    <string name="non_root_t2s_route_empty">Buat setidaknya satu profil proxy untuk menyusun rute Cascade.</string>
+    <string name="non_root_t2s_palette_title">Elemen rute</string>
+    <string name="non_root_t2s_palette_hint">Tahan ≡ lalu seret elemen ke atas untuk menambahkannya ke rute. Seret elemen layanan yang sudah ditambahkan ke bawah untuk menghapusnya.</string>
+    <string name="non_root_t2s_group">Grup ;</string>
+    <string name="non_root_t2s_direct">Mode langsung 0</string>
+    <string name="non_root_t2s_block_direct">Blokir langsung 0</string>
+    <string name="non_root_t2s_group_short">; · Grup</string>
+    <string name="non_root_t2s_direct_short">0 · Mode langsung</string>
+    <string name="non_root_t2s_block_direct_short">0 · Blokir langsung</string>
+    <string name="non_root_t2s_group_help">Titik koma memisahkan grup prioritas backend. Tempatkan di antara dua profil proxy.</string>
+    <string name="non_root_t2s_direct_help">Mode langsung menggunakan nilai T2S 0 di awal rute.</string>
+    <string name="non_root_t2s_block_direct_help">Blokir langsung menggunakan nilai T2S 0 di akhir rute.</string>
+    <string name="non_root_t2s_group_position">Tempatkan di antara dua profil proxy. Seret ke bawah untuk menghapus.</string>
+    <string name="non_root_t2s_direct_position">Hanya di awal rute. Seret ke bawah untuk menghapus.</string>
+    <string name="non_root_t2s_block_direct_position">Hanya di akhir rute. Seret ke bawah untuk menghapus.</string>
+    <string name="non_root_t2s_drag_handle">Seret</string>
+    <string name="non_root_t2s_help">Bantuan</string>
+    <string name="non_root_t2s_stats_title">Statistik T2S</string>
+    <string name="non_root_direct_stats_empty">Mode langsung belum memiliki panel statistik terpisah.</string>
+    <!-- Non-root T2S runtime settings -->
+    <string name="non_root_t2s_runtime_settings">Pengaturan runtime T2S</string>
+    <string name="non_root_t2s_idle_timeout">Batas waktu menganggur (detik)</string>
+    <string name="non_root_t2s_buffer_size">Ukuran buffer (byte)</string>
+    <string name="non_root_t2s_download_limit">Batas unduhan (Mbit/s, 0 = tanpa batas)</string>
+    <string name="non_root_t2s_peer_coordination">Koordinasi instans</string>
+    <string name="non_root_t2s_peer_coordination_desc">Koordinasikan pemeriksaan kesehatan antarinstans T2S yang memakai backend sama.</string>
+    <string name="non_root_t2s_serialize_connects">Serialkan koneksi backend</string>
+    <string name="non_root_t2s_serialize_connects_desc">Hindari handshake bersamaan ke backend rapuh yang sama.</string>
+    <string name="non_root_t2s_connect_stagger">Jeda koneksi backend (ms)</string>
+
+    <string name="non_root_t2s_stopped">T2S berhenti. Jalankan Cascade untuk melihat statistik API.</string>
+
+    <!-- Non-root VPN lifecycle progress -->
+    <string name="non_root_runtime_logs_title">Mulai / hentikan VPN</string>
+    <string name="non_root_service_state_running">Layanan: berjalan</string>
+    <string name="non_root_service_state_starting">Layanan: memulai</string>
+    <string name="non_root_service_state_stopping">Layanan: berhenti</string>
+    <string name="non_root_service_state_stopped">Layanan: dihentikan</string>
+    <string name="non_root_service_state_error">Layanan: error</string>
+    <string name="non_root_switch_root_title">Beralih ke mode root?</string>
+    <string name="non_root_switch_root_body">Ingin beralih ke mode root? Wizard penyiapan yang ada akan terbuka pada langkah permintaan akses root.</string>
+    <string name="non_root_log_preparing_runtime">Menyiapkan runtime tanpa root…</string>
+    <string name="non_root_log_start_mode">Memulai mode %1$s…</string>
+    <string name="non_root_log_start_component">Memulai %1$s…</string>
+    <string name="non_root_log_component_ready">%1$s siap.</string>
+    <string name="non_root_log_restart_component">Memulai ulang %1$s…</string>
+    <string name="non_root_log_create_vpn_interface">Membuat antarmuka VPN…</string>
+    <string name="non_root_log_vpn_running">VPN sedang berjalan.</string>
+    <string name="non_root_log_stop_requested">Menghentikan VPN…</string>
+    <string name="non_root_log_stop_component">Menghentikan %1$s…</string>
+    <string name="non_root_log_close_vpn_interface">Menutup antarmuka VPN…</string>
+    <string name="non_root_log_stop_proxy_processes">Menghentikan proses proxy…</string>
+    <string name="non_root_log_vpn_stopped">VPN telah berhenti.</string>
+    <string name="non_root_log_error">Kesalahan: %1$s</string>
+
+    <string name="non_root_t2s_advanced_settings">T2S lanjutan</string>
+    <string name="non_root_profiles_empty_title">Belum ada profil</string>
+    <string name="non_root_profiles_empty_body">Buat profil Opera Proxy. Profil yang sama digunakan dalam mode Alat dan Cascade.</string>
+    <string name="non_root_opera_server_title">Server Opera</string>
+    <string name="non_root_opera_server_desc">Satu profil aplikasi memakai satu server Opera Proxy dan satu SNI.</string>
+    <string name="non_root_profile_opera_desc">Pengaturan server Opera Proxy untuk profil ini.</string>
+    <string name="non_root_group_name_title">Beri nama grup</string>
+    <string name="non_root_group_name_label">Nama grup</string>
+    <string name="non_root_group_rename">Ganti nama grup</string>
+    <string name="non_root_t2s_group_unnamed">Grup</string>
+
+    <string name="non_root_server_count_fmt">%1$d server</string>
+    <string name="non_root_servers_title">Server</string>
+    <string name="non_root_servers_desc">Server dalam profil ini menjadi backend SOCKS5 lokal untuk T2S.</string>
+    <string name="non_root_add_server">Tambah server</string>
+    <string name="non_root_servers_empty">Belum ada server. Tambahkan server untuk menggunakan profil ini.</string>
+    <string name="non_root_delete_server_title">Hapus server?</string>
+    <string name="non_root_delete_server_body">Hapus “%1$s” dari profil ini?</string>
+    <string name="non_root_server_name">Nama server</string>
+    <string name="non_root_local_socks_port">Port SOCKS5 lokal</string>
+    <string name="non_root_mieru_rpc_port">Mieru RPC port</string>
+    <string name="non_root_log_level">Log level</string>
+    <string name="non_root_singbox_import">Impor konfigurasi sing-box</string>
+    <string name="non_root_singbox_import_source">Tautan atau JSON</string>
+    <string name="non_root_import_config">Impor konfigurasi</string>
+    <string name="non_root_direct_multi_server_disabled">Beberapa server · gunakan Cascade</string>
+    <string name="non_root_additional_tools">Alat tambahan</string>
+    <string name="non_root_tgws_title">Telegram WS Proxy</string>
+    <string name="non_root_vps_desc">Kelola server VPS dan impor klien yang dibuat ke profil.</string>
+
+    <string name="non_root_vps_import_title">Tambahkan klien VPS ke ZDT-D</string>
+    <string name="non_root_vps_import_new_profile">Buat profil baru</string>
+    <string name="non_root_vps_import_existing">Tambahkan server ke profil yang ada</string>
+    <string name="non_root_vps_import_unsupported">Layanan VPS ini tidak dapat diimpor ke profil backend non-root.</string>
+
+    <string name="non_root_error_hysteria_server_required">Konfigurasi Hysteria2 harus menentukan server.</string>
+    <string name="non_root_error_wireproxy_empty">Konfigurasi WireProxy tidak boleh kosong.</string>
+    <string name="non_root_error_import_failed">Konfigurasi tidak dapat diimpor.</string>
+    <string name="non_root_error_invalid_socks_port">Pilih port SOCKS5 yang valid dari 10000 hingga 65535.</string>
+    <string name="non_root_error_invalid_rpc_port">Pilih port RPC Mieru yang valid dari 10000 hingga 65535.</string>
+    <string name="non_root_error_rpc_port_conflict">Port RPC Mieru harus berbeda dari port SOCKS5.</string>
+    <string name="non_root_tgws_secret_error">Secret harus berisi tepat 32 karakter heksadesimal.</string>
+    <string name="non_root_tgws_faketls_error">Domain SNI FakeTLS wajib diisi.</string>
+
+    <string name="non_root_app_routing_title">Perutean aplikasi</string>
+    <string name="non_root_app_routing_body">Pilih aplikasi yang menggunakan rute VPN ZDT-D.</string>
+    <string name="non_root_app_routing_all">Semua aplikasi</string>
+    <string name="non_root_app_routing_all_desc">Rutekan semua lalu lintas aplikasi melalui VPN kecuali ZDT-D.</string>
+    <string name="non_root_app_routing_only_selected">Hanya yang dipilih</string>
+    <string name="non_root_app_routing_only_selected_desc">Hanya aplikasi yang dicentang menggunakan rute VPN.</string>
+    <string name="non_root_app_routing_exclude_selected">Semua kecuali yang dipilih</string>
+    <string name="non_root_app_routing_exclude_selected_desc">Aplikasi yang dicentang melewati rute VPN.</string>
+    <string name="non_root_app_routing_select_apps">Pilih aplikasi</string>
+    <string name="non_root_app_routing_selected_count">Dipilih: %1$d</string>
+    <string name="non_root_app_routing_only_selected_empty_hint">Pilih setidaknya satu aplikasi sebelum memulai VPN.</string>
+    <string name="non_root_app_routing_self_excluded">ZDT-D selalu dikecualikan dari rute VPN miliknya sendiri.</string>
+    <string name="non_root_app_routing_picker_title">Pilih aplikasi</string>
+    <string name="non_root_app_routing_restart_title">Sambungkan ulang VPN?</string>
+    <string name="non_root_app_routing_restart_body">Pengaturan perutean aplikasi berubah. Sambungkan ulang VPN untuk menerapkannya ke koneksi saat ini.</string>
+    <string name="non_root_app_routing_restart_later">Nanti</string>
+    <string name="non_root_app_routing_restart_now">Sambungkan ulang</string>
+    <string name="non_root_app_routing_only_selected_empty_error">Pilih setidaknya satu aplikasi terpasang saat menggunakan “Hanya yang dipilih”.</string>
+
+    <string name="non_root_tgws_plugin_title">Plugin TGWS</string>
+    <string name="non_root_tgws_plugin_not_installed">Plugin TGWS belum terpasang. Ketuk Instal untuk mengunduh dan memasangnya langsung dari ZDT-D.</string>
+    <string name="non_root_tgws_plugin_install_permission_required">Izinkan ZDT-D memasang aplikasi tidak dikenal untuk melanjutkan pemasangan plugin TGWS.</string>
+    <string name="non_root_tgws_plugin_installed_fmt">Plugin terpasang: %1$s</string>
+    <string name="non_root_tgws_plugin_latest_fmt">Plugin tersedia: %1$s</string>
 </resources>

@@ -1122,6 +1122,8 @@ Koruma erişim noktası modunda çalışmaz. Erişim noktası etkin ve sing-box 
     <string name="opera_args_api_proxy_desc">opera-proxy’nin Opera arka uç API’sine ulaşmak için kullandığı SOCKS5/HTTP(S) proxy’si. Bir proxy URL’si, virgülle ayrılmış birden fazla proxy URL’si, düz metin proxy listesi URL’si veya cihazda depolanan proxy listesi dosyasının mutlak yolunu belirtebilirsiniz.</string>
     <string name="opera_args_api_proxy_invalid">Şemalı proxy URL’leri kullanın: http://, https://, socks5:// veya socks5h://. Düz metin proxy listesine ait bir http(s) URL’si veya / ile başlayan mutlak yerel dosya yolu da kullanabilirsiniz.</string>
     <string name="opera_args_api_proxy_hint">Biçim: http://, https://, socks5:// veya socks5h://[login:password@]host[:port]. Birden fazla proxy virgülle ayrılabilir. Düz metin listesine ait http(s) URL’si veya /sdcard/proxies.txt ya da /storage/emulated/0/proxies.txt gibi mutlak yerel yol da yapıştırabilirsiniz. Yerel dosyalar Opera-proxy her başlatıldığında cihazdan okunur. Şemasız adresler, mutlak dosya yolu olmadıkça desteklenmez. Çalışan proxy bulunamaz veya liste indirilemez/okunamazsa Opera-proxy api-proxy olmadan başlar.</string>
+    <string name="non_root_opera_api_proxy_choose_file">Yerel proxy listesi dosyası seç</string>
+    <string name="non_root_opera_api_proxy_import_failed">Seçilen proxy listesi içe aktarılamadı. Dosyanın okunabilir bir metin dosyası ve en fazla 1 MB olduğundan emin olun.</string>
     <string name="opera_args_server_selection_title">Sunucu seçimi</string>
     <string name="opera_args_dl_limit_hint">Sunucu hız testi için bayt cinsinden indirme sınırı. Varsayılan: 204800 (200 KB)</string>
     <string name="opera_args_misc_title">Zamanlama ve ayrıntı düzeyi</string>
@@ -2409,4 +2411,164 @@ Kalan neden muhtemelen daemon/API tarafındadır. Kesin yazma hatası için daem
     <string name="subscription_manual_target">Hedef: %1$s</string>
     <string name="subscription_copy_config">Yapılandırmayı kopyala</string>
     <string name="subscription_copy_failed">Yapılandırma kopyalama için hazırlanamadı.</string>
+
+    <!-- Non-root runtime -->
+    <string name="setup_continue_without_root">Root olmadan devam et</string>
+    <string name="setup_non_root_warning_title">Sınırlı mod</string>
+    <string name="setup_non_root_warning_body">Root erişimi olmadan devam etmek üzeresiniz. Yalnızca Android VPN ve yerel proxy hizmetleri üzerinden çalışan özellikler kullanılabilir olacaktır.\n\nSistem erişimi gerektiren koruma, güvenlik ve diğer özellikler kullanılamayacaktır. Sistem bileşenlerinin otomatik başlatılması ve gelişmiş araç entegrasyonu da sınırlı olacaktır.</string>
+    <string name="non_root_home_title">Root olmayan mod</string>
+    <string name="non_root_home_body">ZDT-D sistem erişimi olmadan çalışıyor. VPN ve proxy denetimleri burada yapılandırılacaktır.</string>
+    <string name="non_root_home_restrictions">Sistem düzeyinde koruma, güvenlik özellikleri, otomatik başlatma ve gelişmiş araç entegrasyonu bu modda kullanılamaz.</string>
+
+    <string name="non_root_current_mode">Geçerli mod</string>
+    <string name="non_root_work_mode_title">Çalışma modu</string>
+    <string name="non_root_mode_direct">Araç</string>
+    <string name="non_root_mode_cascade">Kaskad</string>
+    <string name="non_root_mode_direct_desc">Seçilen proxy programına doğrudan bağlan.</string>
+    <string name="non_root_mode_cascade_desc">HEV trafiği T2S üzerinden etkin proxy profillerine gönderir.</string>
+    <string name="non_root_direct_opera_desc">Doğrudan non-root proxy. Adres 127.0.0.1 olarak sabittir.</string>
+    <string name="non_root_loopback_port_hint">Yalnızca yerel 127.0.0.1 adresi kullanılır. Portlar 10000’den başlar.</string>
+    <string name="non_root_port_error">10000 ile 65535 arasında boş bir port seçin.</string>
+    <string name="non_root_cascade_intro">T2S kaskad yönlendiricisidir. Profil oluşturma ve rota ayarları burada görünecek.</string>
+
+    <string name="non_root_byedpi_restart_after_opera">Opera başladıktan sonra yeniden başlat</string>
+    <string name="non_root_byedpi_restart_after_opera_desc">Opera Proxy hazır olduğunda ByeDPI’yi yeniden başlatma argümanlarıyla yeniden başlatır. Kapalıysa ByeDPI yalnızca bir kez başlatılır.</string>
+
+    <string name="non_root_create_profile">Profil oluştur</string>
+    <string name="non_root_profile_tool_label">Araç</string>
+    <string name="non_root_profile_name">Profil adı</string>
+    <string name="non_root_profile_settings">Profil ayarları</string>
+    <string name="non_root_profile_enabled">Etkin</string>
+    <string name="non_root_profile_enabled_desc">Bu profili Cascade rotasında tut ve Cascade çalışırken başlat.</string>
+    <string name="non_root_profile_title_fmt">%1$s — %2$s</string>
+    <string name="non_root_delete_profile_title">Profil silinsin mi?</string>
+    <string name="non_root_delete_profile_body">“%1$s” profili ve kayıtlı ayarları silinecek.</string>
+    <string name="non_root_cascade_opera_desc">Bu Cascade profili için Opera Proxy ayarları.</string>
+    <string name="non_root_t2s_settings">T2S ayarları</string>
+    <string name="non_root_t2s_backend_mode">Backend modu</string>
+    <string name="non_root_t2s_route_title">Cascade rotası</string>
+    <string name="non_root_t2s_route_hint">Sırayı değiştirmek için ≡ simgesini basılı tutup sürükleyin. Devre dışı profiller yerini korur.</string>
+    <string name="non_root_t2s_route_empty">Cascade rotası oluşturmak için en az bir proxy profili oluşturun.</string>
+    <string name="non_root_t2s_palette_title">Rota öğeleri</string>
+    <string name="non_root_t2s_palette_hint">Bir öğeyi rotaya eklemek için ≡ simgesini basılı tutup yukarı sürükleyin. Eklenmiş hizmet öğesini kaldırmak için aşağı sürükleyin.</string>
+    <string name="non_root_t2s_group">Grup ;</string>
+    <string name="non_root_t2s_direct">Doğrudan mod 0</string>
+    <string name="non_root_t2s_block_direct">Doğrudanı engelle 0</string>
+    <string name="non_root_t2s_group_short">; · Grup</string>
+    <string name="non_root_t2s_direct_short">0 · Doğrudan mod</string>
+    <string name="non_root_t2s_block_direct_short">0 · Doğrudanı engelle</string>
+    <string name="non_root_t2s_group_help">Noktalı virgül backend öncelik gruplarını ayırır. İki proxy profili arasına yerleştirin.</string>
+    <string name="non_root_t2s_direct_help">Doğrudan mod, rotanın başında T2S 0 değerini kullanır.</string>
+    <string name="non_root_t2s_block_direct_help">Doğrudanı engelleme, rotanın sonunda T2S 0 değerini kullanır.</string>
+    <string name="non_root_t2s_group_position">İki proxy profili arasına yerleştirin. Kaldırmak için aşağı sürükleyin.</string>
+    <string name="non_root_t2s_direct_position">Yalnızca rotanın başında. Kaldırmak için aşağı sürükleyin.</string>
+    <string name="non_root_t2s_block_direct_position">Yalnızca rotanın sonunda. Kaldırmak için aşağı sürükleyin.</string>
+    <string name="non_root_t2s_drag_handle">Sürükle</string>
+    <string name="non_root_t2s_help">Yardım</string>
+    <string name="non_root_t2s_stats_title">T2S istatistikleri</string>
+    <string name="non_root_direct_stats_empty">Doğrudan mod için henüz ayrı bir istatistik paneli yok.</string>
+    <!-- Non-root T2S runtime settings -->
+    <string name="non_root_t2s_runtime_settings">T2S çalışma ayarları</string>
+    <string name="non_root_t2s_idle_timeout">Boşta kalma zaman aşımı (saniye)</string>
+    <string name="non_root_t2s_buffer_size">Arabellek boyutu (bayt)</string>
+    <string name="non_root_t2s_download_limit">İndirme sınırı (Mbit/sn, 0 = sınırsız)</string>
+    <string name="non_root_t2s_peer_coordination">Örnek koordinasyonu</string>
+    <string name="non_root_t2s_peer_coordination_desc">Aynı backendleri kullanan T2S örnekleri arasında sağlık kontrollerini koordine eder.</string>
+    <string name="non_root_t2s_serialize_connects">Backend bağlantılarını sırala</string>
+    <string name="non_root_t2s_serialize_connects_desc">Aynı hassas backende eşzamanlı el sıkışmalarını önler.</string>
+    <string name="non_root_t2s_connect_stagger">Backend bağlantı gecikmesi (ms)</string>
+
+    <string name="non_root_t2s_stopped">T2S durduruldu. API istatistiklerini görmek için kaskadı başlatın.</string>
+
+    <!-- Non-root VPN lifecycle progress -->
+    <string name="non_root_runtime_logs_title">VPN başlatma / durdurma</string>
+    <string name="non_root_service_state_running">Hizmet: çalışıyor</string>
+    <string name="non_root_service_state_starting">Hizmet: başlatılıyor</string>
+    <string name="non_root_service_state_stopping">Hizmet: durduruluyor</string>
+    <string name="non_root_service_state_stopped">Hizmet: durduruldu</string>
+    <string name="non_root_service_state_error">Hizmet: hata</string>
+    <string name="non_root_switch_root_title">Root moduna geçilsin mi?</string>
+    <string name="non_root_switch_root_body">Root moduna geçmek istiyor musunuz? Mevcut kurulum sihirbazı root erişimi isteme adımında açılacaktır.</string>
+    <string name="non_root_log_preparing_runtime">Root olmadan çalışma ortamı hazırlanıyor…</string>
+    <string name="non_root_log_start_mode">%1$s modu başlatılıyor…</string>
+    <string name="non_root_log_start_component">%1$s başlatılıyor…</string>
+    <string name="non_root_log_component_ready">%1$s hazır.</string>
+    <string name="non_root_log_restart_component">%1$s yeniden başlatılıyor…</string>
+    <string name="non_root_log_create_vpn_interface">VPN arayüzü oluşturuluyor…</string>
+    <string name="non_root_log_vpn_running">VPN çalışıyor.</string>
+    <string name="non_root_log_stop_requested">VPN durduruluyor…</string>
+    <string name="non_root_log_stop_component">%1$s durduruluyor…</string>
+    <string name="non_root_log_close_vpn_interface">VPN arayüzü kapatılıyor…</string>
+    <string name="non_root_log_stop_proxy_processes">Proxy işlemleri durduruluyor…</string>
+    <string name="non_root_log_vpn_stopped">VPN durduruldu.</string>
+    <string name="non_root_log_error">Hata: %1$s</string>
+
+    <string name="non_root_t2s_advanced_settings">Gelişmiş T2S</string>
+    <string name="non_root_profiles_empty_title">Henüz profil yok</string>
+    <string name="non_root_profiles_empty_body">Bir Opera Proxy profili oluşturun. Aynı profiller Araç ve Kaskad modlarında kullanılır.</string>
+    <string name="non_root_opera_server_title">Opera sunucusu</string>
+    <string name="non_root_opera_server_desc">Bir uygulama profili bir Opera Proxy sunucusu ve bir SNI kullanır.</string>
+    <string name="non_root_profile_opera_desc">Bu profil için Opera Proxy sunucu ayarları.</string>
+    <string name="non_root_group_name_title">Grubu adlandır</string>
+    <string name="non_root_group_name_label">Grup adı</string>
+    <string name="non_root_group_rename">Grubu yeniden adlandır</string>
+    <string name="non_root_t2s_group_unnamed">Grup</string>
+
+    <string name="non_root_server_count_fmt">%1$d sunucu</string>
+    <string name="non_root_servers_title">Sunucular</string>
+    <string name="non_root_servers_desc">Bu profildeki sunucular T2S için yerel SOCKS5 arka uçlarına dönüşür.</string>
+    <string name="non_root_add_server">Sunucu ekle</string>
+    <string name="non_root_servers_empty">Henüz sunucu yok. Bu profili kullanmak için bir sunucu ekleyin.</string>
+    <string name="non_root_delete_server_title">Sunucu silinsin mi?</string>
+    <string name="non_root_delete_server_body">“%1$s” bu profilden silinsin mi?</string>
+    <string name="non_root_server_name">Sunucu adı</string>
+    <string name="non_root_local_socks_port">Yerel SOCKS5 portu</string>
+    <string name="non_root_mieru_rpc_port">Mieru RPC port</string>
+    <string name="non_root_log_level">Log level</string>
+    <string name="non_root_singbox_import">sing-box yapılandırmasını içe aktar</string>
+    <string name="non_root_singbox_import_source">Bağlantı veya JSON</string>
+    <string name="non_root_import_config">Yapılandırmayı içe aktar</string>
+    <string name="non_root_direct_multi_server_disabled">Birden fazla sunucu · Kaskad kullanın</string>
+    <string name="non_root_additional_tools">Ek araçlar</string>
+    <string name="non_root_tgws_title">Telegram WS Proxy</string>
+    <string name="non_root_vps_desc">VPS sunucularını yönetin ve oluşturulan istemcileri profillere aktarın.</string>
+
+    <string name="non_root_vps_import_title">VPS istemcisini ZDT-D’ye ekle</string>
+    <string name="non_root_vps_import_new_profile">Yeni profil oluştur</string>
+    <string name="non_root_vps_import_existing">Sunucuyu mevcut profile ekle</string>
+    <string name="non_root_vps_import_unsupported">Bu VPS hizmeti root olmayan bir backend profiline aktarılamaz.</string>
+
+    <string name="non_root_error_hysteria_server_required">Hysteria2 yapılandırmasında bir sunucu belirtilmelidir.</string>
+    <string name="non_root_error_wireproxy_empty">WireProxy yapılandırması boş olamaz.</string>
+    <string name="non_root_error_import_failed">Yapılandırma içe aktarılamadı.</string>
+    <string name="non_root_error_invalid_socks_port">10000 ile 65535 arasında geçerli bir SOCKS5 bağlantı noktası seçin.</string>
+    <string name="non_root_error_invalid_rpc_port">10000 ile 65535 arasında geçerli bir Mieru RPC bağlantı noktası seçin.</string>
+    <string name="non_root_error_rpc_port_conflict">Mieru RPC bağlantı noktası SOCKS5 bağlantı noktasından farklı olmalıdır.</string>
+    <string name="non_root_tgws_secret_error">Gizli anahtar tam olarak 32 onaltılık karakter içermelidir.</string>
+    <string name="non_root_tgws_faketls_error">FakeTLS SNI etki alanı gereklidir.</string>
+
+    <string name="non_root_app_routing_title">Uygulama yönlendirme</string>
+    <string name="non_root_app_routing_body">ZDT-D VPN yolunu hangi uygulamaların kullanacağını seçin.</string>
+    <string name="non_root_app_routing_all">Tüm uygulamalar</string>
+    <string name="non_root_app_routing_all_desc">ZDT-D hariç tüm uygulama trafiğini VPN üzerinden yönlendirir.</string>
+    <string name="non_root_app_routing_only_selected">Yalnızca seçilenler</string>
+    <string name="non_root_app_routing_only_selected_desc">Yalnızca işaretlenen uygulamalar VPN yolunu kullanır.</string>
+    <string name="non_root_app_routing_exclude_selected">Seçilenler hariç tümü</string>
+    <string name="non_root_app_routing_exclude_selected_desc">İşaretlenen uygulamalar VPN yolunu atlar.</string>
+    <string name="non_root_app_routing_select_apps">Uygulamaları seç</string>
+    <string name="non_root_app_routing_selected_count">Seçilen: %1$d</string>
+    <string name="non_root_app_routing_only_selected_empty_hint">VPN’i başlatmadan önce en az bir uygulama seçin.</string>
+    <string name="non_root_app_routing_self_excluded">ZDT-D her zaman kendi VPN yolunun dışında tutulur.</string>
+    <string name="non_root_app_routing_picker_title">Uygulamaları seç</string>
+    <string name="non_root_app_routing_restart_title">VPN yeniden bağlansın mı?</string>
+    <string name="non_root_app_routing_restart_body">Uygulama yönlendirme ayarları değişti. Geçerli bağlantıya uygulamak için VPN’i yeniden bağlayın.</string>
+    <string name="non_root_app_routing_restart_later">Daha sonra</string>
+    <string name="non_root_app_routing_restart_now">Yeniden bağlan</string>
+    <string name="non_root_app_routing_only_selected_empty_error">“Yalnızca seçilenler” modunda en az bir yüklü uygulama seçin.</string>
+
+    <string name="non_root_tgws_plugin_title">TGWS eklentisi</string>
+    <string name="non_root_tgws_plugin_not_installed">TGWS eklentisi yüklü değil. Doğrudan ZDT-D üzerinden indirip yüklemek için Yükle’ye dokunun.</string>
+    <string name="non_root_tgws_plugin_install_permission_required">TGWS eklentisinin kurulumuna devam etmek için ZDT-D’ye bilinmeyen uygulamaları yükleme izni verin.</string>
+    <string name="non_root_tgws_plugin_installed_fmt">Yüklü eklenti: %1$s</string>
+    <string name="non_root_tgws_plugin_latest_fmt">Kullanılabilir eklenti: %1$s</string>
 </resources>
