@@ -59,7 +59,7 @@ class DiagnosticService : Service() {
     val prefix = "command -v timeout >/dev/null 2>&1 || { echo 'ERROR: timeout unavailable'; exit 1; }; "
     fun snapshot(label: String) {
       report.append("\n=== $label ${Date()} ===\n")
-      report.append(shell(prefix + "timeout 4 dumpsys tethering; timeout 4 dumpsys wifi | grep -Ei 'SoftAp|AP state|failure|fail reason|tether|hostapd' | grep -Eiv 'configuration|ssid|passphrase|password|psk'; timeout 4 ip -s link; timeout 4 ip rule; timeout 4 ip route show table all; cat /proc/sys/net/ipv4/ip_forward"))
+      report.append(shell(prefix + "timeout 4 dumpsys tethering; timeout 4 dumpsys wifi | grep -Ei 'SoftAp|AP state|failure|fail reason|tether|hostapd' | grep -Eiv 'configuration|ssid|passphrase|password|psk'; timeout 4 ss -lntup | grep -E ':53[[:space:]]|10[.]253[.]240[.]'; timeout 4 iptables -t nat -nvL OUTPUT; timeout 4 ip -s link; timeout 4 ip rule; timeout 4 ip route show table all; cat /proc/sys/net/ipv4/ip_forward"))
     }
     try {
       check(shell("id -u").trim() == "0") { "Для системных журналов нужен root" }
@@ -68,7 +68,7 @@ class DiagnosticService : Service() {
       val start = android.os.SystemClock.elapsedRealtime()
       var last = ""
       while (currentCoroutineContext().isActive && android.os.SystemClock.elapsedRealtime() - start < 90_000) {
-        val logs = shell(prefix + "timeout 4 logcat -d -t 600 -b all -v threadtime | grep -Ei 'SoftAp|hostapd|Tethering|IpServer|tether|ap.*fail|netd.*(error|fail)' | grep -Eiv 'passphrase|password|psk|ssid|bssid'")
+        val logs = shell(prefix + "timeout 4 logcat -d -t 600 -b all -v threadtime | grep -Ei 'SoftAp|hostapd|Tethering|IpServer|tether|dnsmasq|TetherController|netd.*(error|fail)' | grep -Eiv 'passphrase|password|psk|ssid|bssid'")
         // Keep only new lines between snapshots; never clear the system log.
         val previous = last.lines().toSet()
         report.append("\n=== EVENTS ${Date()} ===\n")

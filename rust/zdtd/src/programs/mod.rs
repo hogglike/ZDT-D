@@ -6,6 +6,7 @@ pub mod byedpi;
 pub mod dpitunnel;
 pub mod dnscrypt;
 pub mod dnsprofiles;
+mod dns_port_redirect;
 pub mod operaproxy;
 pub mod singbox;
 pub mod hysteria2;

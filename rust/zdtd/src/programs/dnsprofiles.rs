@@ -3,11 +3,11 @@
 //! Each enabled profile gets its own tun2socks TUN plus a local sing-box SOCKS
 //! endpoint and Android netd VPN network. Selected app UIDs are attached to
 //! that network. netd points those UIDs at a synthetic DNS address inside the
-//! profile /30. The DNS listener binds directly to the TUN's own IPv4 address,
-//! so no extra address is installed on loopback. This avoids collisions with
-//! tethering/VPN Hotspot tools that treat non-loopback addresses on `lo` as
-//! user-managed static IPs. Selected apps use the proven full-route netd VPN
-//! policy; users can suspend all DNS profiles before enabling tethering.
+//! profile /30. Listeners bind to the TUN address on ports 19600..19615;
+//! exact-destination OUTPUT DNAT maps profile DNS port 53 to those listeners.
+//! This leaves port 53 available for Android's wildcard tethering dnsmasq.
+//! No loopback alias, PREROUTING, forwarding or system DNS setting is changed.
+//! Selected apps retain the proven full-route netd VPN policy.
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,6 +25,7 @@ use std::{
 };
 
 use super::common::{stable_netid, u32_to_ipv4, wait_tun_link, NETID_DNSPROFILES};
+use super::dns_port_redirect;
 use crate::{
     android::pkg_uid::{self, Mode as UidMode},
     shell::{self, Capture},
@@ -43,7 +44,7 @@ const NETID_BASE: u32 = NETID_DNSPROFILES.0;
 const NETID_MAX: u32 = NETID_DNSPROFILES.1;
 // 10.253.240.0/26 gives sixteen /30 profiles. It is intentionally separate
 // from the pools used by the other ZDT-D VPN engines.
-const DNS_NET_BASE: u32 = 0x0AFD_F000;
+const DNS_NET_BASE: u32 = dns_port_redirect::DNS_NET_BASE;
 const TUN_WAIT: Duration = Duration::from_secs(15);
 const DNS_WAIT: Duration = Duration::from_secs(12);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -113,6 +114,7 @@ struct RuntimePlan {
     cidr: String,
     dns: String,
     proxy_port: u16,
+    dns_listen_port: u16,
     root: PathBuf,
     config: PathBuf,
     log: PathBuf,
@@ -407,6 +409,8 @@ fn build_plan(id: &str, profile: &DnsProfile, all_names: &[String]) -> Result<Ru
         .context("dnsprofiles proxy port overflow")?;
     let proxy_port = u16::try_from(proxy_port_u32)
         .context("dnsprofiles proxy port out of range")?;
+    let dns_listen_port = u16::try_from(u32::from(dns_port_redirect::LISTEN_PORT_BASE) + index)
+        .context("dnsprofiles DNS listener port out of range")?;
     let root = runtime_root(id);
     Ok(RuntimePlan {
         id: id.to_string(),
@@ -417,6 +421,7 @@ fn build_plan(id: &str, profile: &DnsProfile, all_names: &[String]) -> Result<Ru
         cidr: format!("{}/30", u32_to_ipv4(network)),
         dns: u32_to_ipv4(dns),
         proxy_port,
+        dns_listen_port,
         config: root.join("config.json"),
         log: root.join("sing-box.log"),
         pid: root.join("sing-box.pid"),
@@ -483,14 +488,17 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
             },
             {
                 "type": "direct", "tag": "dns-profile-dns",
-                "listen": plan.dns, "listen_port": 53
+                "listen": plan.dns, "listen_port": plan.dns_listen_port
             }
         ],
         "outbounds": [{"type": "direct", "tag": "direct"}],
         "route": {
             "auto_detect_interface": true,
             "default_domain_resolver": {"server": "profile-doh", "strategy": "ipv4_only"},
-            "rules": [{"port": [53], "action": "hijack-dns"}],
+            "rules": [
+                {"inbound": ["dns-profile-dns"], "action": "hijack-dns"},
+                {"port": [53], "action": "hijack-dns"}
+            ],
             "final": "direct"
         }
     }))
@@ -711,9 +719,47 @@ fn configure_tun_addr(plan: &RuntimePlan) -> Result<()> {
 }
 
 fn stop_plan_process(plan: &RuntimePlan) {
+    remove_dns_port_redirects(&plan.dns, plan.dns_listen_port);
     stop_pid_file(&plan.tun2socks_pid, |pid| pid_matches_tun2socks(pid, plan));
     stop_pid_file(&plan.pid, |pid| pid_matches_plan(pid, plan));
     delete_tun_device(plan);
+}
+
+fn dns_port_rule(operation: &str, dns: &str, port: u16, protocol: &str) -> Result<(i32, String)> {
+    let args = dns_port_redirect::rule_args(operation, dns, port, protocol);
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    shell::run_timeout("iptables", &args, Capture::Both, Duration::from_secs(4))
+}
+
+fn install_dns_port_redirects(plan: &RuntimePlan) -> Result<()> {
+    for protocol in ["udp", "tcp"] {
+        if matches!(dns_port_rule("-C", &plan.dns, plan.dns_listen_port, protocol), Ok((0, _))) {
+            continue;
+        }
+        let (code, out) = dns_port_rule("-I", &plan.dns, plan.dns_listen_port, protocol)?;
+        if code != 0 {
+            bail!("dnsprofiles: {protocol} DNS port redirect failed for {}: {}", plan.id, out.trim());
+        }
+    }
+    Ok(())
+}
+
+fn remove_dns_port_redirects(dns: &str, port: u16) {
+    for protocol in ["udp", "tcp"] {
+        // Delete only the exact owned rule. Never flush OUTPUT or a foreign chain.
+        if let Err(e) = dns_port_rule("-D", dns, port, protocol) {
+            log::warn!("dnsprofiles: removing {protocol} DNS port redirect for {dns}: {e:#}");
+        }
+    }
+}
+
+fn cleanup_dns_port_redirects() {
+    // This also covers deleted profiles and an interrupted previous startup.
+    for index in 0..dns_port_redirect::PROFILE_COUNT {
+        let dns = u32_to_ipv4(DNS_NET_BASE + index * 4 + 1);
+        let port = dns_port_redirect::LISTEN_PORT_BASE + index as u16;
+        remove_dns_port_redirects(&dns, port);
+    }
 }
 
 fn stop_stale_owned_processes(document: &ProfileDocument) {
@@ -863,6 +909,7 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
     };
     let start_result = (|| -> Result<()> {
         wait_tcp_ready(plan.proxy_port, TUN_WAIT)?;
+        install_dns_port_redirects(plan)?;
         // Verify the local DNS listener and upstream DoH before handing the TUN
         // to Android netd.
         wait_dns_ready(plan)?;
@@ -891,6 +938,7 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
 pub fn start_profiles_for_netd() -> Result<Vec<VpnNetdProfile>> {
     fs::create_dir_all(ROOT)?;
     let document = load(Path::new(CONFIG_PATH))?;
+    cleanup_dns_port_redirects();
     if document.suspend_for_tethering {
         stop_stale_owned_processes(&document);
         crate::logging::user_info("DNS-профили: приостановлены для режима раздачи");
@@ -1003,6 +1051,7 @@ pub fn is_running() -> bool {
 }
 
 pub fn cleanup_runtime_metadata() {
+    cleanup_dns_port_redirects();
     let Ok(entries) = fs::read_dir(RUNTIME_ROOT) else { return; };
     for entry in entries.flatten() {
         let _ = fs::remove_file(entry.path().join("sing-box.pid"));
@@ -1133,6 +1182,7 @@ pub fn runtime_diagnostics() -> Result<Value> {
                 "netid": plan.netid,
                 "tun": plan.tun,
                 "dns": plan.dns,
+                "dns_listener_port": plan.dns_listen_port,
                 "singbox_pid": singbox_pid,
                 "process_running": process_running,
                 "netd_applied": netd_applied,
@@ -1343,7 +1393,9 @@ mod tests {
         let names = doc.profiles.keys().cloned().collect::<Vec<_>>();
         let plan = build_plan("xbox", &doc.profiles["xbox"], &names).unwrap();
         let cfg = build_singbox_config(&plan).unwrap();
-        assert_eq!(cfg["inbounds"][0]["type"], "tun");
+        assert_eq!(cfg["inbounds"][0]["type"], "mixed");
+        assert_eq!(cfg["inbounds"][1]["listen_port"], 19600);
+        assert_eq!(cfg["route"]["rules"][0]["inbound"][0], "dns-profile-dns");
         assert_eq!(cfg["route"]["rules"][0]["action"], "hijack-dns");
         assert_eq!(cfg["dns"]["servers"][1]["type"], "https");
         assert_eq!(cfg["dns"]["servers"][1]["server"], "xbox-dns.ru");

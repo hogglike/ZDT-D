@@ -90,6 +90,9 @@ jobs:
           python3 scripts/test_variant/test_prepare_test_variant.py
           python3 scripts/test_variant/prepare_test_variant.py
 
+      - name: Verify DNS port translation with live UDP and TCP packets
+        run: python3 scripts/test_variant/test_dns_port_redirect.py
+
       - name: Detect tracked build paths
         id: detect
         env:

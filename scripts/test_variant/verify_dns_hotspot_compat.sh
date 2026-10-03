@@ -47,7 +47,7 @@ if [ "$suspended" = true ]; then
   else
     pass "no DNS TUN is active"
   fi
-  if ss -lnup 2>/dev/null | grep -qE '10\.253\.240\.[0-9]+:53'; then
+  if ss -lnup 2>/dev/null | grep -qE '10\.253\.240\.[0-9]+:(53|1960[0-9]|1961[0-5])([[:space:]]|$)'; then
     fail "profile DNS listener remains active; restart ZDT-D"
   else
     pass "no profile DNS listener is active"
@@ -90,10 +90,20 @@ else
   warn "profile-local /30 route was not found in ip route table all"
 fi
 
-if ss -lnup 2>/dev/null | grep -qE '10\.253\.240\.[0-9]+:53'; then
-  pass "profile DNS listener is active"
+if ss -lnup 2>/dev/null | grep -qE '10\.253\.240\.[0-9]+:(1960[0-9]|1961[0-5])([[:space:]]|$)'; then
+  pass "profile DNS listener is active on a high port"
 else
-  fail "profile DNS listener on 10.253.240.x:53 is missing"
+  fail "profile DNS listener on ports 19600..19615 is missing"
+fi
+if ss -lntup 2>/dev/null | grep -qE '10\.253\.240\.[0-9]+:53([[:space:]]|$)'; then
+  fail "old profile listener still occupies port 53; restart ZDT-D"
+else
+  pass "DNS profiles leave system port 53 available"
+fi
+if iptables -t nat -S OUTPUT 2>/dev/null | grep -qE -- '--to-destination 10\.253\.240\.[0-9]+:(1960[0-9]|1961[0-5])([[:space:]]|$)'; then
+  pass "profile-local DNS port translation is installed"
+else
+  fail "profile-local DNS port translation is missing"
 fi
 
 if [ -e "$module_root/working_folder/ip_forward_owned" ]; then

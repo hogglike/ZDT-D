@@ -146,7 +146,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
             )
           }
           Text(
-            "Включи этот переключатель, перезапусти ZDT-D, затем включай точку доступа. Назначения приложений сохранятся.",
+            "Если раздача не запускается, включи этот режим и перезапусти ZDT-D. Он приостанавливает DNS-профили; назначения приложений сохраняются.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
