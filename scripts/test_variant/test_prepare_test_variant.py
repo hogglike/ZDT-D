@@ -16,7 +16,8 @@ class TestVariantPreparation(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="zdtd-variant-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.put("module.prop", (ROOT / "module.prop").read_text())
+        # Stable fixture, independent of the checkout's next mod version.
+        self.put("module.prop", "id=ZDT-D\nname=ZDT-D\nversion=4.2.0-mod22\nversionCode=42022\nupstreamVersion=4.2.0\nmodVersion=22\n")
         self.put("application/app/src/main/res/values/strings.xml",
                  '<resources><string name="app_name">ZDT-D</string></resources>')
         self.put("application/app/build.gradle",

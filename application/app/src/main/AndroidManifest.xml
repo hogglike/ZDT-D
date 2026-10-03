@@ -229,6 +229,14 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <activity android:name=".diagnostics.connection.ConnectionDiagnosticsActivity" android:exported="false" />
+        <service android:name=".diagnostics.connection.DiagnosticService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".diagnostics.connection.ConnectionHealthJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
+        <receiver android:name=".diagnostics.connection.ConnectionWidgetProvider" android:label="ZDT-D · проверка связи" android:exported="false">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_connection_health_info" />
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

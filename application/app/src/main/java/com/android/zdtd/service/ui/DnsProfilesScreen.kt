@@ -26,6 +26,7 @@ private const val DnsDiagnosePath = "/api/programs/dnsprofiles/diagnose"
 /** Per-app DoH profile editor. Runtime changes take effect after a normal ZDT-D restart. */
 @Composable
 fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottomContentPadding: Dp = 0.dp) {
+  val diagnosticContext = LocalContext.current
   var document by remember { mutableStateOf<JSONObject?>(null) }
   var loading by remember { mutableStateOf(true) }
   var busy by remember { mutableStateOf(false) }
@@ -103,6 +104,10 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           Text("DNS-профили", style = MaterialTheme.typography.headlineSmall)
+          OutlinedButton(onClick = {
+            diagnosticContext.startActivity(android.content.Intent(diagnosticContext,
+              com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity::class.java))
+          }) { Text("Проверка соединения и ошибки раздачи") }
           Text(
             "Отдельный DoH для выбранных приложений. Профиль использует полноценный маршрут, совместимый с рабочей схемой Build 15.",
             style = MaterialTheme.typography.bodyMedium,

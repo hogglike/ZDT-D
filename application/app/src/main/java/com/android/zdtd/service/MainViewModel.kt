@@ -214,14 +214,6 @@ data class UiState(
   val tgWsProxy: TgWsProxyComponentState = TgWsProxyComponentState(),
 )
 
-private data class StartupTimingPlan(
-  val totalMs: Long,
-  val connectingEndMs: Long,
-  val completeMs: Long,
-) {
-  val loadingDurationMs: Long get() = (totalMs - completeMs - connectingEndMs).coerceAtLeast(0L)
-}
-
 private data class StatsDeviceCpuSnapshot(
   val totalTicks: Long,
   val idleTicks: Long,
@@ -497,10 +489,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
   private val proxyInfoApplyDelayMs: Long = 1_200L
   private var appVisible: Boolean = false
   private var startupCompleted: Boolean = false
-  private val startupMinVisibleMsRange: LongRange = 2_000L..4_500L
-  private val startupMinCompleteMs: Long = 900L
-  private val startupMinConnectingMsFloor: Long = 700L
-  private val startupMinLoadingMsFloor: Long = 400L
 
   private val statusFreshMs: Long = 1_800L
   private val programsFreshMs: Long = 1_200L
@@ -1847,33 +1835,7 @@ private fun clearDownloadedUpdateApk() {
     }
   }
 
-  private suspend fun waitForStartupElapsed(startedAt: Long, minElapsedMs: Long) {
-    val remaining = minElapsedMs - (System.currentTimeMillis() - startedAt)
-    if (remaining > 0L) delay(remaining)
-  }
-
-  private fun createStartupTimingPlan(): StartupTimingPlan {
-    val totalMs = Random.nextLong(startupMinVisibleMsRange.first, startupMinVisibleMsRange.last + 1L)
-    val remainingBeforeComplete = (totalMs - startupMinCompleteMs).coerceAtLeast(
-      startupMinConnectingMsFloor + startupMinLoadingMsFloor
-    )
-    val maxConnecting = minOf(
-      3_200L,
-      (remainingBeforeComplete - startupMinLoadingMsFloor).coerceAtLeast(startupMinConnectingMsFloor)
-    )
-    val connectingEndMs = if (maxConnecting <= startupMinConnectingMsFloor) {
-      startupMinConnectingMsFloor
-    } else {
-      Random.nextLong(startupMinConnectingMsFloor, maxConnecting + 1L)
-    }
-    return StartupTimingPlan(
-      totalMs = totalMs,
-      connectingEndMs = connectingEndMs,
-      completeMs = startupMinCompleteMs,
-    )
-  }
-
-  private fun beginStartupHandshake(plan: StartupTimingPlan) {
+  private fun beginStartupHandshake() {
     _uiState.update { st ->
       st.copy(
         startup = StartupUiState(
@@ -1882,9 +1844,9 @@ private fun clearDownloadedUpdateApk() {
           errorText = "",
           moduleFound = false,
           moduleStructureOk = true,
-          connectingDurationMs = plan.connectingEndMs.toInt(),
-          loadingDurationMs = plan.loadingDurationMs.toInt(),
-          completeDurationMs = plan.completeMs.toInt(),
+          connectingDurationMs = 700,
+          loadingDurationMs = 100,
+          completeDurationMs = 0,
         )
       )
     }
@@ -1895,11 +1857,7 @@ private fun clearDownloadedUpdateApk() {
     startupJob = null
     _uiState.update { st ->
       st.copy(
-        startup = st.startup.copy(
-          visible = true,
-          stage = StartupStage.COMPLETE,
-          errorText = "",
-        ),
+        startup = StartupUiState.hidden(),
         daemonUnavailableVisible = false,
       )
     }
@@ -1908,10 +1866,6 @@ private fun clearDownloadedUpdateApk() {
     startDaemonLogPolling()
     refreshPrograms()
     refreshDaemonSettings()
-    launchIO {
-      delay(startupMinCompleteMs)
-      _uiState.update { it.copy(startup = StartupUiState.hidden(), daemonUnavailableVisible = false) }
-    }
   }
 
 
@@ -1984,23 +1938,18 @@ private fun clearDownloadedUpdateApk() {
   startupJob = launchIO {
     startupCompleted = false
     val startupStartedAt = System.currentTimeMillis()
-    val timingPlan = createStartupTimingPlan()
-    val loadingStageStartAt = timingPlan.connectingEndMs + timingPlan.loadingDurationMs
-
-    beginStartupHandshake(timingPlan)
+    beginStartupHandshake()
     val deadline = startupStartedAt + 10_000L
     while (isActive && System.currentTimeMillis() < deadline) {
       try {
         val rep = api.getStatus()
         _uiState.update { it.copy(status = rep, daemonOnline = true, daemonUnavailableVisible = false) }
         root.setCachedServiceOn(ApiModels.isServiceOn(rep))
-        waitForStartupElapsed(startupStartedAt, timingPlan.connectingEndMs)
-        if (!isActive) return@launchIO
-        setStartupStage(StartupStage.LOADING_STATUS)
-        waitForStartupElapsed(startupStartedAt, loadingStageStartAt)
         if (!isActive) return@launchIO
         finishStartupHandshake()
         return@launchIO
+      } catch (e: CancellationException) {
+        throw e
       } catch (_: Throwable) {
       }
       delay(700)
