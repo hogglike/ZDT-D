@@ -185,6 +185,7 @@ fn stop_process_groups_parallel() -> Result<()> {
 }
 
 pub fn stop_services_and_restore_iptables() -> Result<()> {
+    crate::programs::connection_modes::stop_for_service();
     crate::programs::dnscrypt::request_stop();
     crate::programs::dnscrypt::clear_ipv6_resetprops();
     // Clean routing/iptables hooks before killing services. This prevents clients from

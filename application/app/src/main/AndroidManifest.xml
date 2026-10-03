@@ -55,6 +55,30 @@
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />
 
+
+        <activity android:name=".modes.ConnectionModesActivity" android:exported="false" />
+        <activity android:name=".modes.ModeSwitchActivity" android:exported="false" android:excludeFromRecents="true" />
+        <service android:name=".modes.ModeActionService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".modes.ModeStatusReceiver" android:exported="true">
+            <intent-filter><action android:name="com.android.zdtd.service.ACTION_MODES_STATUS" /></intent-filter>
+        </receiver>
+        <receiver android:name=".modes.ModeWidgetProvider" android:exported="false" android:label="ZDT-D · 3 режима">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_connection_modes" />
+        </receiver>
+        <service android:name=".modes.WhiteModeTile" android:exported="true" android:label="ZDT-D · Белый" android:icon="@drawable/ic_qs_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
+        <service android:name=".modes.NormalModeTile" android:exported="true" android:label="ZDT-D · Обычный" android:icon="@drawable/ic_qs_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
+        <service android:name=".modes.BrowserModeTile" android:exported="true" android:label="ZDT-D · Браузер" android:icon="@drawable/ic_qs_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

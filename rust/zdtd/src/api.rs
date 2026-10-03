@@ -7143,6 +7143,33 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
         return write_empty_404(stream);
     }
 
+    if path.starts_with("/api/connection-modes") {
+        let result = (|| -> Result<serde_json::Value> {
+            use crate::programs::connection_modes as modes;
+            match (method.as_str(), path.as_str()) {
+                ("GET", "/api/connection-modes") => modes::snapshot(),
+                ("GET", "/api/connection-modes/status") => Ok(json!({"ok":true,"status":modes::status()})),
+                ("PUT", "/api/connection-modes") => {
+                    let config: modes::Config = serde_json::from_slice(&body)?;
+                    Ok(json!({"ok":true,"config":modes::save(config)?}))
+                },
+                ("POST", "/api/connection-modes/activate") | ("POST", "/api/connection-modes/ping") => {
+                    let input: serde_json::Value=serde_json::from_slice(&body)?;
+                    let mode=input["mode"].as_str().unwrap_or("");
+                    let ping=path.ends_with("/ping");
+                    if !ping && mode.is_empty() { modes::stop_for_service(); }
+                    else {
+                        if !services_running || start_in_progress || stop_in_progress { anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска"); }
+                        modes::request(mode,ping)?;
+                    }
+                    Ok(json!({"ok":true}))
+                },
+                _ => anyhow::bail!("Unknown connection mode API route"),
+            }
+        })();
+        return match result { Ok(v)=>write_json(stream,200,v),Err(e)=>write_err(stream,e) };
+    }
+
     // Global subscription library API. Keep this dispatch before `/api/programs/*`:
     // subscriptions are shared resources, not Mihomo program subroutes.
     if path == "/api/subscriptions"

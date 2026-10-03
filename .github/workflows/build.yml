@@ -93,6 +93,18 @@ jobs:
       - name: Verify DNS port translation with live UDP and TCP packets
         run: python3 scripts/test_variant/test_dns_port_redirect.py
 
+      - name: Verify bounded failover and independent application policies
+        run: |
+          rustc --edition=2021 --test rust/zdtd/src/programs/mode_policy.rs -o /tmp/zdt-mode-policy-test
+          /tmp/zdt-mode-policy-test
+
+      - name: Verify mode core selectors with live TLS and no direct fallback
+        run: |
+          curl -fL --retry 3 https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64.tar.gz -o /tmp/zdt-mode-core.tar.gz
+          echo "12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f  /tmp/zdt-mode-core.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/zdt-mode-core.tar.gz -C /tmp
+          sudo python3 scripts/test_variant/test_connection_modes_core.py /tmp/sing-box-1.14.1-linux-amd64/sing-box
+
       - name: Detect tracked build paths
         id: detect
         env:

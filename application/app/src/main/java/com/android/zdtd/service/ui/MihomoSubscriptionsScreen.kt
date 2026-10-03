@@ -708,6 +708,7 @@ private fun SubscriptionsHeaderCard(
   onImport: () -> Unit,
   onRefreshAll: () -> Unit,
 ) {
+  val modesContext = androidx.compose.ui.platform.LocalContext.current
   val active = items.count { it.enabled }
   val servers = items.filter { it.enabled }.sumOf { it.status.serverCount }
   MihomoSectionCard(
@@ -728,6 +729,9 @@ private fun SubscriptionsHeaderCard(
         Text(stringResource(R.string.mihomo_sub_refresh_all))
       }
     }
+    OutlinedButton(onClick = {
+      modesContext.startActivity(android.content.Intent(modesContext, com.android.zdtd.service.modes.ConnectionModesActivity::class.java))
+    }, modifier = Modifier.fillMaxWidth()) { Text("Режимы: Белый · Обычный · Браузер") }
     OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
       Icon(Icons.Filled.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
       Spacer(Modifier.width(6.dp))

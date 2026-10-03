@@ -24,3 +24,6 @@ pub mod mihomo;
 pub mod mihomo_subscription;
 pub mod mieru;
 pub mod tgwsproxy;
+
+pub mod connection_modes;
+mod mode_policy;

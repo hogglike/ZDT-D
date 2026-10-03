@@ -304,23 +304,36 @@ fn legacy_route_mask_hex() -> String { format!("0x{LEGACY_ROUTE_MARK:08x}/0x{LEG
 
 pub fn apply(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions) -> std::result::Result<(), TproxyApplyError> {
     let _xtables_guard = xtables_lock::lock();
-    apply_locked(uid_file, dest_port, proto_choice, ifaces_raw, opt)
+    apply_locked(uid_file, dest_port, proto_choice, ifaces_raw, opt, false)
 }
 
-fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions) -> std::result::Result<(), TproxyApplyError> {
-    match settings::load_api_settings() {
+/// Explicit connection modes require TCP+UDP; never silently fall back to TCP.
+/// Their lifetime is managed by the mode worker, separately from legacy profiles.
+pub fn apply_connection_mode(uid_file: &Path, dest_port: u16, opt: &DpiTunnelOptions) -> Result<()> {
+    let _guard = xtables_lock::lock();
+    apply_locked(uid_file, dest_port, ProtoChoice::TcpUdp, None, opt, true)
+        .map_err(|e| anyhow::anyhow!("Connection mode TPROXY: {e:?}"))?;
+    let scope = scope_label(uid_file, dest_port, ProtoChoice::TcpUdp, None, opt);
+    let chain = scoped_out_chain_name(&scope);
+    delete_rule_all("mangle", OUT_CHAIN, &["-j", &chain])?;
+    // Preserve the two loopback bypasses and every intranet bypass before modes.
+    insert_rule_at("mangle", OUT_CHAIN, INTRANET_V4.len() + 3, &["-j", &chain])
+}
+
+fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions, explicit_mode: bool) -> std::result::Result<(), TproxyApplyError> {
+    if !explicit_mode { match settings::load_api_settings() {
         Ok(st) if st.tproxy_enabled => {}
         Ok(_) => return Err(unsupported("disabled by setting: tproxy_enabled=false")),
         Err(e) => return Err(unsupported(format!("settings load failed: {e:#}"))),
-    }
+    } }
 
-    if tproxy_disabled_by_flag() {
+    if !explicit_mode && tproxy_disabled_by_flag() {
         return Err(unsupported(disabled_reason().unwrap_or_else(|| "disabled by tproxy_no flag".to_string())));
     }
 
     probe_tproxy_runtime().map_err(|e| {
         let msg = format!("{e:#}");
-        disable_tproxy_persistently(&msg);
+        if !explicit_mode { disable_tproxy_persistently(&msg); }
         unsupported(msg)
     })?;
 
@@ -340,7 +353,7 @@ fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifac
     if uids.is_empty() {
         warn!("TPROXY: no valid UIDs in file: {} (remove scoped chains)", uid_file.display());
         cleanup_scope_by_label(&scope).map_err(failed)?;
-        crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE);
+        if !explicit_mode { crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE); }
         return Ok(());
     }
 
@@ -381,7 +394,7 @@ fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifac
     // cannot leak straight out over IPv6 and instead falls back to IPv4 (which
     // is what gets TPROXY'd).  Best-effort: never fail the whole apply on it.
     apply_ipv6_block(&scope, &uids);
-    crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE);
+    if !explicit_mode { crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE); }
     info!("TPROXY applied uid_file={} dest_port={} mark={} table={}", uid_file.display(), dest_port, mark_hex(mark), ROUTE_TABLE);
     Ok(())
 }

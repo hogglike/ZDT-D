@@ -1277,7 +1277,7 @@ fn tls_json(definition: &JsonValue, default_enabled: bool) -> Option<JsonValue> 
     Some(tls)
 }
 
-fn singbox_outbound(node: &SubscriptionNode) -> Result<JsonValue> {
+pub(crate) fn singbox_outbound(node: &SubscriptionNode) -> Result<JsonValue> {
     let d = &node.definition;
     let mut out = json!({"type": node.protocol, "tag": "proxy", "server": node.server, "server_port": node.port});
     match node.protocol.as_str() {
@@ -2077,4 +2077,16 @@ pub fn apply_selected_to_runtime_yaml(profile: &str, raw_yaml: &str, selected_id
 
     let out = serde_yaml::to_string(&root).context("serialize Mihomo runtime YAML with subscriptions")?;
     Ok(out)
+}
+
+/// Enabled subscription snapshots for connection modes; no HTTP request here.
+pub(crate) fn mode_nodes() -> Result<Vec<(String, String, SubscriptionNode)>> {
+    let store = read_store()?;
+    let mut nodes = Vec::new();
+    for item in store.subscriptions.values().filter(|s| s.enabled) {
+        for node in read_nodes(&item.id) {
+            nodes.push((item.id.clone(), item.name.clone(), node));
+        }
+    }
+    Ok(nodes)
 }
