@@ -1,12 +1,10 @@
-name: Build ZDT-D
+name: Build ZDT-D Test (isolated)
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
+      - per-app-dns-stage2-test
   workflow_dispatch:
     inputs:
       build_type:
@@ -19,51 +17,55 @@ on:
           - Release
 
 concurrency:
-  group: zdt-d-service-build-${{ github.event.pull_request.number || github.ref }}
+  group: zdt-d-service-build
   cancel-in-progress: true
 
 env:
-  ANDROID_API_LEVEL: 36
-  ZDT_COMPILE_SDK: 36
-  ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
-  GRADLE_VERSION: "9.4.1"
+  ANDROID_API_LEVEL: "37.0"
+  ZDT_COMPILE_SDK: 37
+  ZDT_COMPILE_SDK_MINOR: 0
+  ANDROID_BUILD_TOOLS_VERSION: "37.0.0"
+  GRADLE_VERSION: "9.6.0"
+  NATIVE_NDK_VERSION: "30.0.16248370"
+  GO_VERSION: "1.26.8"
   CARGO_PROFILE: release
   CARGO_BUILD_TARGET: aarch64-linux-android
   BUILD_TYPE: ${{ github.event.inputs.build_type || 'Release' }}
   NO_DASHBOARD: "1"
-  OPENVPN_VERSION: "2.7.4"
-  MBEDTLS_VERSION: "3.6.6"
-  MBEDTLS_SHA256: "8fb65fae8dcae5840f793c0a334860a411f884cc537ea290ce1c52bb64ca007a"
+  OPENVPN_VERSION: "2.7.7"
+  MBEDTLS_VERSION: "3.6.7"
+  MBEDTLS_SHA256: "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
   LZO_VERSION: "2.10"
   LZ4_VERSION: "1.10.0"
   OPENVPN_ANDROID_API_LEVEL: 24
-  AMNEZIAWG_GO_REF: "v3.1.20260814"
+  AMNEZIAWG_GO_REF: "v3.1.20260828"
   AMNEZIAWG_TOOLS_REF: "v3.1.20260812"
   AMNEZIAWG_ANDROID_API_LEVEL: 24
   AMNEZIAWG_UAPI_RUN_DIR: "/data/adb/modules/ZDT-D/working_folder/amneziawg/run"
   AMNEZIAWG_UAPI_SOCKET_DIR: "/data/adb/modules/ZDT-D/working_folder/amneziawg/run/amneziawg"
   AMNEZIAWG_GO_UAPI_SOCKET_DIR: "run/amneziawg"
-  WIREPROXY_REF: "v1.1.2"
-  TUN2SOCKS_REF: "v2.6.0"
-  MIHOMO_REF: "v1.19.27"
-  SING_BOX_REF: "v1.13.14"
-  HYSTERIA_REF: "v2.10.0"
+  WIREPROXY_REF: "v1.1.3"
+  TUN2SOCKS_REF: "v2.7.0"
+  MIHOMO_REF: "v1.19.30"
+  SING_BOX_REF: "v1.14.1"
+  HYSTERIA_REF: "v2.12.3"
   BYEDPI_REF: "v0.17.3"
   BYEDPI_ANDROID_API_LEVEL: 24
-  DNSCRYPT_PROXY_REF: "2.1.16"
-  MIERU_REF: "v3.34.0"
-  OPERA_PROXY_REF: "v1.26.0"
+  DNSCRYPT_PROXY_REF: "2.1.18"
+  MIERU_REF: "v3.38.0"
+  OPERA_PROXY_REF: "v1.28.0"
   DPITUNNEL_REF: "main"
   DPITUNNEL_ANDROID_API_LEVEL: 24
-  DPITUNNEL_OPENSSL_REF: "openssl-3.3.2"
-  TOR_REF: "tor-0.4.9.9"
+  DPITUNNEL_OPENSSL_REF: "openssl-3.5.9"
+  TOR_REF: "tor-0.4.9.13"
   TOR_ANDROID_API_LEVEL: 24
-  TOR_OPENSSL_REF: "openssl-3.5.7"
-  TOR_LIBEVENT_REF: "release-2.1.12-stable"
+  TOR_OPENSSL_REF: "openssl-3.5.9"
+  TOR_LIBEVENT_REF: "release-2.1.13-stable"
   TOR_ZLIB_REF: "v1.3.2"
   TOR_ZSTD_REF: "v1.5.7"
   LYREBIRD_REF: "main"
   TG_WS_PROXY_REF: "v1.6.4"
+  HEV_SOCKS5_TUNNEL_REF: "2.18.0"
 
 permissions:
   contents: write
@@ -79,9 +81,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: |
+          python3 scripts/test_variant/test_prepare_test_variant.py
+          python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Detect tracked build paths
         id: detect
@@ -116,7 +123,7 @@ jobs:
               changed_files="$(git diff-tree --no-commit-id --name-only -r "$head" || true)"
             fi
 
-            if printf '%s\n' "$changed_files" | grep -Eq '^(application/|zygisk/|rust/|module_template/|prebuilt/|scripts/module/|\.github/workflows/build\.yml$|module\.prop$)'; then
+            if printf '%s\n' "$changed_files" | grep -Eq '^(application/|plugin/|zygisk/|rust/|module_template/|prebuilt/|scripts/module/|\.github/workflows/build\.yml$|module\.prop$)'; then
               paths_changed=true
               reason="Tracked build paths changed"
             fi
@@ -130,6 +137,7 @@ jobs:
             echo
             echo "Tracked paths:"
             echo "- application/**"
+            echo "- plugin/**"
             echo "- zygisk/**"
             echo "- rust/**"
             echo "- module_template/**"
@@ -156,9 +164,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Detect force phrase
         id: detect
@@ -224,26 +235,6 @@ jobs:
       build_start_ts: ${{ steps.gate.outputs.build_start_ts }}
 
     steps:
-      - name: Check APK signing prerequisites
-        env:
-          ZDT_KEYSTORE_BASE64: ${{ secrets.ZDT_KEYSTORE_BASE64 }}
-          ZDT_KEYSTORE_PASSWORD: ${{ secrets.ZDT_KEYSTORE_PASSWORD }}
-          ZDT_KEY_ALIAS: ${{ secrets.ZDT_KEY_ALIAS }}
-          ZDT_KEY_PASSWORD: ${{ secrets.ZDT_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          missing=0
-          for name in ZDT_KEYSTORE_BASE64 ZDT_KEYSTORE_PASSWORD ZDT_KEY_ALIAS ZDT_KEY_PASSWORD; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::Required Actions secret is missing: $name"
-              missing=1
-            fi
-          done
-          if [[ "$missing" == 1 ]]; then
-            echo "APK signing secrets must be configured in this fork before the full native build." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
       - name: Decide whether to compile
         id: gate
         env:
@@ -290,6 +281,23 @@ jobs:
           echo "should_build=$should_build"
           echo "reason=$reason"
 
+  publish_build_status_start:
+    name: Publish build status start
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build_gate
+    if: needs.build_gate.outputs.should_build == 'true' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Publish binaries stage
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh binaries running preparing "Building native components"
+
   build_zdtd:
     name: build zdtd ${{ matrix.abi }}
     runs-on: ubuntu-latest
@@ -327,9 +335,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -424,7 +435,7 @@ jobs:
           EOF2
 
       - name: Cache Cargo registry and zdtd target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -512,9 +523,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -609,7 +623,7 @@ jobs:
           EOF2
 
       - name: Cache Cargo registry and t2s target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -697,9 +711,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -794,7 +811,7 @@ jobs:
           EOF2
 
       - name: Cache Cargo registry and d2s target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -898,9 +915,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -939,7 +959,7 @@ jobs:
             pkg-config \
             xz-utils
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -1197,14 +1217,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -1232,7 +1255,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -1300,7 +1323,7 @@ jobs:
             git \
             make
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -1496,14 +1519,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -1531,7 +1557,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -1653,14 +1679,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -1688,7 +1717,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -1742,6 +1771,16 @@ jobs:
           TUN2SOCKS_COMMIT_SHORT="$(git -C "$SRC/tun2socks" rev-parse --short HEAD)"
           printf '%s\n' "$TUN2SOCKS_COMMIT" | tee "$ARTIFACT_DIR/tun2socks.commit"
 
+          echo "=== Verify tun2socks CLI contract ==="
+          TUN2SOCKS_MAIN="$SRC/tun2socks/main.go"
+          test -s "$TUN2SOCKS_MAIN" || { echo "::error::tun2socks main.go missing"; exit 1; }
+          grep -Fq '"device", "d"' "$TUN2SOCKS_MAIN" || { echo "::error::tun2socks --device/-d flag contract changed"; exit 1; }
+          grep -Fq '"proxy", "p"' "$TUN2SOCKS_MAIN" || { echo "::error::tun2socks --proxy/-p flag contract changed"; exit 1; }
+          for flag in loglevel udp-timeout fwmark restapi mtu; do
+            grep -Fq "\"$flag\"" "$TUN2SOCKS_MAIN" || { echo "::error::tun2socks --$flag flag missing"; exit 1; }
+          done
+          grep -Fq 'Log level [debug|info|warn|error|silent]' "$TUN2SOCKS_MAIN" || { echo "::error::tun2socks loglevel contract changed"; exit 1; }
+
           echo "=== Build tun2socks (${TUN2SOCKS_REF}) ==="
           pushd "$SRC/tun2socks" > /dev/null
           GOOS=android \
@@ -1770,7 +1809,7 @@ jobs:
           file "$ARTIFACT_DIR/tun2socks"
           readelf -h "$ARTIFACT_DIR/tun2socks" | grep -E 'Class:|Machine:'
           readelf -d "$ARTIFACT_DIR/tun2socks" | tee "$ARTIFACT_DIR/tun2socks.dynamic.txt" || true
-          "$ARTIFACT_DIR/tun2socks" -version || true
+          "$ARTIFACT_DIR/tun2socks" --version || true
           "$ARTIFACT_DIR/tun2socks" --help | head -60 || true
           ls -lh "$ARTIFACT_DIR"
           cat "$ARTIFACT_DIR/tun2socks.version"
@@ -1823,14 +1862,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -1858,7 +1900,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -1996,14 +2038,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -2031,7 +2076,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -2172,18 +2217,21 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.26.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.2.0
 
       - name: Prepare Android NDK
         run: |
@@ -2196,7 +2244,7 @@ jobs:
           fi
           test -x "$SDKMANAGER" || { echo "::error::sdkmanager not found"; exit 1; }
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          NDK_VERSION="29.0.13846066"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           if [[ ! -d "$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" ]]; then
             "$SDKMANAGER" "ndk;$NDK_VERSION"
           fi
@@ -2299,9 +2347,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -2334,7 +2385,7 @@ jobs:
             git \
             make
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -2479,14 +2530,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -2514,7 +2568,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -2668,14 +2722,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -2703,7 +2760,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -2852,14 +2909,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24.4'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -2887,7 +2947,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -3022,9 +3082,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -3058,7 +3121,7 @@ jobs:
             ninja-build \
             perl
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           install_sdk_package() {
             local pkg="$1"
             local attempt
@@ -3260,9 +3323,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -3305,7 +3371,7 @@ jobs:
             gcc-multilib \
             g++-multilib
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -3522,9 +3588,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -3571,7 +3640,7 @@ jobs:
             gcc-multilib \
             g++-multilib
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -3837,9 +3906,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -3882,7 +3954,7 @@ jobs:
             pkg-config \
             python3
 
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -4120,14 +4192,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.22.12'
+          go-version: '${{ env.GO_VERSION }}'
           cache: false
 
       - name: Prepare Android SDK paths
@@ -4155,7 +4230,7 @@ jobs:
       - name: Install Android NDK for Go cgo
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -4223,7 +4298,7 @@ jobs:
             go build \
               -trimpath \
               -buildvcs=false \
-              -ldflags="-s -w -buildid=" \
+              -ldflags="-s -w -buildid= -checklinkname=0" \
               -o "$ARTIFACT_DIR/lyrebird" \
               "$LYREBIRD_PACKAGE"
           popd > /dev/null
@@ -4338,9 +4413,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -4367,7 +4445,7 @@ jobs:
       - name: Install Android NDK
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -4446,9 +4524,18 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
+      - name: Publish archive stage
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh archives running preparing "Packing module archive"
 
       - name: Resolve build identity
         env:
@@ -4502,202 +4589,202 @@ jobs:
           echo "[ZDT-D] Build identity: ${BUILD_CHANNEL} v${VERSION_NAME} #${GITHUB_RUN_NUMBER} (versionCode=${VERSION_CODE})"
 
       - name: Download zdtd arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: zdtd-arm64
           path: out/artifacts/zdtd/arm64
       - name: Download t2s arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: t2s-arm64
           path: out/artifacts/t2s/arm64
       - name: Download d2s arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: d2s-arm64
           path: out/artifacts/d2s/arm64
       - name: Download zygisk arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: zygisk-arm64
           path: out/artifacts/zygisk/arm64
       - name: Download openvpn arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: openvpn-arm64
           path: out/artifacts/openvpn/arm64
       - name: Download amneziawg arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: amneziawg-arm64
           path: out/artifacts/amneziawg/arm64
       - name: Download wireproxy arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: wireproxy-arm64
           path: out/artifacts/wireproxy/arm64
       - name: Download tun2socks arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tun2socks-arm64
           path: out/artifacts/tun2socks/arm64
       - name: Download mihomo arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: mihomo-arm64
           path: out/artifacts/mihomo/arm64
       - name: Download sing-box arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: sing-box-arm64
           path: out/artifacts/sing-box/arm64
       - name: Download hysteria2 arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: hysteria2-arm64
           path: out/artifacts/hysteria2/arm64
       - name: Download byedpi arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: byedpi-arm64
           path: out/artifacts/byedpi/arm64
       - name: Download dnscrypt arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dnscrypt-arm64
           path: out/artifacts/dnscrypt/arm64
       - name: Download mieru arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: mieru-arm64
           path: out/artifacts/mieru/arm64
       - name: Download opera-proxy arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: opera-proxy-arm64
           path: out/artifacts/opera-proxy/arm64
       - name: Download dpitunnel arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dpitunnel-arm64
           path: out/artifacts/dpitunnel/arm64
       - name: Download torproxy arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: torproxy-arm64
           path: out/artifacts/torproxy/arm64
       - name: Download lyrebird arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: lyrebird-arm64
           path: out/artifacts/lyrebird/arm64
       - name: Download nfqws arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nfqws-arm64
           path: out/artifacts/nfqws/arm64
       - name: Download nfqws2 arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nfqws2-arm64
           path: out/artifacts/nfqws2/arm64
       - name: Download zdtd arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: zdtd-arm32
           path: out/artifacts/zdtd/arm32
       - name: Download t2s arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: t2s-arm32
           path: out/artifacts/t2s/arm32
       - name: Download d2s arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: d2s-arm32
           path: out/artifacts/d2s/arm32
       - name: Download zygisk arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: zygisk-arm32
           path: out/artifacts/zygisk/arm32
       - name: Download openvpn arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: openvpn-arm32
           path: out/artifacts/openvpn/arm32
       - name: Download amneziawg arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: amneziawg-arm32
           path: out/artifacts/amneziawg/arm32
       - name: Download wireproxy arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: wireproxy-arm32
           path: out/artifacts/wireproxy/arm32
       - name: Download tun2socks arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tun2socks-arm32
           path: out/artifacts/tun2socks/arm32
       - name: Download mihomo arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: mihomo-arm32
           path: out/artifacts/mihomo/arm32
       - name: Download sing-box arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: sing-box-arm32
           path: out/artifacts/sing-box/arm32
       - name: Download hysteria2 arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: hysteria2-arm32
           path: out/artifacts/hysteria2/arm32
       - name: Download byedpi arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: byedpi-arm32
           path: out/artifacts/byedpi/arm32
       - name: Download dnscrypt arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dnscrypt-arm32
           path: out/artifacts/dnscrypt/arm32
       - name: Download mieru arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: mieru-arm32
           path: out/artifacts/mieru/arm32
       - name: Download opera-proxy arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: opera-proxy-arm32
           path: out/artifacts/opera-proxy/arm32
       - name: Download dpitunnel arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dpitunnel-arm32
           path: out/artifacts/dpitunnel/arm32
       - name: Download torproxy arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: torproxy-arm32
           path: out/artifacts/torproxy/arm32
       - name: Download lyrebird arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: lyrebird-arm32
           path: out/artifacts/lyrebird/arm32
       - name: Download nfqws arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nfqws-arm32
           path: out/artifacts/nfqws/arm32
       - name: Download nfqws2 arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nfqws2-arm32
           path: out/artifacts/nfqws2/arm32
@@ -4834,24 +4921,32 @@ jobs:
 
           RAW_MODULE_ZIP="out/module/zdt_module.raw.zip"
           cp -f "$MODULE_ZIP" "$RAW_MODULE_ZIP"
+          cp -f "$RAW_MODULE_ZIP" "out/module/${ZDTD_DIST_STEM}_PLAIN.zip"
           python3 scripts/module/fake-encrypt-central-directory.py "$RAW_MODULE_ZIP" "$MODULE_ZIP"
           test -s "$MODULE_ZIP" || { echo "::error::module zip missing after central directory protection"; exit 1; }
           ls -lh "$MODULE_ZIP" "$RAW_MODULE_ZIP"
 
+      - name: Upload plain module ZIP for strict root managers
+        uses: actions/upload-artifact@v7
+        with:
+          name: zdt-test-module-plain
+          path: out/module/${{ env.ZDTD_DIST_STEM }}_PLAIN.zip
+          retention-days: 30
+
       - name: Upload module ZIP
         uses: actions/upload-artifact@v7
         with:
-          name: zdt-module-zip
+          name: zdt-test-module-zip
           path: |
             out/module/zdt_module.zip
             out/module/module.prop
           retention-days: 1
 
-
-
-
-
-
+      - name: Publish archive completion
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh archives done preparing "Module archive is ready"
 
   build_tg_ws_proxy:
     name: build tg-ws-proxy ${{ matrix.abi }}
@@ -4884,7 +4979,7 @@ jobs:
 
     steps:
       - name: Checkout tg-ws-proxy-rs
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: valnesfjord/tg-ws-proxy-rs
           fetch-depth: 1
@@ -5025,13 +5120,13 @@ jobs:
 
     steps:
       - name: Download tg-ws-proxy arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tg-ws-proxy-arm64
           path: out/tg-ws-proxy/arm64-v8a
 
       - name: Download tg-ws-proxy arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tg-ws-proxy-arm32
           path: out/tg-ws-proxy/armeabi-v7a
@@ -5080,6 +5175,164 @@ jobs:
           retention-days: 1
 
 
+  build_tgws_plugin_apk:
+    name: build TGWS plugin APK
+    runs-on: ubuntu-latest
+    needs:
+      - build_tg_ws_proxy
+    if: needs.build_tg_ws_proxy.result == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK paths
+        run: |
+          set -euo pipefail
+          ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          ANDROID_HOME="$ANDROID_SDK_ROOT"
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -1)"
+          fi
+          test -x "$SDKMANAGER" || { echo "::error::sdkmanager not found"; exit 1; }
+          {
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "SDKMANAGER=$SDKMANAGER"
+          } >> "$GITHUB_ENV"
+          yes 2>/dev/null | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          install_sdk_package() {
+            local pkg="$1"
+            for attempt in 1 2 3 4 5; do
+              if "$SDKMANAGER" "$pkg"; then return 0; fi
+              if [[ "$pkg" == platforms\;android-37.* ]]; then
+                "$SDKMANAGER" --channel=3 "$pkg" && return 0 || true
+              fi
+              rm -rf "$ANDROID_SDK_ROOT/.temp" "$ANDROID_SDK_ROOT/.downloadIntermediates" 2>/dev/null || true
+              sleep $((attempt * 8))
+            done
+            return 1
+          }
+          install_sdk_package "platform-tools"
+          install_sdk_package "platforms;android-${{ env.ANDROID_API_LEVEL }}"
+          install_sdk_package "build-tools;${{ env.ANDROID_BUILD_TOOLS_VERSION }}"
+
+      - name: Setup Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: false
+
+      - name: Download tg-ws-proxy arm64
+        uses: actions/download-artifact@v8
+        with:
+          name: tg-ws-proxy-arm64
+          path: out/plugin/tgws/tg-ws-proxy-arm64
+
+      - name: Download tg-ws-proxy arm32
+        uses: actions/download-artifact@v8
+        with:
+          name: tg-ws-proxy-arm32
+          path: out/plugin/tgws/tg-ws-proxy-arm32
+
+      - name: Prepare TGWS plugin native libraries
+        run: |
+          set -euo pipefail
+          JNI_ROOT="plugin/app/build/generated/tgws-jni/main"
+          rm -rf "$JNI_ROOT"
+          mkdir -p "$JNI_ROOT/arm64-v8a" "$JNI_ROOT/armeabi-v7a"
+          cp -f out/plugin/tgws/tg-ws-proxy-arm64/tg-ws-proxy "$JNI_ROOT/arm64-v8a/libzdt_tgwsproxy.so"
+          cp -f out/plugin/tgws/tg-ws-proxy-arm32/tg-ws-proxy "$JNI_ROOT/armeabi-v7a/libzdt_tgwsproxy.so"
+          chmod 755 "$JNI_ROOT/arm64-v8a/libzdt_tgwsproxy.so" "$JNI_ROOT/armeabi-v7a/libzdt_tgwsproxy.so"
+          file "$JNI_ROOT/arm64-v8a/libzdt_tgwsproxy.so"
+          file "$JNI_ROOT/armeabi-v7a/libzdt_tgwsproxy.so"
+
+      - name: Restore plugin signing keystore
+        env:
+          ZDT_KEYSTORE_BASE64: ${{ secrets.ZDT_KEYSTORE_BASE64 }}
+          ZDT_KEYSTORE_PASSWORD: ${{ secrets.ZDT_KEYSTORE_PASSWORD }}
+          ZDT_KEY_ALIAS: ${{ secrets.ZDT_KEY_ALIAS }}
+          ZDT_KEY_PASSWORD: ${{ secrets.ZDT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in ZDT_KEYSTORE_BASE64 ZDT_KEYSTORE_PASSWORD ZDT_KEY_ALIAS ZDT_KEY_PASSWORD; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name GitHub Actions secret is missing or empty"; exit 1; }
+          done
+          KEYSTORE_PATH="$(pwd)/keystores/zdt-plugin.keystore"
+          mkdir -p "$(dirname "$KEYSTORE_PATH")"
+          printf '%s' "$ZDT_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$ZDT_KEYSTORE_PASSWORD" -alias "$ZDT_KEY_ALIAS" >/dev/null
+          {
+            echo "storeFile=$KEYSTORE_PATH"
+            echo "storePassword=$ZDT_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ZDT_KEY_ALIAS"
+            echo "keyPassword=$ZDT_KEY_PASSWORD"
+          } > plugin/keystore.properties
+
+      - name: Build signed TGWS plugin APK
+        run: |
+          set -euo pipefail
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > plugin/local.properties
+          gradle \
+            --no-daemon \
+            --max-workers=$(nproc) \
+            -p plugin \
+            "-PzdtCompileSdk=${{ env.ZDT_COMPILE_SDK }}" \
+            "-PzdtCompileSdkMinor=${{ env.ZDT_COMPILE_SDK_MINOR }}" \
+            assembleRelease
+
+      - name: Verify and package TGWS plugin technical assets
+        run: |
+          set -euo pipefail
+          APK="plugin/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK" || { echo "::error::TGWS plugin APK missing: $APK"; exit 1; }
+          ENTRIES="$(unzip -Z1 "$APK")"
+          printf '%s\n' "$ENTRIES" | grep -Fx 'lib/arm64-v8a/libzdt_tgwsproxy.so'
+          printf '%s\n' "$ENTRIES" | grep -Fx 'lib/armeabi-v7a/libzdt_tgwsproxy.so'
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}/apksigner"
+          "$APKSIGNER" verify --verbose "$APK"
+          mkdir -p out/technical/tgws-plugin
+          cp -f "$APK" out/technical/tgws-plugin/zdt-d-tgws-plugin.apk
+          VERSION_NAME="$(sed -n 's/^version=//p' module.prop | head -1 | tr -d '\r')"
+          VERSION_CODE="$(sed -n 's/^versionCode=//p' module.prop | head -1 | tr -d '\r')"
+          SHA256="$(sha256sum out/technical/tgws-plugin/zdt-d-tgws-plugin.apk | cut -d ' ' -f1)"
+          cat > out/technical/tgws-plugin/tgws-plugin.json <<EOF_PLUGIN_JSON
+          {
+            "packageName": "com.android.zdtd.service.plugin.com",
+            "versionName": "$VERSION_NAME",
+            "versionCode": $VERSION_CODE,
+            "apiVersion": 1,
+            "asset": "zdt-d-tgws-plugin.apk",
+            "sha256": "$SHA256",
+            "source": "https://github.com/valnesfjord/tg-ws-proxy-rs",
+            "tgwsRef": "$TG_WS_PROXY_REF"
+          }
+          EOF_PLUGIN_JSON
+          cat out/technical/tgws-plugin/tgws-plugin.json
+          ls -lh out/technical/tgws-plugin/
+
+      - name: Upload TGWS plugin technical assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: tgws-plugin-technical-assets
+          path: out/technical/tgws-plugin/
+          retention-days: 1
+
+
   build_dpi_detector:
     name: build dpi-detector ${{ matrix.abi }}
     runs-on: ubuntu-latest
@@ -5117,9 +5370,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -5214,7 +5470,7 @@ jobs:
           EOF2
 
       - name: Cache Cargo registry and dpi-detector target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -5302,9 +5558,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -5399,7 +5658,7 @@ jobs:
           EOF2
 
       - name: Cache Cargo registry and nfqws-tester target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -5487,9 +5746,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
 
       - name: Prepare Android SDK paths
         run: |
@@ -5516,7 +5778,7 @@ jobs:
       - name: Install Android NDK
         run: |
           set -euo pipefail
-          NDK_VERSION="27.2.12479018"
+          NDK_VERSION="$NATIVE_NDK_VERSION"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
@@ -5617,21 +5879,126 @@ jobs:
             prebuilt/bin/${{ matrix.module_arch }}/busybox.source
           retention-days: 1
 
+  build_hev_socks5_tunnel:
+    name: Build hev-socks5-tunnel Android AAR
+    runs-on: ubuntu-latest
+    needs: build_gate
+    if: needs.build_gate.outputs.should_build == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android NDK
+        run: |
+          set -euo pipefail
+          ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          ANDROID_HOME="$ANDROID_SDK_ROOT"
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -1)"
+          fi
+          test -x "$SDKMANAGER" || { echo "::error::sdkmanager not found"; exit 1; }
+          if [[ ! -d "$ANDROID_SDK_ROOT/ndk/$NATIVE_NDK_VERSION" ]]; then
+            "$SDKMANAGER" "ndk;$NATIVE_NDK_VERSION"
+          fi
+          NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NATIVE_NDK_VERSION"
+          test -x "$NDK_ROOT/ndk-build" || { echo "::error::ndk-build not found: $NDK_ROOT"; exit 1; }
+          {
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_NDK_ROOT=$NDK_ROOT"
+            echo "ANDROID_NDK_HOME=$NDK_ROOT"
+          } >> "$GITHUB_ENV"
+
+      - name: Build hev-socks5-tunnel from source
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/hev-socks5-tunnel-android"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          git clone --recursive --depth 1 --branch "$HEV_SOCKS5_TUNNEL_REF" \
+            https://github.com/heiher/hev-socks5-tunnel.git "$WORK/jni"
+
+          "$ANDROID_NDK_ROOT/ndk-build" \
+            -C "$WORK" \
+            APP_PLATFORM=android-26 \
+            APP_ABI="arm64-v8a armeabi-v7a" \
+            -j"$(nproc)"
+
+          for abi in arm64-v8a armeabi-v7a; do
+            so="$WORK/libs/$abi/libhev-socks5-tunnel.so"
+            test -s "$so" || { echo "::error::hev native library missing: $so"; exit 1; }
+            file "$so"
+          done
+
+          BINDING_SRC="$(find "$WORK/jni/android" -path '*/hev/htproxy/TProxyService.java' -type f -print -quit)"
+          test -n "$BINDING_SRC" -a -s "$BINDING_SRC" || {
+            echo "::error::Default hev.htproxy.TProxyService Java binding was not found"
+            exit 1
+          }
+
+          AAR_ROOT="$RUNNER_TEMP/hev-aar"
+          CLASS_ROOT="$RUNNER_TEMP/hev-classes"
+          OUT="$GITHUB_WORKSPACE/out/hev/hev-socks5-tunnel.aar"
+          rm -rf "$AAR_ROOT" "$CLASS_ROOT"
+          mkdir -p "$AAR_ROOT/jni/arm64-v8a" "$AAR_ROOT/jni/armeabi-v7a" "$CLASS_ROOT" "$(dirname "$OUT")"
+          cp -f "$WORK/libs/arm64-v8a/libhev-socks5-tunnel.so" "$AAR_ROOT/jni/arm64-v8a/"
+          cp -f "$WORK/libs/armeabi-v7a/libhev-socks5-tunnel.so" "$AAR_ROOT/jni/armeabi-v7a/"
+
+          javac --release 8 -d "$CLASS_ROOT" "$BINDING_SRC"
+          jar --create --file "$AAR_ROOT/classes.jar" -C "$CLASS_ROOT" .
+          cat > "$AAR_ROOT/AndroidManifest.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="hev.htproxy" />
+          EOF
+          : > "$AAR_ROOT/R.txt"
+          cat > "$AAR_ROOT/proguard.txt" <<'EOF'
+          -keep class hev.htproxy.TProxyService { *; }
+          EOF
+          mkdir -p "$AAR_ROOT/assets"
+          cp -f "$WORK/jni/LICENSE" "$AAR_ROOT/assets/hev-socks5-tunnel-LICENSE.txt"
+
+          (cd "$AAR_ROOT" && zip -q -9 -r "$OUT" .)
+          test -s "$OUT"
+          unzip -Z1 "$OUT" | grep -Fx 'classes.jar'
+          unzip -Z1 "$OUT" | grep -Fx 'jni/arm64-v8a/libhev-socks5-tunnel.so'
+          unzip -Z1 "$OUT" | grep -Fx 'jni/armeabi-v7a/libhev-socks5-tunnel.so'
+          jar tf "$AAR_ROOT/classes.jar" | grep -Fx 'hev/htproxy/TProxyService.class'
+          ls -lh "$OUT"
+
+      - name: Upload hev-socks5-tunnel AAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: hev-socks5-tunnel-aar
+          path: out/hev/hev-socks5-tunnel.aar
+          retention-days: 1
+
   apk_tools_ready:
-    name: 4 APK tools ready (dpi-detector + nfqws-tester + BusyBox)
+    name: APK support components ready
     runs-on: ubuntu-latest
     needs:
       - build_dpi_detector
       - build_nfqws_tester
       - build_busybox
+      - build_hev_socks5_tunnel
     if: >-
       needs.build_dpi_detector.result == 'success' &&
       needs.build_nfqws_tester.result == 'success' &&
-      needs.build_busybox.result == 'success'
+      needs.build_busybox.result == 'success' &&
+      needs.build_hev_socks5_tunnel.result == 'success'
 
     steps:
       - name: Mark APK tools ready
-        run: echo "APK tool artifacts are ready for APK packaging"
+        run: echo "APK helper artifacts and hev AAR are ready for APK packaging"
 
   build_apk:
     name: build APK with module ZIP
@@ -5645,12 +6012,21 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
+      - name: Publish APK stage
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh apk running preparing "Building Android application"
+
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -5675,12 +6051,12 @@ jobs:
             echo "SDKMANAGER=$SDKMANAGER"
             echo "PATH=$SDKMANAGER_BIN_DIR:$PATH"
           } >> "$GITHUB_ENV"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          yes 2>/dev/null | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
       - name: Install Android SDK packages
         run: |
           set -euo pipefail
-          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          yes 2>/dev/null | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           install_sdk_package() {
             local pkg="$1"
             local attempt
@@ -5688,6 +6064,12 @@ jobs:
               echo "sdkmanager install $pkg: attempt $attempt/5"
               if "$SDKMANAGER" "$pkg"; then
                 return 0
+              fi
+              if [[ "$pkg" == platforms\;android-37.* ]]; then
+                echo "sdkmanager retry $pkg through preview/canary channel"
+                if "$SDKMANAGER" --channel=3 "$pkg"; then
+                  return 0
+                fi
               fi
               rm -rf "$ANDROID_SDK_ROOT/.temp" "$ANDROID_SDK_ROOT/.downloadIntermediates" 2>/dev/null || true
               sleep $((attempt * 8))
@@ -5697,11 +6079,15 @@ jobs:
           }
           install_sdk_package "platform-tools"
           install_sdk_package "platforms;android-${{ env.ANDROID_API_LEVEL }}"
+          test -s "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" || {
+            echo "::error::Android SDK platform android-${{ env.ANDROID_API_LEVEL }} was not installed correctly"
+            exit 1
+          }
           install_sdk_package "build-tools;${{ env.ANDROID_BUILD_TOOLS_VERSION }}"
-          if [[ ! -d "$ANDROID_SDK_ROOT/ndk/27.2.12479018" ]]; then
-            install_sdk_package "ndk;27.2.12479018"
+          if [[ ! -d "$ANDROID_SDK_ROOT/ndk/$NATIVE_NDK_VERSION" ]]; then
+            install_sdk_package "ndk;$NATIVE_NDK_VERSION"
           fi
-          NDK_ROOT="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NATIVE_NDK_VERSION"
           if [[ ! -d "$NDK_ROOT" ]]; then
             echo "::warning::Expected NDK not found at $NDK_ROOT, falling back to latest installed NDK"
             NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$(ls "$ANDROID_SDK_ROOT/ndk" | sort -V | tail -1)"
@@ -5711,52 +6097,144 @@ jobs:
           echo "ANDROID_NDK_HOME=$NDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Setup Gradle ${{ env.GRADLE_VERSION }}
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
           cache-read-only: false
 
       - name: Download module archive
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
-          name: zdt-module-zip
+          name: zdt-test-module-zip
           path: out/module
 
       - name: Download dpi-detector arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dpi-detector-arm64
           path: out/artifacts/dpi-detector/arm64
 
       - name: Download dpi-detector arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dpi-detector-arm32
           path: out/artifacts/dpi-detector/arm32
 
       - name: Download nfqws-tester arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nfqws-tester-arm64
           path: out/artifacts/nfqws-tester/arm64
 
       - name: Download nfqws-tester arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nfqws-tester-arm32
           path: out/artifacts/nfqws-tester/arm32
 
       - name: Download BusyBox arm64
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: busybox-arm64
           path: prebuilt/bin/arm64-v8a
 
       - name: Download BusyBox arm32
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: busybox-arm32
           path: prebuilt/bin/arm-v7a
+
+      - name: Download hev-socks5-tunnel AAR
+        uses: actions/download-artifact@v8
+        with:
+          name: hev-socks5-tunnel-aar
+          path: out/artifacts/hev
+
+      - name: Download non-root T2S binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: t2s-*
+          path: out/artifacts/nonroot/t2s
+
+      - name: Download non-root ByeDPI binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: byedpi-*
+          path: out/artifacts/nonroot/byedpi
+
+      - name: Download non-root Opera Proxy binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: opera-proxy-*
+          path: out/artifacts/nonroot/opera-proxy
+
+      - name: Download non-root Hysteria2 binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: hysteria2-*
+          path: out/artifacts/nonroot/hysteria2
+
+      - name: Download non-root sing-box binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: sing-box-*
+          path: out/artifacts/nonroot/sing-box
+
+      - name: Download non-root Mieru binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mieru-*
+          path: out/artifacts/nonroot/mieru
+
+      - name: Download non-root WireProxy binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wireproxy-*
+          path: out/artifacts/nonroot/wireproxy
+
+      - name: Prepare hev-socks5-tunnel app library
+        run: |
+          set -euo pipefail
+          SRC="out/artifacts/hev/hev-socks5-tunnel.aar"
+          DST="application/app/libs/hev-socks5-tunnel.aar"
+          test -s "$SRC" || { echo "::error::hev AAR artifact missing: $SRC"; exit 1; }
+          mkdir -p "$(dirname "$DST")"
+          cp -f "$SRC" "$DST"
+          unzip -Z1 "$DST" | grep -Fx 'classes.jar' >/dev/null
+          unzip -Z1 "$DST" | grep -Fx 'jni/arm64-v8a/libhev-socks5-tunnel.so' >/dev/null
+          unzip -Z1 "$DST" | grep -Fx 'jni/armeabi-v7a/libhev-socks5-tunnel.so' >/dev/null
+          ls -lh "$DST"
+
+      - name: Prepare non-root native executables for APK
+        run: |
+          set -euo pipefail
+          JNI_ROOT="application/app/build/generated/zdt-nonroot-jni/main"
+          rm -rf "$JNI_ROOT"
+          mkdir -p "$JNI_ROOT/arm64-v8a" "$JNI_ROOT/armeabi-v7a"
+
+          copy_helper() {
+            local src="$1"
+            local dst="$2"
+            test -s "$src" || { echo "::error::non-root native artifact missing: $src"; exit 1; }
+            cp -f "$src" "$dst"
+            chmod 755 "$dst"
+            file "$dst"
+          }
+
+          copy_helper "out/artifacts/nonroot/t2s/t2s-arm64/t2s" "$JNI_ROOT/arm64-v8a/libzdt_t2s.so"
+          copy_helper "out/artifacts/nonroot/t2s/t2s-arm32/t2s" "$JNI_ROOT/armeabi-v7a/libzdt_t2s.so"
+          copy_helper "out/artifacts/nonroot/byedpi/byedpi-arm64/byedpi" "$JNI_ROOT/arm64-v8a/libzdt_byedpi.so"
+          copy_helper "out/artifacts/nonroot/byedpi/byedpi-arm32/byedpi" "$JNI_ROOT/armeabi-v7a/libzdt_byedpi.so"
+          copy_helper "out/artifacts/nonroot/opera-proxy/opera-proxy-arm64/opera-proxy" "$JNI_ROOT/arm64-v8a/libzdt_operaproxy.so"
+          copy_helper "out/artifacts/nonroot/opera-proxy/opera-proxy-arm32/opera-proxy" "$JNI_ROOT/armeabi-v7a/libzdt_operaproxy.so"
+          copy_helper "out/artifacts/nonroot/hysteria2/hysteria2-arm64/hysteria2" "$JNI_ROOT/arm64-v8a/libzdt_hysteria2.so"
+          copy_helper "out/artifacts/nonroot/hysteria2/hysteria2-arm32/hysteria2" "$JNI_ROOT/armeabi-v7a/libzdt_hysteria2.so"
+          copy_helper "out/artifacts/nonroot/sing-box/sing-box-arm64/sing-box" "$JNI_ROOT/arm64-v8a/libzdt_singbox.so"
+          copy_helper "out/artifacts/nonroot/sing-box/sing-box-arm32/sing-box" "$JNI_ROOT/armeabi-v7a/libzdt_singbox.so"
+          copy_helper "out/artifacts/nonroot/mieru/mieru-arm64/mieru" "$JNI_ROOT/arm64-v8a/libzdt_mieru.so"
+          copy_helper "out/artifacts/nonroot/mieru/mieru-arm32/mieru" "$JNI_ROOT/armeabi-v7a/libzdt_mieru.so"
+          copy_helper "out/artifacts/nonroot/wireproxy/wireproxy-arm64/wireproxy" "$JNI_ROOT/arm64-v8a/libzdt_wireproxy.so"
+          copy_helper "out/artifacts/nonroot/wireproxy/wireproxy-arm32/wireproxy" "$JNI_ROOT/armeabi-v7a/libzdt_wireproxy.so"
 
       - name: Verify BusyBox artifacts
         run: |
@@ -5862,6 +6340,8 @@ jobs:
             --no-daemon \
             --max-workers=$(nproc) \
             "-PzdtCompileSdk=${{ env.ZDT_COMPILE_SDK }}" \
+            "-PzdtCompileSdkMinor=${{ env.ZDT_COMPILE_SDK_MINOR }}" \
+            "-PzdtRequireHevAar=true" \
             "assemble${{ env.BUILD_TYPE }}"
 
       - name: Collect final artifacts
@@ -5883,6 +6363,22 @@ jobs:
             assets/dpi-detector/armeabi-v7a/dpi-detector \
             assets/nfqws-tester/arm64-v8a/nfqws_tester \
             assets/nfqws-tester/armeabi-v7a/nfqws_tester \
+            lib/arm64-v8a/libhev-socks5-tunnel.so \
+            lib/armeabi-v7a/libhev-socks5-tunnel.so \
+            lib/arm64-v8a/libzdt_t2s.so \
+            lib/armeabi-v7a/libzdt_t2s.so \
+            lib/arm64-v8a/libzdt_operaproxy.so \
+            lib/armeabi-v7a/libzdt_operaproxy.so \
+            lib/arm64-v8a/libzdt_byedpi.so \
+            lib/armeabi-v7a/libzdt_byedpi.so \
+            lib/arm64-v8a/libzdt_hysteria2.so \
+            lib/armeabi-v7a/libzdt_hysteria2.so \
+            lib/arm64-v8a/libzdt_singbox.so \
+            lib/armeabi-v7a/libzdt_singbox.so \
+            lib/arm64-v8a/libzdt_mieru.so \
+            lib/armeabi-v7a/libzdt_mieru.so \
+            lib/arm64-v8a/libzdt_wireproxy.so \
+            lib/armeabi-v7a/libzdt_wireproxy.so \
             assets/busybox/busybox-arm64 \
             assets/busybox/busybox-arm64.sha256 \
             assets/busybox/busybox-arm64.source \
@@ -5904,22 +6400,30 @@ jobs:
 
           cp -f "$APK" out/dist/app-release.apk
           cp -f out/module/zdt_module.zip out/dist/zdt_module.zip
+          cp -f "$APK" "out/dist/${ZDTD_DIST_STEM}.apk"
+          cp -f out/module/zdt_module.zip "out/dist/${ZDTD_DIST_STEM}_FINAL.zip"
 
           ls -lh out/dist/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
-          name: zdt-apk
-          path: out/dist/app-release.apk
+          name: zdt-test-apk
+          path: out/dist/${{ env.ZDTD_DIST_STEM }}.apk
           retention-days: 30
 
       - name: Upload module artifact
         uses: actions/upload-artifact@v7
         with:
-          name: zdt-module-final
-          path: out/dist/zdt_module.zip
+          name: zdt-test-module-final
+          path: out/dist/${{ env.ZDTD_DIST_STEM }}_FINAL.zip
           retention-days: 30
+
+      - name: Publish APK completion
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh apk done preparing "Android application is ready"
 
   publish_service:
     name: Publish service build
@@ -5928,26 +6432,43 @@ jobs:
       - build_gate
       - build_apk
       - package_tg_ws_proxy_asset
+      - build_tgws_plugin_apk
     if: always() && github.ref == 'refs/heads/main' && needs.build_apk.result == 'success'
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Prepare isolated ZDT-D Test variant
+        run: python3 scripts/test_variant/prepare_test_variant.py
+
+      - name: Publish release stage
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh release running preparing "Publishing GitHub releases"
+
       - name: Download APK artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
-          name: zdt-apk
+          name: zdt-test-apk
           path: out/dist
 
       - name: Download tg_ws_proxy.zip artifact
         if: needs.package_tg_ws_proxy_asset.result == 'success'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tg-ws-proxy-technical-asset
           path: out/technical
+
+      - name: Download TGWS plugin technical assets
+        if: needs.build_tgws_plugin_apk.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: tgws-plugin-technical-assets
+          path: out/technical/tgws-plugin
 
       - name: Set up Node.js for GitHub Copilot CLI
         uses: actions/setup-node@v7
@@ -5963,6 +6484,7 @@ jobs:
           COPILOT_GITHUB_TOKEN: ${{ github.token }}
           BUILD_START_TS: ${{ needs.build_gate.outputs.build_start_ts }}
           TG_WS_PROXY_PACKAGE_RESULT: ${{ needs.package_tg_ws_proxy_asset.result }}
+          TGWS_PLUGIN_BUILD_RESULT: ${{ needs.build_tgws_plugin_apk.result }}
         run: |
           set -euo pipefail
 
@@ -5997,9 +6519,9 @@ jobs:
 
           FULL_SHA="$(git rev-parse HEAD)"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-          REPO_URL="https://github.com/${{ github.repository }}"
-          RUN_URL="${REPO_URL}/actions/runs/${{ github.run_id }}"
-          BUILD_TYPE="${{ env.BUILD_TYPE }}"
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+          RUN_URL="${REPO_URL}/actions/runs/${GITHUB_RUN_ID}"
+          BUILD_TYPE="${BUILD_TYPE:-Release}"
           BRANCH_NAME="${GITHUB_REF_NAME:-main}"
 
           git fetch --tags --force >/dev/null 2>&1 || true
@@ -6174,7 +6696,7 @@ jobs:
             local asset_id=""
             asset_id="$(gh release view "$tag" --json assets --jq ".assets[] | select(.name==\"${asset_name}\") | .id" | head -n1 || true)"
             if [[ -n "$asset_id" ]]; then
-              gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$asset_id"
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/$asset_id"
               sleep 3
             fi
 
@@ -6277,7 +6799,7 @@ jobs:
           | Latest stable release | \`${LATEST_STABLE_TAG:-none}\` |
           | Commit | [\`${SHORT_SHA}\`](${REPO_URL}/commit/${FULL_SHA}) |
           | Branch | \`${BRANCH_NAME}\` |
-          | Workflow run | [#${{ github.run_number }}](${RUN_URL}) |
+          | Workflow run | [#${GITHUB_RUN_NUMBER}](${RUN_URL}) |
           | Build date | \`${BUILD_TIME_UTC}\` |
           | Build type | \`${BUILD_TYPE}\` |
           | APK size | \`${APK_SIZE_HUMAN}\` |
@@ -6306,6 +6828,10 @@ jobs:
           TG_WS_PROXY_ASSET="out/technical/tg_ws_proxy.zip"
           TG_WS_PROXY_UPLOAD_MODE="skipped"
           TG_WS_PROXY_UPLOAD_ATTEMPTS="0"
+          TGWS_PLUGIN_APK="out/technical/tgws-plugin/zdt-d-tgws-plugin.apk"
+          TGWS_PLUGIN_MANIFEST="out/technical/tgws-plugin/tgws-plugin.json"
+          TGWS_PLUGIN_UPLOAD_MODE="skipped"
+          TGWS_PLUGIN_UPLOAD_ATTEMPTS="0"
 
           if [[ "${TG_WS_PROXY_PACKAGE_RESULT:-skipped}" != "success" ]]; then
             echo "::warning::tg-ws-proxy technical asset was not rebuilt: package job result=${TG_WS_PROXY_PACKAGE_RESULT:-unknown}. Existing Technical_Assets/tg_ws_proxy.zip is left untouched."
@@ -6325,6 +6851,28 @@ jobs:
               TG_WS_PROXY_UPLOAD_MODE="failed-clobber-only"
               TG_WS_PROXY_UPLOAD_ATTEMPTS="$OPTIONAL_UPLOAD_ATTEMPTS"
               echo "::warning::Existing Technical_Assets/tg_ws_proxy.zip was not deleted or replaced by fallback."
+            fi
+          fi
+
+
+          if [[ "${TGWS_PLUGIN_BUILD_RESULT:-skipped}" != "success" ]]; then
+            echo "::warning::TGWS plugin APK was not rebuilt: job result=${TGWS_PLUGIN_BUILD_RESULT:-unknown}. Existing Technical_Assets plugin assets are left untouched."
+          elif [[ ! -s "$TGWS_PLUGIN_APK" || ! -s "$TGWS_PLUGIN_MANIFEST" ]]; then
+            echo "::error::TGWS plugin technical assets are missing after successful build"
+          else
+            if gh release view "$TECHNICAL_TAG" >/dev/null 2>&1; then
+              gh release edit "$TECHNICAL_TAG" --title "$TECHNICAL_TITLE" --prerelease --latest=false
+            else
+              gh release create "$TECHNICAL_TAG" --target "$FULL_SHA" --title "$TECHNICAL_TITLE" --notes "Technical assets used by ZDT-D optional components." --prerelease --latest=false
+            fi
+            if upload_optional_asset_clobber_only "$TECHNICAL_TAG" "$TGWS_PLUGIN_APK#zdt-d-tgws-plugin.apk" "zdt-d-tgws-plugin.apk"; then
+              TGWS_PLUGIN_UPLOAD_MODE="$OPTIONAL_UPLOAD_MODE"
+              TGWS_PLUGIN_UPLOAD_ATTEMPTS="$OPTIONAL_UPLOAD_ATTEMPTS"
+            else
+              TGWS_PLUGIN_UPLOAD_MODE="failed-apk"
+            fi
+            if ! upload_optional_asset_clobber_only "$TECHNICAL_TAG" "$TGWS_PLUGIN_MANIFEST#tgws-plugin.json" "tgws-plugin.json"; then
+              TGWS_PLUGIN_UPLOAD_MODE="failed-manifest"
             fi
           fi
 
@@ -6391,7 +6939,7 @@ jobs:
           | Version code | \`${VERSION_CODE}\` |
           | Tag | \`${STABLE_TAG}\` |
           | Commit | [\`${SHORT_SHA}\`](${REPO_URL}/commit/${FULL_SHA}) |
-          | Workflow run | [#${{ github.run_number }}](${RUN_URL}) |
+          | Workflow run | [#${GITHUB_RUN_NUMBER}](${RUN_URL}) |
           | Build date | \`${BUILD_TIME_UTC}\` |
 
           <!-- ZDTD_APP_UPDATE_META_START
@@ -6462,7 +7010,7 @@ jobs:
           | Version code | \`${VERSION_CODE}\` |
           | Tag | \`${STABLE_TAG}\` |
           | Commit | [\`${SHORT_SHA}\`](${REPO_URL}/commit/${FULL_SHA}) |
-          | Workflow run | [#${{ github.run_number }}](${RUN_URL}) |
+          | Workflow run | [#${GITHUB_RUN_NUMBER}](${RUN_URL}) |
           | Build date | \`${BUILD_TIME_UTC}\` |
 
           <!-- ZDTD_APP_UPDATE_META_START
@@ -6533,3 +7081,82 @@ jobs:
               echo "Stable upload attempts: \`${STABLE_UPLOAD_ATTEMPTS}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish ready status
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-build-status.sh ready done ready "Release is ready"
+
+  publish_build_status_failure:
+    name: Publish failed build status
+    runs-on: ubuntu-latest
+    needs:
+      - build_gate
+      - module_core_ready
+      - module_binaries_ready
+      - module_zygisk_ready
+      - pack_module
+      - apk_tools_ready
+      - build_apk
+      - build_tgws_plugin_apk
+      - publish_service
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      needs.build_gate.outputs.should_build == 'true' &&
+      (needs.module_core_ready.result != 'success' ||
+       needs.module_binaries_ready.result != 'success' ||
+       needs.module_zygisk_ready.result != 'success' ||
+       needs.pack_module.result != 'success' ||
+       needs.apk_tools_ready.result != 'success' ||
+       needs.build_apk.result != 'success' ||
+       needs.build_tgws_plugin_apk.result != 'success' ||
+       needs.publish_service.result != 'success')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Determine failed stage
+        id: failed_stage
+        env:
+          CORE_RESULT: ${{ needs.module_core_ready.result }}
+          BINARIES_RESULT: ${{ needs.module_binaries_ready.result }}
+          ZYGISK_RESULT: ${{ needs.module_zygisk_ready.result }}
+          PACK_RESULT: ${{ needs.pack_module.result }}
+          APK_TOOLS_RESULT: ${{ needs.apk_tools_ready.result }}
+          APK_RESULT: ${{ needs.build_apk.result }}
+          TGWS_PLUGIN_RESULT: ${{ needs.build_tgws_plugin_apk.result }}
+          RELEASE_RESULT: ${{ needs.publish_service.result }}
+        run: |
+          set -euo pipefail
+          stage="binaries"
+          message="Native component build failed"
+          if [[ "$CORE_RESULT" == "success" && "$BINARIES_RESULT" == "success" && "$ZYGISK_RESULT" == "success" && "$APK_TOOLS_RESULT" == "success" ]]; then
+            if [[ "$PACK_RESULT" != "success" ]]; then
+              stage="archives"
+              message="Module archive packaging failed"
+            elif [[ "$APK_RESULT" != "success" ]]; then
+              stage="apk"
+              message="Android application build failed"
+            elif [[ "$TGWS_PLUGIN_RESULT" != "success" ]]; then
+              stage="apk"
+              message="TGWS plugin APK build failed"
+            elif [[ "$RELEASE_RESULT" != "success" ]]; then
+              stage="release"
+              message="GitHub release publishing failed"
+            fi
+          fi
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+          echo "message=$message" >> "$GITHUB_OUTPUT"
+
+      - name: Publish failed status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          bash scripts/ci/publish-build-status.sh
+          "${{ steps.failed_stage.outputs.stage }}"
+          failed
+          failed
+          "${{ steps.failed_stage.outputs.message }}"

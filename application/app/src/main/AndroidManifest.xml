@@ -1,22 +1,32 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <permission
+        android:name="com.android.zdtd.service.plugin.com.permission.CONTROL_TGWS"
+        android:protectionLevel="signature" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Needed to request installing APK updates downloaded by the app (online update). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="com.android.zdtd.service.plugin.com.permission.CONTROL_TGWS" />
     <!-- Android 13+ runtime permission (requested only when user enables notifications). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Needed to list all installed apps (incl. system) for the app picker on Android 11+. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+
+    <queries>
+        <package android:name="com.android.zdtd.service.plugin.com" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -95,6 +105,38 @@
             </intent-filter>
 
         </activity>
+
+        <activity
+            android:name=".NonRootActivity"
+            android:exported="false"
+            android:launchMode="singleTask" />
+
+
+        <receiver
+            android:name=".tgwsplugin.TgWsPluginInstallReceiver"
+            android:exported="false" />
+
+        <service
+            android:name=".NonRootTgWsService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-enabled non-root Telegram WS Proxy bound to the app-owned loopback interface" />
+        </service>
+
+        <service
+            android:name=".NonRootVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-initiated non-root VPN tunnel through app-owned proxy backends" />
+        </service>
 
         <activity
             android:name=".RemoteSetupActivity"

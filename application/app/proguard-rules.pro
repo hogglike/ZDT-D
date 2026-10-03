@@ -22,3 +22,9 @@
 -dontwarn com.jcraft.jsch.**
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
+
+# Invoked externally through root app_process; R8 must keep the class and main entry point.
+-keep class com.android.zdtd.service.dns.DnsResolverBridge { *; }
+
+# Non-root VPN bridge JNI entry point from the self-built hev-socks5-tunnel AAR.
+-keep class hev.htproxy.TProxyService { *; }

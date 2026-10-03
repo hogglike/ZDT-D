@@ -63,6 +63,7 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.io.IOException
 import java.security.MessageDigest
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.max
@@ -475,6 +476,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
   private var appUpdateCheckedThisSession: Boolean = false
   private var appUpdateDownloadJob: Job? = null
   private var appReleaseBuildPollJob: Job? = null
+  private var lastReleaseBuildApiFallbackAtMs: Long = 0L
+  private var lastReleaseReadyApiCheckAtMs: Long = 0L
+  private var lastReleaseReadyRunId: Long? = null
 
   private var pendingEnableDaemonNotification: Boolean = false
 
@@ -565,13 +569,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     }
   }
 
-  fun onAppStart(fromLauncher: Boolean) {
+  fun openRootSetup() {
+    startupJob?.cancel()
+    startupCompleted = false
+    _rootState.value = RootState.DENIED
+    _setup.update { state ->
+      state.copy(
+        step = SetupStep.ROOT,
+        installing = false,
+        installLog = "",
+        installProgressPercent = 0,
+        installProgressLabel = "",
+      )
+    }
+  }
+
+  fun onAppStart(fromLauncher: Boolean, forceRootSetup: Boolean = false) {
     if (didInit) return
     didInit = true
     startedFromLauncher = fromLauncher
 
     // Restore cached app-update banner state (persists across restarts).
     restoreCachedAppUpdateState()
+
+    if (forceRootSetup) {
+      openRootSetup()
+      return
+    }
 
     // If the user has already accepted the welcome screen (or completed setup earlier),
     // kick off a root check automatically on app start.
@@ -822,13 +846,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     AppReleaseBuildStageUi("ready", R.string.app_update_stage_ready, AppReleaseStageStatus.WAITING),
   )
 
-  private suspend fun fetchModulePropCommitSha(): String? {
-    val body = httpGetText("https://api.github.com/repos/GAME-OVER-op/ZDT-D/commits?path=module.prop&sha=main&per_page=1") ?: return null
-    val arr = runCatching { JSONArray(body) }.getOrNull() ?: return null
-    return arr.optJSONObject(0)?.optString("sha")?.takeIf { it.isNotBlank() }
+  private data class PublishedBuildStatus(
+    val overall: String,
+    val headSha: String?,
+    val versionCode: Int?,
+    val updatedAtMs: Long?,
+    val ui: AppReleaseBuildUi,
+  )
+
+  private fun parsePublishedStageStatus(value: String?): AppReleaseStageStatus = when (value?.lowercase(Locale.ROOT)) {
+    "running" -> AppReleaseStageStatus.RUNNING
+    "done" -> AppReleaseStageStatus.DONE
+    "failed" -> AppReleaseStageStatus.FAILED
+    else -> AppReleaseStageStatus.WAITING
   }
 
-  private suspend fun fetchRelevantBuildRun(expectedSha: String?, publishedSha: String?): WorkflowRunInfo? {
+  private suspend fun fetchPublishedBuildStatus(expectedVersionCode: Int?): PublishedBuildStatus? {
+    val cacheBust = System.currentTimeMillis()
+    val url = "https://github.com/GAME-OVER-op/ZDT-D/releases/download/Technical_Assets/zdt-build-status.json?ts=$cacheBust"
+    val body = httpGetText(url) ?: return null
+    val js = runCatching { JSONObject(body) }.getOrNull() ?: return null
+    if (js.optInt("schema", 0) != 1 || js.optString("workflow") != "build.yml") return null
+
+    val versionCode = js.optInt("versionCode", 0).takeIf { it > 0 }
+    if (expectedVersionCode != null && versionCode != expectedVersionCode) return null
+
+    val stagesJson = js.optJSONObject("stages") ?: return null
+    val stages = listOf(
+      AppReleaseBuildStageUi("binaries", R.string.app_update_stage_binaries, parsePublishedStageStatus(stagesJson.optString("binaries"))),
+      AppReleaseBuildStageUi("archives", R.string.app_update_stage_archives, parsePublishedStageStatus(stagesJson.optString("archives"))),
+      AppReleaseBuildStageUi("apk", R.string.app_update_stage_apk, parsePublishedStageStatus(stagesJson.optString("apk"))),
+      AppReleaseBuildStageUi("release", R.string.app_update_stage_release, parsePublishedStageStatus(stagesJson.optString("release"))),
+      AppReleaseBuildStageUi("ready", R.string.app_update_stage_ready, parsePublishedStageStatus(stagesJson.optString("ready"))),
+    )
+    val overall = js.optString("status").lowercase(Locale.ROOT)
+    if (overall !in setOf("preparing", "ready", "failed")) return null
+    val failed = overall == "failed" || stages.any { it.status == AppReleaseStageStatus.FAILED }
+    val runId = js.optLong("runId", 0L).takeIf { it > 0L }
+    val runUrl = js.optString("runUrl").takeIf { it.isNotBlank() }
+
+    return PublishedBuildStatus(
+      overall = overall,
+      headSha = js.optString("headSha").takeIf { it.isNotBlank() },
+      versionCode = versionCode,
+      updatedAtMs = js.optString("updatedAt").takeIf { it.isNotBlank() }?.let { raw ->
+        runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+      },
+      ui = AppReleaseBuildUi(
+        // "ready" in the workflow asset is only a signal to re-check stable release metadata.
+        // The update button is enabled only after the APK asset itself is confirmed.
+        status = if (failed) AppReleaseBuildStatus.FAILED else AppReleaseBuildStatus.PREPARING,
+        runId = runId,
+        runUrl = runUrl,
+        messageRes = if (failed) R.string.app_update_release_failed_body else R.string.app_update_release_preparing_body,
+        stages = stages,
+      ),
+    )
+  }
+
+  private suspend fun fetchRelevantBuildRun(publishedSha: String?): WorkflowRunInfo? {
     val body = httpGetText("https://api.github.com/repos/GAME-OVER-op/ZDT-D/actions/workflows/build.yml/runs?branch=main&per_page=10") ?: return null
     val arr = runCatching { JSONObject(body).optJSONArray("workflow_runs") }.getOrNull() ?: return null
     val runs = buildList {
@@ -843,13 +919,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
         ))
       }
     }.filter { it.id > 0L }
-    return runs.firstOrNull { expectedSha != null && it.headSha.equals(expectedSha, ignoreCase = true) }
-      ?: runs.firstOrNull { publishedSha == null || !it.headSha.equals(publishedSha, ignoreCase = true) }
+
+    // Prefer the newest active run on main. Release rebuilds often do not touch module.prop,
+    // so the live workflow must not be tied to the commit that last changed module.prop.
+    return runs.firstOrNull {
+      it.status in setOf("queued", "in_progress", "waiting", "requested", "pending") &&
+        (publishedSha == null || !it.headSha.equals(publishedSha, ignoreCase = true))
+    } ?: runs.firstOrNull { publishedSha == null || !it.headSha.equals(publishedSha, ignoreCase = true) }
       ?: runs.firstOrNull()
   }
 
   private suspend fun fetchWorkflowJobs(runId: Long): List<WorkflowJobInfo> {
-    val body = httpGetText("https" + "://api.github.com/repos/GAME-OVER-op/ZDT-D/actions/runs/${runId}/jobs?per_page=100") ?: return emptyList()
+    val body = httpGetText("https://api.github.com/repos/GAME-OVER-op/ZDT-D/actions/runs/${runId}/jobs?per_page=100") ?: return emptyList()
     val arr = runCatching { JSONObject(body).optJSONArray("jobs") }.getOrNull() ?: return emptyList()
     return buildList {
       for (i in 0 until arr.length()) {
@@ -875,14 +956,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     return AppReleaseStageStatus.WAITING
   }
 
-  private suspend fun fetchReleaseBuildUi(expectedSha: String?, publishedSha: String?): AppReleaseBuildUi {
-    val run = fetchRelevantBuildRun(expectedSha, publishedSha)
-      ?: return AppReleaseBuildUi(
-        status = AppReleaseBuildStatus.PREPARING,
-        messageRes = R.string.app_update_release_preparing_body,
-        stages = defaultReleaseBuildStages(AppReleaseStageStatus.RUNNING),
-      )
+  private suspend fun fetchReleaseBuildUi(publishedSha: String?): AppReleaseBuildUi? {
+    val run = fetchRelevantBuildRun(publishedSha) ?: return null
     val jobs = fetchWorkflowJobs(run.id)
+    // If the jobs endpoint is temporarily unavailable/rate-limited, preserve the last UI state.
+    if (jobs.isEmpty() && run.status != "queued") return null
 
     fun named(predicate: (String) -> Boolean): List<WorkflowJobInfo> = jobs.filter { predicate(it.name.lowercase(Locale.ROOT)) }
 
@@ -900,12 +978,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     val apk = named { it.contains("build apk") }
     val release = named { it.contains("publish service") }
 
-    fun stageStatus(jobsForStage: List<WorkflowJobInfo>): AppReleaseStageStatus = stageStatusForJobs(jobsForStage)
-
-    var binariesStatus = stageStatus(binaries)
-    var archivesStatus = stageStatus(archives)
-    var apkStatus = stageStatus(apk)
-    var releaseStatus = stageStatus(release)
+    var binariesStatus = stageStatusForJobs(binaries)
+    var archivesStatus = stageStatusForJobs(archives)
+    var apkStatus = stageStatusForJobs(apk)
+    var releaseStatus = stageStatusForJobs(release)
     val readyStatus = AppReleaseStageStatus.WAITING
 
     fun promotePreviousStages() {
@@ -923,9 +999,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
       }
     }
 
-    if (run.status == "queued" && binariesStatus == AppReleaseStageStatus.WAITING) {
-      binariesStatus = AppReleaseStageStatus.RUNNING
-    }
+    if (run.status == "queued" && binariesStatus == AppReleaseStageStatus.WAITING) binariesStatus = AppReleaseStageStatus.RUNNING
     promotePreviousStages()
     if (run.status in setOf("queued", "in_progress") &&
       listOf(binariesStatus, archivesStatus, apkStatus, releaseStatus).none { it == AppReleaseStageStatus.RUNNING || it == AppReleaseStageStatus.FAILED }
@@ -971,12 +1045,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     )
   }
 
+  private suspend fun refreshReleaseBuildStatus() {
+    val current = _appUpdate.value
+    val published = fetchPublishedBuildStatus(current.remoteVersionCode)
+    val now = System.currentTimeMillis()
+
+    if (published != null) {
+      _appUpdate.update { state ->
+        if (!state.bannerVisible || state.downloadUrl != null) state else state.copy(releaseBuild = published.ui)
+      }
+
+      if (published.overall == "ready") {
+        val shouldConfirmRelease = lastReleaseReadyRunId != published.ui.runId ||
+          now - lastReleaseReadyApiCheckAtMs >= 90_000L
+        if (shouldConfirmRelease) {
+          lastReleaseReadyRunId = published.ui.runId
+          lastReleaseReadyApiCheckAtMs = now
+          checkAppUpdateInternal(force = true, silent = true)
+        }
+      }
+
+      val ageMs = published.updatedAtMs?.let { now - it }
+      if (ageMs == null || ageMs in 0..180_000L) return
+      // A milestone can legitimately take several minutes. Once the published document
+      // becomes stale, use REST only as a slow fallback so a missed status upload cannot
+      // leave the UI stuck forever.
+    }
+
+    // REST is only a fallback. Unauthenticated GitHub REST requests have a low per-IP
+    // quota, so never poll workflow runs/jobs every few seconds.
+    if (now - lastReleaseBuildApiFallbackAtMs < 90_000L) return
+    lastReleaseBuildApiFallbackAtMs = now
+    val fallback = fetchReleaseBuildUi(publishedSha = null) ?: return
+    _appUpdate.update { state ->
+      if (!state.bannerVisible || state.downloadUrl != null) state else state.copy(releaseBuild = fallback)
+    }
+  }
+
   private fun startReleaseBuildPolling() {
     appReleaseBuildPollJob?.cancel()
     appReleaseBuildPollJob = viewModelScope.launch(Dispatchers.IO + ceh) {
       while (isActive && _appUpdate.value.bannerVisible && _appUpdate.value.releaseBuild.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED)) {
-        delay(15_000L)
-        checkAppUpdateInternal(force = true, silent = true)
+        delay(20_000L)
+        refreshReleaseBuildStatus()
       }
     }
   }
@@ -1148,8 +1259,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     root.setCachedAppUpdateFoundTs(now)
 
     if (!releaseReady) {
-      val expectedSha = fetchModulePropCommitSha()
-      val buildUi = fetchReleaseBuildUi(expectedSha = expectedSha, publishedSha = releaseMeta?.commit)
+      val publishedStatus = fetchPublishedBuildStatus(rc)
+      val buildUi = publishedStatus?.ui
+        ?: fetchReleaseBuildUi(publishedSha = releaseMeta?.commit)
+        ?: _appUpdate.value.releaseBuild.takeIf { it.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED) }
+        ?: AppReleaseBuildUi(
+          status = AppReleaseBuildStatus.PREPARING,
+          messageRes = R.string.app_update_release_preparing_body,
+          stages = defaultReleaseBuildStages(AppReleaseStageStatus.RUNNING),
+        )
       root.setCachedAppUpdateDownloadUrl(null)
       _appUpdate.update { it.copy(
         enabled = root.isAppUpdateCheckEnabled(),
@@ -1279,8 +1397,14 @@ private fun restoreCachedAppUpdateState() {
 fun onAppResumed() {
   // Re-sync banner state first so cached preparing states immediately enter live polling.
   restoreCachedAppUpdateState()
-  // Re-check in background on resume if cooldown is over, or force when a release build is visible.
-  maybeCheckAppUpdate(force = _appUpdate.value.bannerVisible && _appUpdate.value.releaseBuild.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED))
+  val liveBuildVisible = _appUpdate.value.bannerVisible &&
+    _appUpdate.value.releaseBuild.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED)
+  if (liveBuildVisible) {
+    // Refresh the workflow-published HTTPS status immediately without spending REST API quota.
+    launchIO { refreshReleaseBuildStatus() }
+  } else {
+    maybeCheckAppUpdate(force = false)
+  }
 }
 
 private fun clearDownloadedUpdateApk() {
@@ -3641,7 +3765,10 @@ if (mf.isNotBlank()) {
     val luaOut = File(extractDir, "lua")
     val okExtractBin = extractZipSingle(zipFile, { name -> name.endsWith("/binaries/android-arm64/nfqws2") }, binOut)
     val okExtractLua = extractZipTree(zipFile, subDirSuffix = "/lua/", outDir = luaOut)
-    if (!okExtractBin || !okExtractLua) {
+    val requiredLuaOk = listOf("zapret-lib.lua", "zapret-antidpi.lua").all { name ->
+      File(luaOut, name).let { it.isFile && it.length() > 0L }
+    }
+    if (!okExtractBin || !okExtractLua || !requiredLuaOk) {
       _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = str(R.string.prog_update_error_archive_changed), statusText = "")) }
       runCatching { zipFile.delete() }
       runCatching { extractDir.deleteRecursively() }
@@ -3649,13 +3776,21 @@ if (mf.isNotBlank()) {
     }
 
     _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(statusText = str(R.string.mv_auto_058), progressPercent = 100)) }
-    val okInstall = installZapret2(binOut, luaOut)
-    runCatching { zipFile.delete() }
-    runCatching { extractDir.deleteRecursively() }
-    if (!okInstall) {
-      _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = str(R.string.prog_update_error_install_failed), statusText = "")) }
+    val installResult = installZapret2(binOut, luaOut)
+    if (!installResult.success) {
+      val detail = installResult.detail.trim().take(1200)
+      val message = if (detail.isBlank()) {
+        str(R.string.prog_update_error_install_failed)
+      } else {
+        str(R.string.prog_update_error_install_failed) + "\n" + detail
+      }
+      _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = message, statusText = "")) }
+      // Keep the downloaded archive/extracted payload after a failed install for diagnostics.
+      // They are removed automatically at the start of the next nfqws2 update attempt.
       return
     }
+    runCatching { zipFile.delete() }
+    runCatching { extractDir.deleteRecursively() }
 
     val installed = runCatching {
       readInstalledVersionAny(
@@ -4496,70 +4631,152 @@ if (mf.isNotBlank()) {
   private suspend fun installOperaProxyBinary(src: File): Boolean =
     installBinaryAtomically(src, "/data/adb/modules/ZDT-D/bin/opera-proxy")
 
-  private suspend fun installZapret2(binSrc: File, luaSrcDir: File): Boolean {
-    val moduleRoot = "/data/adb/modules/ZDT-D"
+  private data class Zapret2InstallResult(
+    val success: Boolean,
+    val detail: String = "",
+  )
+
+  private suspend fun installZapret2(binSrc: File, luaSrcDir: File): Zapret2InstallResult {
+    val moduleRoot = when {
+      rootPathExists("/data/adb/modules/ZDT-D") -> "/data/adb/modules/ZDT-D"
+      rootPathExists("/data/adb/modules_update/ZDT-D") -> "/data/adb/modules_update/ZDT-D"
+      else -> return Zapret2InstallResult(false, "ZDT-D module directory was not found")
+    }
     val dstBin = "${moduleRoot}/bin/nfqws2"
     val luaParent = "${moduleRoot}/strategic"
     val dstLua = "${luaParent}/lua"
-    if (!rootPathExists(moduleRoot)) return false
     val nonce = System.nanoTime()
-    val newBin = "${dstBin}.zdt-new.${nonce}"
-    val oldBin = "${dstBin}.zdt-old.${nonce}"
-    val newLua = "${luaParent}/.lua.zdt-new.${nonce}"
-    val oldLua = "${luaParent}/.lua.zdt-old.${nonce}"
+    val stagedBin = "${dstBin}.zdt-new.${nonce}"
+    val backupBin = "${dstBin}.zdt-old.${nonce}"
+    val stagedLua = "${luaParent}/.lua.zdt-new.${nonce}"
+    val backupLua = "${luaParent}/.lua.zdt-old.${nonce}"
+    val customLuaFiles = listOf("zapret-sni.lua", "zapret-wgobfs.lua")
+
+    if (!binSrc.isFile || binSrc.length() <= 0L) {
+      return Zapret2InstallResult(false, "Extracted nfqws2 binary is empty")
+    }
+    if (!File(luaSrcDir, "zapret-lib.lua").isFile || !File(luaSrcDir, "zapret-antidpi.lua").isFile) {
+      return Zapret2InstallResult(false, "Required zapret2 Lua files are missing")
+    }
+
+    val preserveCustomLua = customLuaFiles.joinToString("\n") { name ->
+      val src = "${dstLua}/${name}"
+      val dst = "${stagedLua}/${name}"
+      "if test -f ${shQuote(src)}; then cp -f ${shQuote(src)} ${shQuote(dst)} || { echo ${shQuote("Failed to preserve $name")} >&2; exit 1; }; fi"
+    }
+
     val script = """
       set -e
-      mkdir -p ${shQuote(moduleRoot + "/bin")} ${shQuote(luaParent)} 2>/dev/null || true
-      new_bin=${shQuote(newBin)}
-      old_bin=${shQuote(oldBin)}
-      new_lua=${shQuote(newLua)}
-      old_lua=${shQuote(oldLua)}
-      cleanup() {
-        rm -f "${'$'}new_bin" 2>/dev/null || true
-        rm -rf "${'$'}new_lua" 2>/dev/null || true
-      }
-      trap cleanup EXIT HUP INT TERM
-
-      cp -f ${shQuote(binSrc.absolutePath)} "${'$'}new_bin" 2>/dev/null || cat ${shQuote(binSrc.absolutePath)} > "${'$'}new_bin"
-      test -s "${'$'}new_bin"
-      chmod 0755 "${'$'}new_bin" 2>/dev/null || true
-
-      rm -rf "${'$'}new_lua" "${'$'}old_lua" 2>/dev/null || true
-      mkdir -p "${'$'}new_lua"
-      if test -d ${shQuote(luaSrcDir.absolutePath)}; then
-        cp -r ${shQuote(luaSrcDir.absolutePath)}/. "${'$'}new_lua"/
-      fi
-      find "${'$'}new_lua" -type f -exec chmod 0755 {} \; 2>/dev/null || true
-      find "${'$'}new_lua" -type d -exec chmod 0755 {} \; 2>/dev/null || true
-
+      dst_bin=${shQuote(dstBin)}
+      dst_lua=${shQuote(dstLua)}
+      staged_bin=${shQuote(stagedBin)}
+      backup_bin=${shQuote(backupBin)}
+      staged_lua=${shQuote(stagedLua)}
+      backup_lua=${shQuote(backupLua)}
       had_bin=0
       had_lua=0
-      if test -e ${shQuote(dstBin)}; then
-        mv ${shQuote(dstBin)} "${'$'}old_bin"
+      mutated=0
+
+      cleanup_stage() {
+        rm -f "${'$'}staged_bin" "${'$'}backup_bin" 2>/dev/null || true
+        rm -rf "${'$'}staged_lua" "${'$'}backup_lua" 2>/dev/null || true
+      }
+
+      rollback() {
+        if test "${'$'}mutated" != 1; then return; fi
+        echo "nfqws2 update: rolling back previous files" >&2
+        rm -f "${'$'}dst_bin" 2>/dev/null || true
+        rm -rf "${'$'}dst_lua" 2>/dev/null || true
+        if test "${'$'}had_bin" = 1 && test -s "${'$'}backup_bin"; then
+          cp -f "${'$'}backup_bin" "${'$'}dst_bin" 2>/dev/null || cat "${'$'}backup_bin" > "${'$'}dst_bin"
+          chmod 0755 "${'$'}dst_bin" 2>/dev/null || true
+        fi
+        if test "${'$'}had_lua" = 1 && test -d "${'$'}backup_lua"; then
+          mkdir -p "${'$'}dst_lua"
+          cp -r "${'$'}backup_lua"/. "${'$'}dst_lua"/ 2>/dev/null || true
+          find "${'$'}dst_lua" -type f -name '*.lua' -exec chmod 0644 {} \; 2>/dev/null || true
+        fi
+      }
+
+      fail_install() {
+        echo "nfqws2 update failed: ${'$'}1" >&2
+        rollback
+        cleanup_stage
+        exit 1
+      }
+
+      mkdir -p ${shQuote(moduleRoot + "/bin")} ${shQuote(luaParent)}
+      cleanup_stage
+
+      echo "nfqws2 update: staging binary"
+      if ! cp -f ${shQuote(binSrc.absolutePath)} "${'$'}staged_bin" 2>/dev/null; then
+        cat ${shQuote(binSrc.absolutePath)} > "${'$'}staged_bin" || fail_install "unable to stage nfqws2 binary"
+      fi
+      test -s "${'$'}staged_bin" || fail_install "staged nfqws2 binary is empty"
+      chmod 0755 "${'$'}staged_bin" || fail_install "unable to mark nfqws2 executable"
+
+      echo "nfqws2 update: staging upstream Lua files"
+      mkdir -p "${'$'}staged_lua" || fail_install "unable to create Lua staging directory"
+      cp -r ${shQuote(luaSrcDir.absolutePath)}/. "${'$'}staged_lua"/ || fail_install "unable to stage zapret2 Lua files"
+      $preserveCustomLua
+      test -s "${'$'}staged_lua/zapret-lib.lua" || fail_install "zapret-lib.lua is missing after staging"
+      test -s "${'$'}staged_lua/zapret-antidpi.lua" || fail_install "zapret-antidpi.lua is missing after staging"
+      find "${'$'}staged_lua" -type f -name '*.lua' -exec chmod 0644 {} \; 2>/dev/null || true
+      find "${'$'}staged_lua" -type d -exec chmod 0755 {} \; 2>/dev/null || true
+
+      echo "nfqws2 update: creating rollback copy"
+      if test -e "${'$'}dst_bin"; then
+        cp -f "${'$'}dst_bin" "${'$'}backup_bin" 2>/dev/null || cat "${'$'}dst_bin" > "${'$'}backup_bin" || fail_install "unable to back up current nfqws2 binary"
+        test -s "${'$'}backup_bin" || fail_install "nfqws2 binary backup is empty"
         had_bin=1
       fi
-      if test -d ${shQuote(dstLua)}; then
-        if ! mv ${shQuote(dstLua)} "${'$'}old_lua"; then
-          if test "${'$'}had_bin" = 1 && test -e "${'$'}old_bin"; then mv "${'$'}old_bin" ${shQuote(dstBin)}; fi
-          exit 1
-        fi
+      if test -d "${'$'}dst_lua"; then
+        mkdir -p "${'$'}backup_lua" || fail_install "unable to create Lua backup directory"
+        cp -r "${'$'}dst_lua"/. "${'$'}backup_lua"/ || fail_install "unable to back up current Lua files"
         had_lua=1
       fi
 
-      if mv "${'$'}new_bin" ${shQuote(dstBin)} && mv "${'$'}new_lua" ${shQuote(dstLua)}; then
-        rm -f "${'$'}old_bin" 2>/dev/null || true
-        rm -rf "${'$'}old_lua" 2>/dev/null || true
-        trap - EXIT HUP INT TERM
-        exit 0
-      fi
+      mutated=1
+      echo "nfqws2 update: installing binary"
+      mv -f "${'$'}staged_bin" "${'$'}dst_bin" || fail_install "unable to replace nfqws2 binary"
+      chmod 0755 "${'$'}dst_bin" || fail_install "unable to set nfqws2 permissions"
+      test -x "${'$'}dst_bin" || fail_install "installed nfqws2 is not executable"
+      test -s "${'$'}dst_bin" || fail_install "installed nfqws2 is empty"
 
-      rm -f ${shQuote(dstBin)} 2>/dev/null || true
-      rm -rf ${shQuote(dstLua)} 2>/dev/null || true
-      if test "${'$'}had_bin" = 1 && test -e "${'$'}old_bin"; then mv "${'$'}old_bin" ${shQuote(dstBin)}; fi
-      if test "${'$'}had_lua" = 1 && test -d "${'$'}old_lua"; then mv "${'$'}old_lua" ${shQuote(dstLua)}; fi
-      exit 1
+      echo "nfqws2 update: installing Lua files"
+      rm -rf "${'$'}dst_lua" || fail_install "unable to replace Lua directory"
+      mkdir -p "${'$'}dst_lua" || fail_install "unable to create Lua directory"
+      cp -r "${'$'}staged_lua"/. "${'$'}dst_lua"/ || fail_install "unable to install zapret2 Lua files"
+      find "${'$'}dst_lua" -type f -name '*.lua' -exec chmod 0644 {} \; 2>/dev/null || true
+      find "${'$'}dst_lua" -type d -exec chmod 0755 {} \; 2>/dev/null || true
+      test -s "${'$'}dst_lua/zapret-lib.lua" || fail_install "installed zapret-lib.lua is missing"
+      test -s "${'$'}dst_lua/zapret-antidpi.lua" || fail_install "installed zapret-antidpi.lua is missing"
+
+      for custom_lua in zapret-sni.lua zapret-wgobfs.lua; do
+        if test -f "${'$'}backup_lua/${'$'}custom_lua" && ! test -s "${'$'}dst_lua/${'$'}custom_lua"; then
+          fail_install "custom ${'$'}custom_lua was not preserved"
+        fi
+      done
+
+      mutated=0
+      cleanup_stage
+      echo "nfqws2 update: installation completed"
     """.trimIndent()
-    return root.execRootSh(script).isSuccess
+
+    val result = root.execRootSh(script)
+    val detail = (result.err + result.out)
+      .map { it.trim() }
+      .filter { it.isNotBlank() }
+      .takeLast(12)
+      .joinToString("\n")
+      .take(1200)
+    if (!result.isSuccess) {
+      android.util.Log.e(
+        "ZDTD-Updates",
+        "nfqws2 install failed (code=${result.code}, root=$moduleRoot): ${detail.ifBlank { "no shell output" }}",
+      )
+    }
+    return Zapret2InstallResult(result.isSuccess, detail)
   }
 
 
