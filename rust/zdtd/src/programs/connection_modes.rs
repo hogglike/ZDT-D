@@ -287,15 +287,19 @@ fn test_node(g:u64,n:&Node,settings:&ModeSettings) -> Result<ProbeReport> {
 }
 fn node_delay(n:&Node,c:&Config) -> (Option<u64>,String) {
     let attempt=(||->Result<u64> {
-        let mut url=reqwest::Url::parse(&format!("http://127.0.0.1:{CONTROL_PORT}/proxies/{}/delay",n.key))?;
-        url.query_pairs_mut().append_pair("url",&c.latency_url).append_pair("timeout",&(c.latency_timeout_seconds*1000).to_string());
-        let response=Client::builder().no_proxy().timeout(Duration::from_secs(c.latency_timeout_seconds+2)).build()?.get(url)
-            .bearer_auth(crate::settings::read_or_create_token()?).send()?;
-        let code=response.status();let body:Value=serde_json::from_str(&response.text()?)?;
-        if !code.is_success() {bail!("{}",body["message"].as_str().unwrap_or("Сервер не ответил на URL-тест"));}
-        body["delay"].as_u64().context("Ядро не вернуло задержку")
+        // TEST is isolated from MODE. Use the same validated HTTPS transport as
+        // mode checks: Clash API's delay handler loses the certificate context.
+        select("TEST",&n.key)?;
+        let start=Instant::now();
+        let client=Client::builder().no_proxy().proxy(Proxy::all(format!("http://127.0.0.1:{TEST_PORT}"))?)
+            .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(c.latency_timeout_seconds.min(8)))
+            .timeout(Duration::from_secs(c.latency_timeout_seconds)).pool_max_idle_per_host(0).build()?;
+        let response=client.head(&c.latency_url).header("cache-control","no-cache").send()?;
+        let code=response.status().as_u16();
+        if !mode_policy::http_ok(code,0) {bail!("HTTP {code} на {}",c.latency_url);}
+        Ok(start.elapsed().as_millis().max(1) as u64)
     })();
-    match attempt {Ok(ms)=>(Some(ms.max(1)),String::new()),Err(e)=>(None,format!("{e:#}").chars().take(600).collect())}
+    match attempt {Ok(ms)=>(Some(ms),String::new()),Err(e)=>(None,format!("{e:#}").chars().take(600).collect())}
 }
 fn safe_core_log(all:&[Node]) -> String {
     fn redact(value:&Value,text:&mut String) {

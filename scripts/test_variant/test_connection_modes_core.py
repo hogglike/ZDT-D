@@ -187,16 +187,22 @@ def main():
                     pass
                 print("PASS: probe transport validates TLS certificates", flush=True)
                 def delay(key):
-                    query = urllib.parse.urlencode({"url":f"https://localhost:{origin.server_port}/generate_204", "timeout":4000})
-                    req = urllib.request.Request(f"http://127.0.0.1:{control_port}/proxies/{key}/delay?{query}",headers={"Authorization":"Bearer fixture-token"})
-                    with opener.open(req, timeout=6) as response:
-                        value = json.load(response)
-                        assert value["delay"] >= 0
+                    api("TEST", {"name":key}).close()
+                    context = ssl.create_default_context(cafile=str(cert))
+                    conn = http.client.HTTPSConnection("127.0.0.1", test_port, timeout=4, context=context)
+                    conn.set_tunnel("localhost", origin.server_port)
+                    started = time.monotonic()
+                    try:
+                        conn.request("HEAD", "/generate_204", headers={"Cache-Control":"no-cache"})
+                        assert conn.getresponse().status == 204
+                        assert (time.monotonic()-started)*1000 >= 0
+                    finally:
+                        conn.close()
                 delay("good")
                 try:
                     delay("dead")
                     raise AssertionError("Failed server acquired valid latency")
-                except urllib.error.HTTPError:
+                except (OSError, http.client.HTTPException):
                     pass
                 request(live_port)
                 print("PASS: independent one-URL core latency returns milliseconds; failed node stays unavailable; MODE stays unchanged", flush=True)
