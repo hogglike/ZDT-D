@@ -310,6 +310,7 @@ fn safe_core_log(all:&[Node]) -> String {
     if let Ok(token)=crate::settings::read_or_create_token(){if !token.is_empty(){text=text.replace(&token,"<скрыто>");}}
     text.chars().take(8000).collect()
 }
+pub fn diagnostics() -> Result<Value> { Ok(json!({"ok":true,"version":"4.2.0-mod26","status":status(),"core_log":safe_core_log(&nodes()?)})) }
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}
     if !nodes()?.iter().any(|n|n.key==key && n.outbound.is_some()){bail!("Сервер удалён или не поддерживается");}

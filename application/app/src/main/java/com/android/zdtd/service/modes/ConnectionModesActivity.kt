@@ -101,11 +101,17 @@ class ConnectionModesActivity : ComponentActivity() {
             Text("${if (result.optBoolean("ok")) "✓" else "×"} ${result.optString("url")}\n${if (result.isNull("http_status")) "Без HTTP-ответа" else "HTTP ${result.optInt("http_status")}"} · ${result.optLong("ms")} мс${if (result.optString("error").isBlank()) "" else "\n${result.optString("error")}"}", style = MaterialTheme.typography.bodySmall)
           }
         }
-        if (status.optString("state") == "error") OutlinedButton(onClick = {
-          val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-          clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod26", JSONObject().put("version", "4.2.0-mod26").put("status", status).toString(2)))
-          message = "Диагностика скопирована; ссылка подписки и ключи серверов не включены"
-        }) { Text("Скопировать диагностику ошибки") }
+        OutlinedButton(onClick = {
+          scope.launch {
+            try {
+              val report = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes/diagnostics") }
+              check(report.optBoolean("ok")) { "Не удалось прочитать диагностику" }
+              val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod26", report.toString(2)))
+              message = "Диагностика скопирована; ссылка подписки и ключи серверов не включены"
+            } catch (e: Exception) { message = "Не удалось скопировать: ${e.message}" }
+          }
+        }) { Text("Скопировать диагностику подключения") }
         if (status.optInt("total") > 0 && status.optString("state") == "connecting") Text("Попытка ${status.optInt("attempt")} из ${status.optInt("total")} · круг ${status.optInt("round")}")
         OutlinedButton(onClick = { ModeClient.switch(this@ConnectionModesActivity, "") }, modifier = Modifier.fillMaxWidth()) { Text("Отключить режим") }
         HorizontalDivider()
