@@ -13,9 +13,10 @@ Continue the working mod24 DNS/hotspot and mod25 subscription modes.
   followed. TLS website verification remains enabled.
 - Each failed attempt reports individual URL/status/time/error, plus a bounded
   core log with proxy credentials and API token redacted. Copy diagnostic output
-  from the error screen, never share the raw subscription or runtime config.
-- Server latency uses the core's individual outbound URL-delay endpoint and one
-  globally configurable HTTPS address/timeout. It is separate from mode checks;
+  from the connection screen, never share the raw subscription or runtime config.
+- Server latency uses a validated HTTPS HEAD request through the isolated TEST
+  outbound and one globally configurable HTTPS address/timeout. The controller's
+  delay endpoint loses the certificate context, so it is not used. It is separate from mode checks;
   it never switches MODE. Unavailable nodes show n/d and the URL-test error.
 - A widget's launcher owns long press. A "Сервер ▾" control under each mode opens
   the picker, saves the choice, and activates via the existing Wi-Fi confirmation.
