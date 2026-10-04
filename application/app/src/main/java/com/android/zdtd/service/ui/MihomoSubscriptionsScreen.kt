@@ -371,6 +371,7 @@ fun SubscriptionsScreen(
   var items by remember { mutableStateOf(emptyList<MihomoSubscriptionItemUi>()) }
   var editor by remember { mutableStateOf<MihomoSubscriptionDraft?>(null) }
   var editorLoading by remember { mutableStateOf(false) }
+  var search by remember { mutableStateOf("") }
   var deleting by remember { mutableStateOf<MihomoSubscriptionItemUi?>(null) }
   var busyId by remember { mutableStateOf<String?>(null) }
   var nodesFor by remember { mutableStateOf<MihomoSubscriptionItemUi?>(null) }
@@ -662,7 +663,10 @@ fun SubscriptionsScreen(
         )
       }
     }
-    items(items, key = { it.id }) { item ->
+    item {
+      OutlinedTextField(search, { search = it }, label = { Text("Поиск подписки") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    items(items.filter { it.name.contains(search, true) }, key = { it.id }) { item ->
       MihomoSubscriptionCard(
         item = item,
         busy = busyId == item.id || item.refreshing,
@@ -828,6 +832,9 @@ private fun MihomoSubscriptionCard(
         Text(stringResource(R.string.mihomo_sub_updated_value, formatEpoch(status.lastUpdatedAt)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f))
       }
 
+      if (item.enabled && status.nextUpdateAt > 0L) {
+        Text("Следующее автообновление: ${formatEpoch(status.nextUpdateAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
+      }
       Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = onOpenNodes, enabled = !busy && status.serverCount > 0) {
           Text(stringResource(R.string.subscription_view_servers))
@@ -869,6 +876,7 @@ private fun SubscriptionNodesDialog(
   onCopy: (SubscriptionNodeUi) -> Unit,
   onDetach: (SubscriptionLinkUi) -> Unit,
 ) {
+  var search by remember(subscription.id) { mutableStateOf("") }
   AlertDialog(
     onDismissRequest = onDismiss,
     title = {
@@ -891,6 +899,9 @@ private fun SubscriptionNodesDialog(
           modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+          item(key = "search") {
+            OutlinedTextField(search, { search = it }, label = { Text("Поиск по имени, адресу или протоколу") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+          }
           val missing = data.links.filter { it.missing }
           if (missing.isNotEmpty()) {
             item(key = "missing") {
@@ -916,7 +927,8 @@ private fun SubscriptionNodesDialog(
           if (data.nodes.isEmpty()) {
             item { Text(stringResource(R.string.subscription_nodes_empty)) }
           }
-          items(data.nodes, key = { it.id }) { node ->
+          items(data.nodes.filter { it.name.contains(search, true) || it.server.contains(search, true) || it.protocol.contains(search, true) }, key = { it.id }) { node ->
+            var details by remember(node.id) { mutableStateOf(false) }
             val links = data.links.filter { it.nodeId == node.id && !it.missing }
             Surface(
               shape = MaterialTheme.shapes.large,
@@ -955,6 +967,8 @@ private fun SubscriptionNodesDialog(
                     }
                   }
                 }
+                TextButton(onClick = { details = !details }) { Text("Импорт и конфигурация ${if (details) "▴" else "▾"}") }
+                if (details) {
                 node.targets.forEach { target ->
                   OutlinedButton(onClick = { onImport(node, target) }, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.subscription_add_to_target, subscriptionTargetLabel(target)))
@@ -964,6 +978,7 @@ private fun SubscriptionNodesDialog(
                   Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                   Spacer(Modifier.width(6.dp))
                   Text(stringResource(R.string.subscription_copy_config))
+                }
                 }
                 if (node.targets.isEmpty()) {
                   Text(
@@ -1200,6 +1215,7 @@ private fun MihomoSubscriptionEditorDialog(
 ) {
   val context = LocalContext.current
   var state by remember(draft) { mutableStateOf(draft) }
+  var advanced by remember(draft) { mutableStateOf(false) }
   val valid = state.name.trim().isNotBlank() &&
     (state.url.startsWith("http://") || state.url.startsWith("https://")) &&
     (!state.hwidEnabled || state.hwid.trim().isNotBlank()) &&
@@ -1220,6 +1236,28 @@ private fun MihomoSubscriptionEditorDialog(
         item {
           OutlinedTextField(state.url, { state = state.copy(url = it.trim().take(2048)) }, label = { Text(stringResource(R.string.mihomo_sub_url)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         }
+        item { Text("Автообновление", style = MaterialTheme.typography.titleSmall) }
+        item {
+          SubscriptionToggleRow(stringResource(R.string.mihomo_sub_remote_interval), stringResource(R.string.mihomo_sub_remote_interval_desc), state.useRemoteInterval) { state = state.copy(useRemoteInterval = it) }
+        }
+        item {
+          OutlinedTextField(
+            state.updateIntervalMinutes,
+            { state = state.copy(updateIntervalMinutes = it.filter(Char::isDigit).take(5)) },
+            label = { Text(stringResource(R.string.mihomo_sub_fallback_interval)) },
+            supportingText = { Text(stringResource(R.string.mihomo_sub_interval_hint)) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+          )
+        }
+        item {
+          TextButton(onClick = { advanced = !advanced }) {
+            Text("Дополнительные параметры${if (state.basicEnabled || state.hwidEnabled || state.customHeadersText.isNotBlank()) " · настроены" else ""} ${if (advanced) "▴" else "▾"}")
+          }
+          Text("HWID, авторизация и заголовки. Сохранённые значения продолжают действовать, даже когда раздел свёрнут.", style = MaterialTheme.typography.bodySmall)
+        }
+        if (advanced) {
         item {
           SubscriptionToggleRow(stringResource(R.string.mihomo_sub_basic_auth), stringResource(R.string.mihomo_sub_basic_auth_desc), state.basicEnabled) { state = state.copy(basicEnabled = it) }
         }
@@ -1287,20 +1325,8 @@ private fun MihomoSubscriptionEditorDialog(
             maxLines = 7,
           )
         }
-        item {
-          SubscriptionToggleRow(stringResource(R.string.mihomo_sub_remote_interval), stringResource(R.string.mihomo_sub_remote_interval_desc), state.useRemoteInterval) { state = state.copy(useRemoteInterval = it) }
         }
-        item {
-          OutlinedTextField(
-            state.updateIntervalMinutes,
-            { state = state.copy(updateIntervalMinutes = it.filter(Char::isDigit).take(5)) },
-            label = { Text(stringResource(R.string.mihomo_sub_fallback_interval)) },
-            supportingText = { Text(stringResource(R.string.mihomo_sub_interval_hint)) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-          )
-        }
+
       }
     },
     confirmButton = {
@@ -1434,3 +1460,4 @@ internal fun MihomoProfileSubscriptionsTab(
     }
   }
 }
+

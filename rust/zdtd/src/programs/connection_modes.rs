@@ -63,6 +63,8 @@ pub struct ModeSettings {
     pub selected_key: String,
     pub last_key: String,
     pub preferred_key: String,
+    pub auto_enabled: bool,
+    pub manual_override: bool,
     pub check_enabled: bool,
     pub check_sites: Vec<CheckTarget>,
     pub min_success: usize,
@@ -70,8 +72,19 @@ pub struct ModeSettings {
 }
 impl Default for ModeSettings {
     fn default() -> Self { Self { apps: vec![], app_policy: "selected".into(), node_keys: vec![],
-        name_filters: vec![], subscription_ids: vec![], selected_key: String::new(), last_key: String::new(), preferred_key: String::new(), check_enabled:true,
+        name_filters: vec![], subscription_ids: vec![], selected_key: String::new(), last_key: String::new(), preferred_key: String::new(), auto_enabled:false, manual_override:false, check_enabled:true,
         check_sites:["https://www.gstatic.com/generate_204","https://cp.cloudflare.com/generate_204","https://www.microsoft.com/"].iter().map(|url|CheckTarget{url:(*url).into(),..CheckTarget::default()}).collect(), min_success:2,timeout_seconds:8 } }
+}
+impl ModeSettings {
+    fn choose(&mut self, mode:&str, key:&str) -> Result<()> {
+        if key=="auto" {
+            if mode!="white" && !self.auto_enabled {bail!("Сначала включи «Несколько серверов» в настройках режима");}
+            if !self.check_enabled {bail!("Для автоперебора включи проверку сайтов в настройках режима");}
+            self.manual_override=false;
+        } else {self.selected_key=key.into();self.manual_override=true;}
+        self.preferred_key.clear();
+        Ok(())
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -142,6 +155,10 @@ pub fn snapshot() -> Result<Value> {
     Ok(json!({"ok":true,"config":config()?,"status":status(),"nodes":catalog,"dns_apps":dns}))
 }
 fn candidates(settings: &ModeSettings, all: &[Node], white: bool) -> Vec<Node> {
+    if !mode_policy::automatic(if white {"white"} else {"normal"},settings.auto_enabled,settings.manual_override) {
+        let key=if settings.selected_key.is_empty(){&settings.last_key}else{&settings.selected_key};
+        return all.iter().find(|n|&n.key==key && n.outbound.is_some()).cloned().into_iter().collect();
+    }
     let mut used = BTreeSet::new();
     let mut out = Vec::new();
     // Explicit choices retain the user's priority order.
@@ -150,16 +167,12 @@ fn candidates(settings: &ModeSettings, all: &[Node], white: bool) -> Vec<Node> {
             if used.insert(n.key.clone()) { out.push(n.clone()); }
         }
     }
-    if white {
+    {
         for n in all.iter().filter(|n| n.outbound.is_some()
             && (settings.subscription_ids.is_empty() || settings.subscription_ids.contains(&n.subscription_id))
             && mode_policy::matches_name(&n.name, &settings.name_filters)) {
             if used.insert(n.key.clone()) { out.push(n.clone()); }
         }
-    } else {
-        out.clear();
-        let key = if settings.selected_key.is_empty() { &settings.last_key } else { &settings.selected_key };
-        if let Some(n) = all.iter().find(|n| &n.key==key && n.outbound.is_some()) { out.push(n.clone()); }
     }
     out
 }
@@ -324,15 +337,14 @@ fn safe_core_log(all:&[Node]) -> String {
 }
 pub fn diagnostics() -> Result<Value> {
     let bootstrap:Value=fs::read_to_string(root().join("bootstrap.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!([]));
-    Ok(json!({"ok":true,"version":"4.2.0-mod28","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
+    Ok(json!({"ok":true,"version":"4.2.0-mod29","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
 }
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}
-    if !nodes()?.iter().any(|n|n.key==key && n.outbound.is_some()){bail!("Сервер удалён или не поддерживается");}
+    if key!="auto" && !nodes()?.iter().any(|n|n.key==key && n.outbound.is_some()){bail!("Сервер удалён или не поддерживается");}
     let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut c=config()?;let settings=c.modes.get_mut(mode).context("Mode settings missing")?;
-    if mode=="white" {settings.preferred_key=key.into();if !settings.node_keys.iter().any(|v|v==key){settings.node_keys.insert(0,key.into());}}
-    else {settings.selected_key=key.into();}
+    settings.choose(mode,key)?;
     // Saving a picker selection does not activate it before Wi-Fi confirmation.
     save_config(&c)
 }
@@ -355,12 +367,13 @@ fn connect(g:u64,mode:&str,all:&[Node]) -> Result<()> {
     let list=candidates(&settings,all,mode=="white");
     if list.is_empty() { bail!("Нет подходящих серверов. Выбери сервер или правило имени в настройках режима"); }
     let keys:Vec<String>=list.iter().map(|n|n.key.clone()).collect();
+    let automatic=mode_policy::automatic(mode,settings.auto_enabled,settings.manual_override);
     let preferred=if settings.preferred_key.is_empty(){&settings.last_key}else{&settings.preferred_key};
-    let attempts=if mode=="white" && settings.check_enabled { mode_policy::attempts(&keys,preferred) } else if mode=="white" {mode_policy::attempts(&keys,preferred).into_iter().take(1).collect()} else {keys.clone()};
+    let attempts=mode_policy::connection_attempts(&keys,preferred,automatic,settings.check_enabled);
     for (i,key) in attempts.iter().enumerate() {
         if !current(g) { return Ok(()); }
         let n=list.iter().find(|n|&n.key==key).unwrap();
-        update(g,json!({"server":n.name,"key":n.key,"round":i/list.len()+1,"attempt":i+1,"total":attempts.len(),"message":format!("Проверка {} · круг {}",n.name,i/list.len()+1)}));
+        update(g,json!({"server":n.name,"key":n.key,"automatic":automatic,"round":i/list.len()+1,"attempt":i+1,"total":attempts.len(),"message":format!("Проверка {} · круг {}",n.name,i/list.len()+1)}));
         let report=if settings.check_enabled {Some(test_node(g,n,&settings)?)}else{None};
         let delay=report.as_ref().and_then(|r|r.delay);
         if let Some(report)=&report {update(g,json!({"probe_results":report.results,"required_success":settings.min_success,"core_log":if delay.is_none(){safe_core_log(all)}else{String::new()}}));}
@@ -378,12 +391,12 @@ fn connect(g:u64,mode:&str,all:&[Node]) -> Result<()> {
             // Close this instance's old connections: some sing-box versions do
             // not interrupt routed selector connections despite the flag.
             let _=Client::builder().no_proxy().timeout(Duration::from_secs(2)).build()?.delete(format!("http://127.0.0.1:{CONTROL_PORT}/connections")).bearer_auth(crate::settings::read_or_create_token()?).send();
-            update(g,json!({"state":"connected","server":n.name,"key":n.key,"delay_ms":delay,"verified":settings.check_enabled,"app_count":count,"message":if let Some(ms)=delay{format!("{} · {} мс · приложений {}",n.name,ms,count)}else{format!("{} · применено без проверки сайтов · приложений {}",n.name,count)}}));
+            update(g,json!({"state":"connected","server":n.name,"key":n.key,"delay_ms":delay,"verified":settings.check_enabled,"app_count":count,"message":if let Some(ms)=delay{format!("{}{} · {} мс · приложений {}",if automatic {"Авто · "} else {""},n.name,ms,count)}else{format!("{} · применено без проверки сайтов · приложений {}",n.name,count)}}));
             return Ok(());
         }
     }
     let _=cleanup_routes();
-    bail!("{}",if mode=="white" {"Два круга завершены: рабочий сервер не найден. См. результаты сайтов"} else {"Сервер не прошёл настроенную проверку. См. результаты сайтов или отключи проверку этого режима"})
+    bail!("{}",if automatic && settings.check_enabled {"Два круга завершены: рабочий сервер не найден. См. результаты сайтов"} else {"Сервер не прошёл настроенную проверку. См. результаты сайтов или отключи проверку этого режима"})
 }
 fn clear_active() {
     let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());

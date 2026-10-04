@@ -14,4 +14,11 @@ object ModeState {
     else -> WHITE
   }
   fun title(mode: String) = when (mode) { "white" -> "Белый"; "browser" -> "Браузер"; else -> "Обычный" }
+  /** Missing measurements stay neutral; unsupported servers never look failed. */
+  fun nodeRank(supported: Boolean, measured: Boolean, delay: Long?): Int = when {
+    !supported -> 3
+    !measured -> 1
+    delay != null -> 0
+    else -> 2
+  }
 }

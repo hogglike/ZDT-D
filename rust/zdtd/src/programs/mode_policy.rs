@@ -18,6 +18,16 @@ pub fn attempts(candidates: &[String], last: &str) -> Vec<String> {
     ordered.iter().chain(ordered.iter()).cloned().collect()
 }
 
+/// Manual selection pins one server without destroying the saved auto list.
+pub fn automatic(mode: &str, enabled: bool, manual_override: bool) -> bool {
+    (mode == "white" || enabled) && !manual_override
+}
+pub fn connection_attempts(keys: &[String], last: &str, automatic: bool, checks: bool) -> Vec<String> {
+    if automatic && checks { attempts(keys, last) }
+    else if automatic { attempts(keys, last).into_iter().take(1).collect() }
+    else { keys.iter().take(1).cloned().collect() }
+}
+
 pub fn include_app(policy: &str, selected: bool, is_dns: bool) -> bool {
     match policy {
         "all" => true,
@@ -66,6 +76,18 @@ pub fn refresh_reason(catalog_changed:bool, network_changed:bool, core_alive:boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn manual_override_and_auto_return_keep_the_same_candidate_list() {
+        let keys=vec!["lte1".into(), "lte2".into()];
+        for mode in ["normal", "browser", "white"] {
+            assert!(automatic(mode,true,false));
+            assert!(!automatic(mode,true,true));
+            assert_eq!(connection_attempts(&keys,"lte2",automatic(mode,true,false),true),["lte2","lte1","lte2","lte1"]);
+            assert_eq!(connection_attempts(&keys,"lte2",automatic(mode,true,true),true),["lte1"]);
+            assert_eq!(connection_attempts(&keys,"lte2",true,false),["lte2"]);
+        }
+        assert!(!automatic("normal",false,false));
+        assert!(automatic("white",false,false)); // mod28 configuration migration
+    }
     #[test] fn two_rounds_preserve_order_and_bound_attempts() {
         let v = vec!["lte1".into(), "lte2".into(), "auto".into(), "lte1".into()];
         assert_eq!(attempts(&v, "lte2"), ["lte2", "lte1", "auto", "lte2", "lte1", "auto"]);

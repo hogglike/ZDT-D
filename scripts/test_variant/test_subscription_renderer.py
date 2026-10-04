@@ -35,6 +35,15 @@ fn main() {
  assert_eq!(old.modes["browser"].check_sites.len(),3);assert!(old.modes["browser"].check_enabled);assert_eq!(old.latency_timeout_seconds,8);
  let mut disabled=old.modes["browser"].clone();disabled.check_enabled=false;disabled.check_sites[0].enabled=false;
  let saved=serde_json::to_string(&disabled).unwrap();let reread:ModeSettings=serde_json::from_str(&saved).unwrap();assert!(!reread.check_enabled);assert!(!reread.check_sites[0].enabled);
+ assert!(!reread.auto_enabled);assert!(!reread.manual_override);
+ for mode in ["normal","browser","white"] {
+  let mut settings=ModeSettings::default();settings.auto_enabled=true;settings.node_keys=vec!["first".into(),"second".into()];settings.name_filters=vec!["LTE".into()];
+  settings.choose(mode,"outside-list").unwrap();assert!(settings.manual_override);assert_eq!(settings.selected_key,"outside-list");
+  let raw=serde_json::to_string(&settings).unwrap();let mut settings:ModeSettings=serde_json::from_str(&raw).unwrap();
+  settings.choose(mode,"auto").unwrap();assert!(!settings.manual_override);assert_eq!(settings.node_keys,["first","second"]);assert_eq!(settings.name_filters,["LTE"]);
+  settings.check_enabled=false;assert!(settings.choose(mode,"auto").is_err());
+ }
+ assert!(ModeSettings::default().choose("browser","auto").is_err());
  let mut bootstrap=vec![out.clone(),out.clone(),out.clone(),json!({"type":"socks","server":"127.0.0.1"}),json!({"type":"socks","server":"missing.invalid"})];
  bootstrap[0]["server"]=json!("proxy.fixture.invalid.");bootstrap[1]["server"]=json!("proxy.fixture.invalid");bootstrap[2]["server"]=json!("implicit.fixture.invalid");
  bootstrap[2]["tls"].as_object_mut().unwrap().remove("server_name");
