@@ -324,7 +324,7 @@ fn safe_core_log(all:&[Node]) -> String {
 }
 pub fn diagnostics() -> Result<Value> {
     let bootstrap:Value=fs::read_to_string(root().join("bootstrap.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!([]));
-    Ok(json!({"ok":true,"version":"4.2.0-mod27","status":status(),"bootstrap":bootstrap,"core_log":safe_core_log(&nodes()?)}))
+    Ok(json!({"ok":true,"version":"4.2.0-mod28","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
 }
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}
@@ -340,14 +340,14 @@ pub fn request(mode:&str,ping:bool) -> Result<()> {
     if !mode.is_empty() && !MODES.contains(&mode) { bail!("Unknown mode"); }
     let mut queue=REQUEST.lock().unwrap_or_else(|e|e.into_inner());
     let g=GENERATION.fetch_add(1,Ordering::SeqCst)+1;
-    update(g,json!({"mode":mode,"state":if mode.is_empty()&&!ping {"idle"} else {"connecting"},"message":if ping {"Проверка задержки…"} else {"Подключение…"},"round":0,"attempt":0,"total":0,"probe_results":[],"core_log":""}));
+    update(g,json!({"mode":mode,"state":if mode.is_empty()&&!ping {"idle"} else {"connecting"},"message":if ping {"Проверка задержки…"} else {"Подключение…"},"reconnect_reason":"user_request","round":0,"attempt":0,"total":0,"probe_results":[],"core_log":""}));
     *queue=Some((g,mode.into(),ping));
     Ok(())
 }
-fn retry_if_current(g:u64,mode:&str) {
+fn retry_if_current(g:u64,mode:&str,reason:&str) {
     let mut queue=REQUEST.lock().unwrap_or_else(|e|e.into_inner());
     if GENERATION.compare_exchange(g,g+1,Ordering::SeqCst,Ordering::SeqCst).is_err() { return; }
-    update(g+1,json!({"mode":mode,"state":"connecting","message":"Повторная проверка соединения…","round":0,"attempt":0,"total":0,"probe_results":[],"core_log":""}));
+    update(g+1,json!({"mode":mode,"state":"connecting","message":"Восстановление подключения…","reconnect_reason":reason,"round":0,"attempt":0,"total":0,"probe_results":[],"core_log":""}));
     *queue=Some((g+1,mode.into(),false));
 }
 fn connect(g:u64,mode:&str,all:&[Node]) -> Result<()> {
@@ -410,14 +410,15 @@ fn stop_orphan() {
         } }
     }
 }
-fn physical_network() -> String {
-    shell::run_timeout("ip",&["-o","-4","addr","show"],Capture::Stdout,Duration::from_secs(3)).map(|(_,s)|s.lines().filter(|l|l.contains(" wlan0 ") || l.contains(" rmnet") || l.contains(" ccmni")).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+fn physical_network() -> Option<String> {
+    shell::run_timeout("ip",&["-o","-4","addr","show"],Capture::Stdout,Duration::from_secs(3)).ok()
+        .filter(|(code,_)|*code==0).map(|(_,s)|mode_policy::physical_network_identity(&s))
 }
 pub fn start_worker(state:daemon::SharedState) {
     thread::spawn(move || {
         let _=cleanup_routes();stop_orphan();
         let mut core:Option<Core>=None;
-        let mut last_check=Instant::now();let mut last_network=String::new();let mut was_running=false;
+        let mut last_check=Instant::now();let mut last_network:Option<String>=None;let mut was_running=false;
         loop {
             let running={let s=daemon::lock_state(&state);s.services_running&&!s.start_in_progress&&!s.stop_in_progress};
             if !running {
@@ -429,7 +430,7 @@ pub fn start_worker(state:daemon::SharedState) {
                 was_running=true;
                 let g=GENERATION.load(Ordering::SeqCst);
                 let pending=REQUEST.lock().unwrap_or_else(|e|e.into_inner()).is_some();
-                if !pending { if let Ok(c)=config() {if !c.active.is_empty(){retry_if_current(g,&c.active);}} }
+                if !pending { if let Ok(c)=config() {if !c.active.is_empty(){retry_if_current(g,&c.active,"service_started");}} }
             }
             let req=REQUEST.lock().unwrap_or_else(|e|e.into_inner()).take();
             if let Some((g,mode,ping))=req {
@@ -459,14 +460,19 @@ pub fn start_worker(state:daemon::SharedState) {
                 let g=GENERATION.load(Ordering::SeqCst);
                 let all=nodes().unwrap_or_default();let key=status()["key"].as_str().unwrap_or("").to_owned();
                 let changed=core.as_ref().map(|c|c.fingerprint!=core_fingerprint(&all)).unwrap_or(true);
-                let network=physical_network();let network_changed=!last_network.is_empty() && network!=last_network;last_network=network;
+                let network=physical_network();
+                let network_changed=match (&last_network,&network) {(Some(old),Some(new))=>old!=new,_=>false};
+                if network.is_some() {last_network=network;}
                 // Refresh endpoint IPs after Wi-Fi/mobile changes. Do not reuse
                 // a core that still contains bootstrap addresses from the old network.
                 if network_changed {if let Some(c)=core.as_mut(){c.fingerprint.clear();}}
                 let mode=status()["mode"].as_str().unwrap_or("").to_owned();
                 let settings=config().ok().and_then(|c|c.modes.get(&mode).cloned());
-                let healthy=if changed||network_changed {false} else {match settings {Some(ref s) if !s.check_enabled=>true,Some(ref s)=>all.iter().find(|n|n.key==key).and_then(|n|test_node(g,n,s).ok().and_then(|r|r.delay)).is_some(),None=>false}};
-                if current(g)&&!healthy {let mode=status()["mode"].as_str().unwrap_or("").to_owned();if !mode.is_empty(){retry_if_current(g,&mode);}}
+                let core_alive=core.as_mut().map(Core::alive).unwrap_or(false);
+                let check_enabled=settings.as_ref().map(|s|s.check_enabled).unwrap_or(false);
+                let probe_ok=if check_enabled && !changed && !network_changed && core_alive {settings.as_ref().and_then(|s|all.iter().find(|n|n.key==key).and_then(|n|test_node(g,n,s).ok().and_then(|r|r.delay))).is_some()}else{false};
+                let reason=mode_policy::refresh_reason(changed,network_changed,core_alive,check_enabled,probe_ok);
+                if let Some(reason)=reason {if current(g)&&!mode.is_empty(){retry_if_current(g,&mode,reason);}}
             }
             thread::sleep(Duration::from_secs(1));
         }

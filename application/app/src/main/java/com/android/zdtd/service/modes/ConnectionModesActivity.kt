@@ -56,7 +56,7 @@ class ConnectionModesActivity : ComponentActivity() {
     suspend fun load(resetDraft: Boolean) {
       try {
         val value = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes") }
-        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod27.") }
+        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod28.") }
         snapshot = value
         if (resetDraft) { draft = JSONObject(value.getJSONObject("config").toString()); dirty = false }
         status = value.getJSONObject("status")
@@ -81,7 +81,7 @@ class ConnectionModesActivity : ComponentActivity() {
     val nodes = snapshot.optJSONArray("nodes").objects()
     Surface(Modifier.fillMaxSize()) {
       Column(Modifier.safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Режимы подписки · mod27", style = MaterialTheme.typography.headlineSmall)
+        Text("Режимы подписки · mod28", style = MaterialTheme.typography.headlineSmall)
         Text("Подписку добавляй на экране «Подписки». Её существующее автообновление сохраняется. При обновлении список серверов режима обновится автоматически.")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           ModeClient.modes.forEach { mode ->
@@ -107,7 +107,7 @@ class ConnectionModesActivity : ComponentActivity() {
               val report = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes/diagnostics") }
               check(report.optBoolean("ok")) { "Не удалось прочитать диагностику" }
               val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod27", report.toString(2)))
+              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod28", report.toString(2)))
               message = "Диагностика скопирована; ссылка подписки и ключи серверов не включены"
             } catch (e: Exception) { message = "Не удалось скопировать: ${e.message}" }
           }

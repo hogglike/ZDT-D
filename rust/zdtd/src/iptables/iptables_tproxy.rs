@@ -477,18 +477,18 @@ fn ensure_base_chains() -> Result<()> {
     // layout that reliably delivers TPROXY traffic to the local t2s sockets:
     //   OUTPUT      #1: selected app traffic gets only the high fwmark bits.
     //   PREROUTING #1: socket DIVERT.  Packets that already belong to an
-    //                  established local (t2s) socket are re-marked for the
-    //                  policy route and accepted before TPROXY, so existing
-    //                  connections are delivered locally instead of being
-    //                  re-TPROXY'd.  A plain `-m socket` match (no
-    //                  `--transparent`) is used so it also catches sockets
-    //                  that are not flagged transparent.
+    //                  established transparent socket are accepted before TPROXY.
+    //                  Match only our marked loopback packets; normal incoming
+    //                  DNS/DoH/backend connections must retain their routing.
     //   PREROUTING #2: scoped marked packets enter ZDT-D TPROXY delivery.
     delete_rule_all("mangle", "OUTPUT", &["-j", OUT_CHAIN])?;
     insert_rule_at("mangle", "OUTPUT", 1, &["-j", OUT_CHAIN])?;
 
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "--transparent", "-j", DIVERT_CHAIN])?;
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "-j", DIVERT_CHAIN])?;
+    let divert=crate::programs::mode_policy::divert_match_args(&route_mask_hex(),DIVERT_CHAIN);
+    let divert_refs:Vec<&str>=divert.iter().map(String::as_str).collect();
+    delete_rule_all("mangle", "PREROUTING", &divert_refs)?;
     delete_rule_all("mangle", "PREROUTING", &["-j", PRE_CHAIN])?;
 
     // Insert PRE first, then DIVERT in front of it, so the resulting order is
@@ -501,7 +501,7 @@ fn ensure_base_chains() -> Result<()> {
     // t2s down to the TCP-only DNAT fallback).  Both steps are best-effort.
     match ensure_divert_chain() {
         Ok(()) => {
-            if let Err(e) = insert_rule_at("mangle", "PREROUTING", 1, &["-p", "tcp", "-m", "socket", "-j", DIVERT_CHAIN]) {
+            if let Err(e) = insert_rule_at("mangle", "PREROUTING", 1, &divert_refs) {
                 warn!("TPROXY socket DIVERT hook not installed, continuing without it: {e:#}");
             }
         }
@@ -753,6 +753,9 @@ pub fn cleanup_all() -> Result<()> {
     delete_rule_all("mangle", "OUTPUT", &["-j", OUT_CHAIN])?;
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "--transparent", "-j", DIVERT_CHAIN])?;
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "-j", DIVERT_CHAIN])?;
+    let divert=crate::programs::mode_policy::divert_match_args(&route_mask_hex(),DIVERT_CHAIN);
+    let refs:Vec<&str>=divert.iter().map(String::as_str).collect();
+    delete_rule_all("mangle", "PREROUTING", &refs)?;
     delete_rule_all("mangle", "PREROUTING", &["-j", PRE_CHAIN])?;
 
     // First flush parents so scoped chains are no longer referenced, then delete

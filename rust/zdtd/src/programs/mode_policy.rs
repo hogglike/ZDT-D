@@ -34,6 +34,35 @@ pub fn nat_bypass_args(operation:&str, chain:&str, mark:&str) -> Vec<String> {
         .iter().map(|s|s.to_string()).collect()
 }
 
+/// Only packets already routed back through loopback belong to our TPROXY
+/// socket diversion. Ordinary DNS/DoH and other backend sockets must not match.
+pub fn divert_match_args(mark:&str, chain:&str) -> Vec<String> {
+    ["-i", "lo", "-m", "mark", "--mark", mark, "-p", "tcp", "-m", "socket", "--transparent", "-j", chain]
+        .iter().map(|s|s.to_string()).collect()
+}
+
+/// DHCP lifetimes, flags and listing order are not network changes.
+pub fn physical_network_identity(addresses:&str) -> String {
+    let mut identities=std::collections::BTreeSet::new();
+    for line in addresses.lines() {
+        let fields:Vec<&str>=line.split_whitespace().collect();
+        if fields.len()<4 || fields[2]!="inet" {continue;}
+        let iface=fields[1].split('@').next().unwrap_or("");
+        if iface=="wlan0" || ["rmnet", "ccmni", "wwan"].iter().any(|prefix|iface.starts_with(prefix)) {
+            identities.insert(format!("{iface} {}",fields[3]));
+        }
+    }
+    identities.into_iter().collect::<Vec<_>>().join("\n")
+}
+
+pub fn refresh_reason(catalog_changed:bool, network_changed:bool, core_alive:bool, check_enabled:bool, probe_ok:bool) -> Option<&'static str> {
+    if !core_alive {Some("core_stopped")}
+    else if catalog_changed {Some("subscription_changed")}
+    else if network_changed {Some("network_changed")}
+    else if check_enabled && !probe_ok {Some("site_check_failed")}
+    else {None}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,6 +86,22 @@ mod tests {
         assert!(!include_app("blacklist", true, false));
         assert!(include_app("blacklist", false, false));
         assert!(!include_app("selected", false, false));
+    }
+    #[test] fn network_identity_ignores_lifetimes_flags_order_and_virtual_dns() {
+        let before="12: wlan0 inet 192.168.1.20/24 brd 192.168.1.255 scope global dynamic wlan0\\ valid_lft 3600sec preferred_lft 3600sec\n14: rmnet_data0 inet 100.64.1.2/30 scope global rmnet_data0\\ valid_lft forever preferred_lft forever";
+        let after="90: zdt_dns0 inet 10.253.240.1/30 scope global zdt_dns0\n14: rmnet_data0 inet 100.64.1.2/30 scope global rmnet_data0\n12: wlan0 inet 192.168.1.20/24 scope global secondary dynamic wlan0\\ valid_lft 3540sec preferred_lft 3540sec";
+        assert_eq!(physical_network_identity(before),physical_network_identity(after));
+        assert_ne!(physical_network_identity(before),physical_network_identity("12: wlan0 inet 192.168.1.21/24 scope global wlan0"));
+        assert_ne!(physical_network_identity(before),physical_network_identity("14: rmnet_data0 inet 100.64.1.2/30 scope global rmnet_data0"));
+        assert_eq!(physical_network_identity("bad line"),"");
+    }
+    #[test] fn disabled_checks_never_trigger_a_site_retry_but_real_changes_do() {
+        assert_eq!(refresh_reason(false,false,true,false,false),None);
+        assert_eq!(refresh_reason(false,false,true,true,false),Some("site_check_failed"));
+        assert_eq!(refresh_reason(false,false,true,true,true),None);
+        assert_eq!(refresh_reason(false,true,true,false,false),Some("network_changed"));
+        assert_eq!(refresh_reason(true,false,true,false,false),Some("subscription_changed"));
+        assert_eq!(refresh_reason(false,false,false,false,false),Some("core_stopped"));
     }
 }
 

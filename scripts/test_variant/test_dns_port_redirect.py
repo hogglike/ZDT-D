@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "rust/zdtd/src/programs/dns_port_redirect.rs"
@@ -41,8 +42,10 @@ def recv_exact(sock, count):
     return data
 
 
-def serve(address, port, rcode, protocol):
+def serve(address, port, rcode, protocol, transparent=False):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM if protocol == "udp" else socket.SOCK_STREAM)
+    if transparent:
+        sock.setsockopt(socket.IPPROTO_IP, getattr(socket, "IP_TRANSPARENT", 19), 1)
     sock.bind((address, port))
     if protocol == "tcp":
         sock.listen(8)
@@ -164,6 +167,52 @@ def namespace_tests(driver):
         query("10.253.240.1", protocol, 3, 5353, 0x03000000)
     print("PASS: mode mark overrides old DNAT only for its own traffic; DNS/foreign scopes and cleanup survive", flush=True)
 
+    # Exercise actual production TPROXY rule builders, including the DIVERT
+    # hook. The mode must carry marked TCP/UDP while normal DNS TCP sockets
+    # remain outside DIVERT and both profile listeners keep replying.
+    run("ip", "link", "add", "fixture0", "type", "dummy")
+    run("ip", "addr", "add", "198.18.0.1/24", "dev", "fixture0")
+    run("ip", "link", "set", "fixture0", "up")
+    run("ip", "route", "add", "203.0.113.0/24", "dev", "fixture0")
+    run("sysctl", "-w", "net.ipv4.conf.all.rp_filter=0")
+    run("sysctl", "-w", "net.ipv4.conf.lo.rp_filter=0")
+    run("ip", "rule", "add", "pref", "100", "fwmark", "0x01000000/0x01000000", "lookup", "787")
+    run("ip", "route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "787")
+    run("iptables", "-t", "mangle", "-N", "FIXTURE_DIVERT")
+    run("iptables", "-t", "mangle", "-A", "FIXTURE_DIVERT", "-j", "ACCEPT")
+    divert = run(driver, "--divert", "FIXTURE_DIVERT").stdout.strip().split("\t")
+    run("iptables", "-t", "mangle", "-A", "PREROUTING", *divert)
+    for protocol in ("udp", "tcp"):
+        sockets.append(serve("127.0.0.1", 19972, 0, protocol, transparent=True))
+        for rule_line in run(driver, "--mark", protocol).stdout.strip().splitlines():
+            run("iptables", "-t", "mangle", "-A", "OUTPUT", *rule_line.split("\t"))
+        args = run(driver, "--tproxy", protocol).stdout.strip().split("\t")
+        run("iptables", "-t", "mangle", "-A", "PREROUTING", *args)
+        query("203.0.113.10", protocol, 0, 1443)
+    def diverted_packets():
+        saved = run("iptables-save", "-c", "-t", "mangle").stdout
+        counters = next(line.split()[0] for line in saved.splitlines() if "-A FIXTURE_DIVERT " in line)
+        return int(counters.strip("[]").split(":")[0])
+    time.sleep(0.1)  # Let the completed fixture's final FIN/ACK settle.
+    baseline = diverted_packets()
+    assert baseline > 0, "Established transparent TCP did not enter DIVERT"
+    for _ in range(3):
+        for protocol in ("udp", "tcp"):
+            query("10.253.240.1", protocol, 3)
+            query("10.253.240.5", protocol, 0)
+            query("127.0.0.2", protocol, 2)
+    assert diverted_packets() == baseline, "Normal DNS sockets were captured by mode DIVERT"
+    run("iptables", "-t", "mangle", "-D", "PREROUTING", *divert)
+    run("iptables", "-t", "mangle", "-F", "FIXTURE_DIVERT")
+    run("iptables", "-t", "mangle", "-X", "FIXTURE_DIVERT")
+    run("iptables", "-t", "mangle", "-F", "OUTPUT")
+    run("iptables", "-t", "mangle", "-F", "PREROUTING")
+    run("ip", "rule", "del", "pref", "100", "fwmark", "0x01000000/0x01000000", "lookup", "787")
+    for protocol in ("udp", "tcp"):
+        query("10.253.240.1", protocol, 3)
+        query("10.253.240.5", protocol, 0)
+    print("PASS: production TCP/UDP TPROXY carries selected traffic; normal DNS stays outside DIVERT and survives mode cleanup", flush=True)
+
     for address, port in (("10.253.240.1", 19600), ("10.253.240.5", 19601)):
         for protocol in ("udp", "tcp"):
             rule("-D", address, port, protocol)
@@ -183,10 +232,19 @@ def main():
     with tempfile.TemporaryDirectory(prefix="zdtd-dns-redirect-") as directory:
         directory = Path(directory)
         driver_src = directory / "driver.rs"
+        source = (ROOT / "rust/zdtd/src/iptables/iptables_tproxy.rs").read_text()
+        functions = source[source.index("fn add_mark_rule("):source.index("fn add_rule_idempotent(")]
         driver_src.write_text(
             '#[path = ' + json.dumps(str(HELPER)) + '] mod redirect;\n'
             '#[path = ' + json.dumps(str(ROOT / "rust/zdtd/src/programs/mode_policy.rs")) + '] mod modes;\n'
+            'type Result<T> = std::result::Result<T,String>;\n'
+            'fn mark_mask_hex(mark:u32)->String {format!("0x{mark:08x}/0xff000000")}\n'
+            'fn add_rule_idempotent(_: &str, args:Vec<String>)->Result<()> {println!("{}",args.join("\\t"));Ok(())}\n'
+            + functions + '\n'
             'fn main() { let a: Vec<String> = std::env::args().collect();\n'
+            'if a[1]=="--divert" {println!("{}",modes::divert_match_args("0x01000000/0x01000000",&a[2]).join("\\t"));return;}\n'
+            'if a[1]=="--mark" {add_mark_rule("OUTPUT","0",&a[2],Some("--dport 1443"),"all",&[],0x03000000).unwrap();return;}\n'
+            'if a[1]=="--tproxy" {add_tproxy_rule("PREROUTING",&a[2],Some("--dport 1443"),0x03000000,19972).unwrap();return;}\n'
             'if a[1]=="--mode-nat" {println!("{}", modes::nat_bypass_args(&a[2], "OUTPUT", &a[3]).join("\\t"));return;}\n'
             'println!("{}", redirect::rule_args(&a[1], &a[2], a[3].parse().unwrap(), &a[4]).join("\\t")); }\n'
         )
