@@ -54,6 +54,8 @@ def serve(address, port, rcode, protocol, transparent=False):
         # Otherwise a connected UDP client correctly rejects its response.
         pktinfo = getattr(socket, "IP_PKTINFO", 8)  # Linux UAPI IP_PKTINFO
         sock.setsockopt(socket.IPPROTO_IP, pktinfo, 1)
+        if transparent:
+            sock.setsockopt(socket.IPPROTO_IP, 20, 1)  # IP_RECVORIGDSTADDR
 
     def response(data):
         assert len(data) >= 12
@@ -65,6 +67,18 @@ def serve(address, port, rcode, protocol, transparent=False):
                 data, control, _, peer = sock.recvmsg(4096, 1024)
                 destination = next(info[8:12] for level, kind, info in control
                                    if level == socket.IPPROTO_IP and kind == pktinfo)
+                if transparent:
+                    original = next(info for level, kind, info in control
+                                    if level == socket.IPPROTO_IP and kind == 20)
+                    address = socket.inet_ntoa(original[4:8])
+                    port = struct.unpack("!H", original[2:4])[0]
+                    # TPROXY preserves the original destination: a UDP proxy
+                    # must reply from that IP AND port, not its listener port.
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reply:
+                        reply.setsockopt(socket.IPPROTO_IP, 19, 1)
+                        reply.bind((address, port))
+                        reply.sendto(response(data), peer)
+                    continue
                 outgoing = struct.pack("I", 0) + destination + bytes(4)
                 sock.sendmsg([response(data)], [(socket.IPPROTO_IP, pktinfo, outgoing)], 0, peer)
             else:
@@ -188,7 +202,12 @@ def namespace_tests(driver):
             run("iptables", "-t", "mangle", "-A", "OUTPUT", *rule_line.split("\t"))
         args = run(driver, "--tproxy", protocol).stdout.strip().split("\t")
         run("iptables", "-t", "mangle", "-A", "PREROUTING", *args)
-        query("203.0.113.10", protocol, 0, 1443)
+        try:
+            query("203.0.113.10", protocol, 0, 1443)
+        except Exception:
+            print(run("iptables-save", "-c").stdout, flush=True)
+            print(run("ip", "rule", "show").stdout, flush=True)
+            raise
     def diverted_packets():
         saved = run("iptables-save", "-c", "-t", "mangle").stdout
         counters = next(line.split()[0] for line in saved.splitlines() if "-A FIXTURE_DIVERT " in line)
