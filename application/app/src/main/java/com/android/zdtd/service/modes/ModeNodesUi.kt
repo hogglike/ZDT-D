@@ -8,18 +8,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import org.json.JSONObject
 
+internal fun modePing(node: JSONObject, status: JSONObject): JSONObject? =
+  status.optJSONObject("pings")?.optJSONObject(node.optString("key"))?.takeIf {
+    ModeState.measurementCurrent(node.optString("revision"), it.optString("revision"))
+  }
 internal fun nodeRank(node: JSONObject, status: JSONObject): Int {
-  val ping = status.optJSONObject("pings")?.optJSONObject(node.optString("key"))
+  val ping = modePing(node, status)
   return ModeState.nodeRank(node.optBoolean("supported"), ping != null, if (ping == null || ping.isNull("ms")) null else ping.optLong("ms"))
 }
 internal fun sortedModeNodes(nodes: List<JSONObject>, status: JSONObject): List<JSONObject> =
   nodes.sortedWith(compareBy<JSONObject> { nodeRank(it, status) }.thenBy {
-    status.optJSONObject("pings")?.optJSONObject(it.optString("key"))?.let { p -> if (p.isNull("ms")) Long.MAX_VALUE else p.optLong("ms") } ?: Long.MAX_VALUE
+    modePing(it, status)?.let { p -> if (p.isNull("ms")) Long.MAX_VALUE else p.optLong("ms") } ?: Long.MAX_VALUE
   })
 
 @Composable
 internal fun ModeNodeLabel(node: JSONObject, status: JSONObject, showError: Boolean = false) {
-  val ping = status.optJSONObject("pings")?.optJSONObject(node.optString("key"))
+  val ping = modePing(node, status)
   val rank = nodeRank(node, status)
   val dark = isSystemInDarkTheme()
   val color = when (rank) {
@@ -31,12 +35,13 @@ internal fun ModeNodeLabel(node: JSONObject, status: JSONObject, showError: Bool
   val delay = when (rank) {
     0 -> "✓ ${ping!!.optLong("ms")} мс · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(ping.optLong("time") * 1000))}"
     2 -> "× Нет ответа" + if (showError) " · ${ping?.optString("error").orEmpty()}" else ""
-    3 -> "Не поддерживается этим ядром"
+    3 -> if (!node.optBoolean("enabled", true)) "Подписка выключена" else "Не поддерживается этим ядром"
     else -> "Задержка не проверена"
   }
   Column {
-    Text(node.optString("name"), color = color)
+    Text(node.optString("name"), color = color, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     Text("${node.optString("subscription")} · ${node.optString("protocol")}", style = MaterialTheme.typography.bodySmall, color = color)
     Text(delay, style = MaterialTheme.typography.bodySmall, color = color)
   }
 }
+

@@ -4,28 +4,31 @@ import json, re, subprocess, sys, tempfile
 ROOT = Path(__file__).resolve().parents[2]
 source=(ROOT/'rust/zdtd/src/programs/mihomo_subscription.rs').read_text()
 def section(start,end): return source[source.index(start):source.index(end,source.index(start))]
-functions='\n'.join([section('fn json_string_any(', 'fn json_u16_any('),section('fn bool_any(', 'fn safe_server_name('),section('fn tls_json(', 'pub(crate) fn singbox_outbound('),section('pub(crate) fn singbox_outbound(', 'fn render_singbox_config(')])
+functions='\n'.join([section('fn selection_definition(', 'fn preserve_existing_node_ids('),section('fn json_string_any(', 'fn json_u16_any('),section('fn bool_any(', 'fn safe_server_name('),section('fn tls_json(', 'pub(crate) fn singbox_outbound('),section('pub(crate) fn singbox_outbound(', 'fn render_singbox_config(')])
 mode_source=(ROOT/'rust/zdtd/src/programs/connection_modes.rs').read_text()
 mode_types=mode_source[mode_source.index('#[derive(Clone, Serialize, Deserialize)]'):mode_source.index('static CONFIG_LOCK:')]
+mode_key_functions=mode_source[mode_source.index('fn stable_mode_key('):mode_source.index('fn save_config(')]
 keys=subprocess.check_output([sys.argv[1],'generate','reality-keypair'],text=True)
 private=re.search(r'PrivateKey:\s*(\S+)',keys).group(1)
 public=re.search(r'PublicKey:\s*(\S+)',keys).group(1)
 with tempfile.TemporaryDirectory(prefix='zdtd-renderer-') as work:
  work=Path(work);(work/'src').mkdir()
- (work/'Cargo.toml').write_text('[package]\nname="zdtd-renderer-test"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nserde_json="1.0"\nanyhow="1.0"\nserde={version="1.0",features=["derive"]}\n')
+ (work/'Cargo.toml').write_text('[package]\nname="zdtd-renderer-test"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nserde_json="1.0"\nanyhow="1.0"\nsha2="0.10"\nhex="0.4"\nserde={version="1.0",features=["derive"]}\n')
  (work/'src/mode_bootstrap.rs').write_text((ROOT/'rust/zdtd/src/programs/mode_bootstrap.rs').read_text())
  main=r'''
-use serde_json::{json, Value as JsonValue};
+use serde_json::{json, Value as JsonValue, Value};
+use sha2::{Digest,Sha256};
 use serde::{Serialize,Deserialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap,BTreeSet};
 use anyhow::{Result,bail};
 mod mode_bootstrap;
 const MODES:[&str;3]=["white","normal","browser"];
-struct SubscriptionNode {protocol:String,server:String,port:u16,definition:JsonValue}
+#[derive(Clone)]
+struct SubscriptionNode {id:String,name:String,protocol:String,server:String,port:u16,definition:JsonValue}
 fn main() {
  let public=std::env::args().nth(1).unwrap();
  let definition=json!({"type":"vless","uuid":"550e8400-e29b-41d4-a716-446655440000","flow":"xtls-rprx-vision","security":"reality","sni":"localhost","fp":"chrome","pbk":public,"sid":"abcd"});
- let node=SubscriptionNode{protocol:"vless".into(),server:"127.0.0.1".into(),port:1,definition};
+ let node=SubscriptionNode{id:"a".into(),name:"Server".into(),protocol:"vless".into(),server:"127.0.0.1".into(),port:1,definition};
  let out=singbox_outbound(&node).unwrap();
  assert_eq!(out["tls"]["reality"]["public_key"],public);assert_eq!(out["flow"],"xtls-rprx-vision");assert_eq!(out["tls"]["server_name"],"localhost");
  let clash=tls_json(&json!({"reality-opts":{"public-key":public,"short-id":"abcd"},"servername":"localhost"}),false).unwrap();
@@ -44,6 +47,33 @@ fn main() {
   settings.check_enabled=false;assert!(settings.choose(mode,"auto").is_err());
  }
  assert!(ModeSettings::default().choose("browser","auto").is_err());
+ let mut rotated=node.clone();rotated.id="generated".into();rotated.definition["server"]=json!("new.fixture");
+ let mut old_node=node.clone();old_node.definition["server"]=json!("old.fixture");
+ preserve_node_ids_from(&[old_node.clone()],std::slice::from_mut(&mut rotated));assert_eq!(rotated.id,"a");
+ let mut renamed=old_node.clone();renamed.id="generated".into();renamed.name="Renamed".into();renamed.definition["name"]=json!("Renamed");
+ preserve_node_ids_from(&[old_node.clone()],std::slice::from_mut(&mut renamed));assert_eq!(renamed.id,"a");
+ let mut second=old_node.clone();second.id="b".into();second.definition["server"]=json!("second.fixture");
+ let mut reordered=vec![second.clone(),old_node.clone()];for n in &mut reordered {n.id="new".into();}
+ preserve_node_ids_from(&[old_node.clone(),second],&mut reordered);assert_eq!(reordered[0].id,"b");assert_eq!(reordered[1].id,"a");
+ let mut renamed_collision=old_node.clone();renamed_collision.id="generated-b".into();renamed_collision.name="Renamed".into();
+ let mut new_collision=old_node.clone();new_collision.definition["server"]=json!("new-different.fixture");new_collision.name="New".into();
+ let mut collision=vec![renamed_collision,new_collision];preserve_node_ids_from(&[old_node.clone()],&mut collision);
+ assert_eq!(collision[0].id,"a");assert_ne!(collision[0].id,collision[1].id);
+ let stable=stable_mode_key("subscription","a");assert_eq!(stable,stable_mode_key("subscription",&rotated.id));assert_ne!(stable,stable_mode_key("another","a"));
+ let legacy=legacy_mode_key("subscription",&old_node.definition);
+ let saved=SavedNode{subscription_id:"subscription".into(),node_id:"a".into(),name:"Server".into(),protocol:"vless".into(),legacy_key:legacy.clone()};
+ let catalog=BTreeMap::from([(stable.clone(),saved.clone())]);
+ let mut c=Config::default();let m=c.modes.get_mut("browser").unwrap();m.node_keys=vec![legacy.clone(),"obsolete".into(),legacy.clone()];m.selected_key=legacy.clone();m.last_key=legacy.clone();
+ assert_eq!(c.reconcile(&catalog,true),1);assert_eq!(c.modes["browser"].node_keys,vec![stable.clone()]);assert_eq!(c.modes["browser"].selected_key,stable);assert_eq!(c.modes["browser"].last_key,stable);
+ // Endpoint changes retain IDs; disabled subscriptions still appear in selection metadata.
+ let mut refreshed=saved.clone();refreshed.legacy_key="new-definition".into();let catalog=BTreeMap::from([(stable.clone(),refreshed)]);
+ c.reconcile(&catalog,true);assert_eq!(c.modes["browser"].node_keys,vec![stable.clone()]);
+ let raw=serde_json::to_string(&c).unwrap();let mut c:Config=serde_json::from_str(&raw).unwrap();
+ c.reconcile(&BTreeMap::new(),false);assert_eq!(c.modes["browser"].selected_key,stable);assert!(!c.catalog.is_empty());
+ c.reconcile(&BTreeMap::new(),true);assert!(c.modes["browser"].node_keys.is_empty());assert!(c.modes["browser"].selected_key.is_empty());
+ // Ambiguous legacy aliases never silently choose a different duplicate server.
+ let mut c=Config::default();c.modes.get_mut("normal").unwrap().selected_key=legacy.clone();
+ let duplicate=BTreeMap::from([("n2_a".into(),saved.clone()),("n2_b".into(),saved)]);c.reconcile(&duplicate,true);assert!(c.modes["normal"].selected_key.is_empty());
  let mut bootstrap=vec![out.clone(),out.clone(),out.clone(),json!({"type":"socks","server":"127.0.0.1"}),json!({"type":"socks","server":"missing.invalid"})];
  bootstrap[0]["server"]=json!("proxy.fixture.invalid.");bootstrap[1]["server"]=json!("proxy.fixture.invalid");bootstrap[2]["server"]=json!("implicit.fixture.invalid");
  bootstrap[2]["tls"].as_object_mut().unwrap().remove("server_name");
@@ -56,9 +86,10 @@ fn main() {
  println!("{}",out);
 }
 '''
- (work/'src/main.rs').write_text(main+'\n'+functions+'\n'+mode_types)
+ (work/'src/main.rs').write_text(main+'\n'+functions+'\n'+mode_types+'\n'+mode_key_functions)
  host=re.search(r'^host: (.+)$',subprocess.check_output(['rustc','-vV'],text=True),re.M).group(1)
  out=json.loads(subprocess.check_output(['cargo','run','--quiet','--target',host,'--manifest-path',str(work/'Cargo.toml'),'--',public],text=True,cwd=work))
  Path(sys.argv[2]).write_text(json.dumps({'client':out,'private_key':private,'public_key':public}))
  Path(sys.argv[2]).chmod(0o600)
- print('PASS: production VLESS/Reality renderer preserves Vision/SNI/keys; settings migration; Android bootstrap caches names, preserves explicit/implicit SNI and leaves failed nodes retryable',flush=True)
+ print('PASS: production VLESS/Reality renderer preserves Vision/SNI/keys; settings migration, stable refreshed/renamed/reordered nodes, legacy cleanup, incomplete catalog protection; Android bootstrap caches names, preserves explicit/implicit SNI and leaves failed nodes retryable',flush=True)
+

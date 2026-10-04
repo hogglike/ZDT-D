@@ -308,18 +308,37 @@ fn write_nodes(id: &str, nodes: &[SubscriptionNode]) -> Result<()> {
     Ok(())
 }
 
-fn preserve_existing_node_ids(subscription_id: &str, nodes: &mut [SubscriptionNode]) {
-    let existing = read_nodes(subscription_id);
-    let mut used = BTreeSet::<String>::new();
-    for node in nodes {
-        let Some(previous) = existing.iter().find(|previous| {
-            previous.protocol.eq_ignore_ascii_case(&node.protocol)
-                && previous.name.eq_ignore_ascii_case(&node.name)
-                && !used.contains(&previous.id)
-        }) else { continue; };
-        node.id = previous.id.clone();
-        used.insert(previous.id.clone());
+fn selection_definition(definition:&JsonValue) -> JsonValue {
+    let mut value=definition.clone();
+    if let Some(obj)=value.as_object_mut(){for key in ["name","tag","remarks","_zdt_share_link"]{obj.remove(key);}}
+    value
+}
+fn preserve_node_ids_from(existing:&[SubscriptionNode],nodes:&mut [SubscriptionNode]) {
+    let mut used=BTreeSet::<String>::new();let mut matched=vec![false;nodes.len()];
+    // Match definitions before labels so reordered duplicate names don't swap identities.
+    for (index,node) in nodes.iter_mut().enumerate() {
+        if let Some(previous)=existing.iter().find(|p|p.protocol.eq_ignore_ascii_case(&node.protocol) && selection_definition(&p.definition)==selection_definition(&node.definition) && !used.contains(&p.id)) {
+            node.id=previous.id.clone();used.insert(previous.id.clone());matched[index]=true;
+        }
     }
+    // Provider changes to addresses/keys keep the same logical named slot.
+    for (index,node) in nodes.iter_mut().enumerate() {
+        if matched[index] {continue;}
+        if let Some(previous)=existing.iter().find(|p|p.protocol.eq_ignore_ascii_case(&node.protocol) && p.name.eq_ignore_ascii_case(&node.name) && !used.contains(&p.id)) {
+            node.id=previous.id.clone();used.insert(previous.id.clone());matched[index]=true;
+        }
+    }
+    // A renamed server may now own another new server's generated ID.
+    // Give unmatched nodes unique IDs rather than silently dropping a duplicate.
+    for (index,node) in nodes.iter_mut().enumerate() {
+        if matched[index] {continue;}
+        let base=node.id.clone();let mut suffix=1;
+        while used.contains(&node.id) {node.id=format!("{base}_new_{suffix}");suffix+=1;}
+        used.insert(node.id.clone());
+    }
+}
+fn preserve_existing_node_ids(subscription_id:&str,nodes:&mut [SubscriptionNode]) {
+    preserve_node_ids_from(&read_nodes(subscription_id),nodes);
 }
 
 fn write_store(store: &SubscriptionStore) -> Result<()> {
@@ -2086,6 +2105,21 @@ pub fn apply_selected_to_runtime_yaml(profile: &str, raw_yaml: &str, selected_id
     Ok(out)
 }
 
+/// Selection reconciliation also needs disabled subscriptions. Missing/unreadable
+/// cache files are incomplete snapshots, not proof that a server was removed.
+pub(crate) fn mode_selection_catalog() -> Result<(Vec<(String,String,bool,SubscriptionNode)>,bool)> {
+    let store=read_store()?;
+    let mut records=Vec::new();let mut ready=true;
+    for item in store.subscriptions.values() {
+        let cached=fs::read_to_string(nodes_path(&item.id)).ok().and_then(|raw|serde_json::from_str::<Vec<SubscriptionNode>>(&raw).ok());
+        match cached {
+            Some(nodes)=>for n in nodes {records.push((item.id.clone(),item.name.clone(),item.enabled,normalize_stored_node(n)));},
+            None=>ready=false,
+        }
+    }
+    Ok((records,ready))
+}
+
 /// Enabled subscription snapshots for connection modes; no HTTP request here.
 pub(crate) fn mode_nodes() -> Result<Vec<(String, String, SubscriptionNode)>> {
     let store = read_store()?;
@@ -2097,3 +2131,4 @@ pub(crate) fn mode_nodes() -> Result<Vec<(String, String, SubscriptionNode)>> {
     }
     Ok(nodes)
 }
+

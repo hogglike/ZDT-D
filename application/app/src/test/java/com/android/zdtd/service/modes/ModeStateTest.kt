@@ -2,6 +2,11 @@ package com.android.zdtd.service.modes
 import org.junit.Assert.assertEquals
 import org.junit.Test
 class ModeStateTest {
+  @Test fun endpointChangeInvalidatesOldLatencyWithoutLosingSelection() {
+    assertEquals(true, ModeState.measurementCurrent("same", "same"))
+    assertEquals(false, ModeState.measurementCurrent("new", "old"))
+    assertEquals(false, ModeState.measurementCurrent("new", ""))
+  }
   @Test fun measuredSuccessesFirstFailuresBelowUnknownUnsupportedLast() {
     assertEquals(0, ModeState.nodeRank(true, true, 461))
     assertEquals(1, ModeState.nodeRank(true, false, null))
@@ -20,3 +25,4 @@ class ModeStateTest {
     assertEquals(ModeState.WHITE, ModeState.color("normal", "browser", "connecting"))
   }
 }
+

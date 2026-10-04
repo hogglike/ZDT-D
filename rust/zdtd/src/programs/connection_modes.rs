@@ -88,22 +88,70 @@ impl ModeSettings {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Config { pub active: String, pub modes: BTreeMap<String, ModeSettings>, pub latency_url:String, pub latency_timeout_seconds:u64 }
+pub struct Config { pub active: String, pub modes: BTreeMap<String, ModeSettings>, pub latency_url:String, pub latency_timeout_seconds:u64, pub catalog:BTreeMap<String, SavedNode> }
 impl Default for Config {
     fn default() -> Self {
         let mut modes = BTreeMap::new();
         for name in MODES { modes.insert(name.into(), ModeSettings::default()); }
         let white = modes.get_mut("white").unwrap();
         white.app_policy = "all".into(); white.name_filters = vec!["LTE".into()];
-        Self { active: String::new(), modes, latency_url:"https://www.gstatic.com/generate_204".into(),latency_timeout_seconds:8 }
+        Self { active: String::new(), modes, latency_url:"https://www.gstatic.com/generate_204".into(),latency_timeout_seconds:8, catalog:BTreeMap::new() }
+    }
+}
+// Private selection metadata contains labels and hashes, never subscription URLs or credentials.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SavedNode { pub subscription_id:String, pub node_id:String, pub name:String, pub protocol:String, pub legacy_key:String }
+impl Config {
+    fn reconcile(&mut self, current:&BTreeMap<String,SavedNode>, authoritative:bool) -> usize {
+        let mut aliases:BTreeMap<String,Option<String>>=BTreeMap::new();
+        for (key,n) in current {
+            aliases.insert(key.clone(),Some(key.clone()));
+            let entry=aliases.entry(n.legacy_key.clone()).or_insert_with(||Some(key.clone()));
+            if entry.as_ref()!=Some(key) {*entry=None;}
+        }
+        // A renamed node can retain its selection when its connection definition is unchanged.
+        for (old_key,old) in &self.catalog {
+            if current.contains_key(old_key) {continue;}
+            let matches:Vec<_>=current.iter().filter(|(_,n)|n.subscription_id==old.subscription_id && n.legacy_key==old.legacy_key).collect();
+            if matches.len()==1 {aliases.insert(old_key.clone(),Some(matches[0].0.clone()));}
+        }
+        let resolve=|key:&str| -> Option<String> {
+            if key.is_empty() {return Some(String::new());}
+            match aliases.get(key) {Some(Some(new))=>Some(new.clone()),_ if !authoritative=>Some(key.into()),_=>None}
+        };
+        let mut removed=0;
+        for settings in self.modes.values_mut() {
+            let mut seen=std::collections::BTreeSet::new();
+            settings.node_keys=settings.node_keys.iter().filter_map(|key| {
+                let new=resolve(key);if new.is_none(){removed+=1;}
+                new.filter(|key|!key.is_empty() && seen.insert(key.clone()))
+            }).collect();
+            for key in [&mut settings.selected_key,&mut settings.last_key,&mut settings.preferred_key] {
+                *key=resolve(key).unwrap_or_default();
+            }
+        }
+        if authoritative {self.catalog=current.clone();}else{self.catalog.extend(current.clone());}
+        removed
     }
 }
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 static REJECTED_NODES: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-pub fn config() -> Result<Config> {
-    let path = root().join("config.json");
-    if !path.exists() { return Ok(Config::default()); }
-    serde_json::from_str(&fs::read_to_string(path)?).context("read mode settings")
+fn config_with_catalog() -> Result<(Config,usize,Vec<(String,String,bool,subscriptions::SubscriptionNode)>)> {
+    let path=root().join("config.json");
+    let mut c:Config=if path.exists(){serde_json::from_str(&fs::read_to_string(path)?).context("read mode settings")?}else{Config::default()};
+    let (stored,ready)=subscriptions::mode_selection_catalog()?;
+    let catalog=stored.iter().map(|(id,_,_,n)|(stable_mode_key(id,&n.id),SavedNode{subscription_id:id.clone(),node_id:n.id.clone(),name:n.name.clone(),protocol:n.protocol.clone(),legacy_key:legacy_mode_key(id,&n.definition)})).collect();
+    let removed=c.reconcile(&catalog,ready);
+    Ok((c,removed,stored))
+}
+pub fn config() -> Result<Config> {Ok(config_with_catalog()?.0)}
+fn stable_mode_key(subscription_id:&str,node_id:&str) -> String {
+    format!("n2_{}",&hex::encode(Sha256::digest(format!("{subscription_id}\0{node_id}")))[..24])
+}
+fn legacy_mode_key(subscription_id:&str,definition:&Value) -> String {
+    let mut identity=definition.clone();
+    if let Some(obj)=identity.as_object_mut(){for k in ["name","tag","remarks","_zdt_share_link"]{obj.remove(k);}}
+    format!("n_{}",&hex::encode(Sha256::digest(format!("{subscription_id}\0{}",identity)))[..24])
 }
 fn save_config(c: &Config) -> Result<()> { write_private(&root().join("config.json"), &serde_json::to_string_pretty(c)?) }
 pub fn save(mut c: Config) -> Result<Config> {
@@ -112,7 +160,8 @@ pub fn save(mut c: Config) -> Result<Config> {
     if !c.active.is_empty() && !MODES.contains(&c.active.as_str()) { bail!("Unknown mode"); }
     validate_url(&c.latency_url)?;
     if !(2..=30).contains(&c.latency_timeout_seconds) { bail!("Таймаут задержки: 2–30 секунд"); }
-    for (mode, v) in &c.modes {
+    for (mode, v) in &mut c.modes {
+        v.name_filters=v.name_filters.iter().map(|s|s.trim().to_string()).filter(|s|!s.is_empty()).collect();
         if !MODES.contains(&mode.as_str()) || !["all", "except_dns", "blacklist", "selected"].contains(&v.app_policy.as_str()) { bail!("Invalid mode/app policy"); }
         if v.check_sites.len()>12 || !(2..=30).contains(&v.timeout_seconds) { bail!("Проверка: максимум 12 сайтов; таймаут 2–30 секунд"); }
         let count=v.check_sites.iter().filter(|site|site.enabled).count();
@@ -124,35 +173,40 @@ pub fn save(mut c: Config) -> Result<Config> {
     // Runtime owns the active mode and per-mode successful server memory.
     let old = config()?; c.active = old.active.clone();
     for mode in MODES { c.modes.get_mut(mode).unwrap().last_key = old.modes.get(mode).map(|v|v.last_key.clone()).unwrap_or_default(); }
+    c.catalog=old.catalog;
+    let (stored,ready)=subscriptions::mode_selection_catalog()?;
+    let catalog=stored.iter().map(|(id,_,_,n)|(stable_mode_key(id,&n.id),SavedNode{subscription_id:id.clone(),node_id:n.id.clone(),name:n.name.clone(),protocol:n.protocol.clone(),legacy_key:legacy_mode_key(id,&n.definition)})).collect();
+    c.reconcile(&catalog,ready);
     save_config(&c)?;
     if !c.active.is_empty() { request(&c.active, false)?; }
     Ok(c)
 }
 
 #[derive(Clone)]
-struct Node { key: String, name: String, subscription: String, subscription_id: String, protocol: String, outbound: Option<Value> }
+struct Node { key: String, revision:String, name: String, subscription: String, subscription_id: String, protocol: String, outbound: Option<Value> }
 fn nodes() -> Result<Vec<Node>> {
     let mut result: Vec<Node> = subscriptions::mode_nodes()?.into_iter().map(|(id, subscription, n)| {
-        // A label change alone must not lose a manually selected server.
-        let mut identity = n.definition.clone();
-        if let Some(obj) = identity.as_object_mut() { for k in ["name", "tag", "remarks", "_zdt_share_link"] { obj.remove(k); } }
-        let key = format!("n_{}", &hex::encode(Sha256::digest(format!("{id}\0{}", identity)))[..24]);
+        let key=stable_mode_key(&id,&n.id);
+        let revision=legacy_mode_key(&id,&n.definition);
         let transport=n.definition.get("transport").and_then(|v|v.get("type")).and_then(Value::as_str).unwrap_or(&n.transport);
         let supported_transport=["", "tcp", "ws", "grpc", "http", "httpupgrade"].contains(&transport);
-        let rejected=REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).contains(&key);
+        let rejected=REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).contains(&revision);
         let mut outbound = if !rejected && supported_transport && (n.targets.iter().any(|t|t=="sing-box") || n.protocol == "hysteria2") {
             subscriptions::singbox_outbound(&n).ok()
         } else { None };
         if let Some(v) = &mut outbound { v["tag"] = json!(key); }
-        Node { key, name:n.name, subscription, subscription_id:id, protocol:n.protocol, outbound }
+        Node { key, revision, name:n.name, subscription, subscription_id:id, protocol:n.protocol, outbound }
     }).collect();
     let mut used=BTreeSet::new();result.retain(|n|used.insert(n.key.clone()));
     Ok(result)
 }
 pub fn snapshot() -> Result<Value> {
-    let catalog: Vec<Value> = nodes()?.iter().map(|n| json!({"key":n.key,"name":n.name,"subscription":n.subscription,"subscription_id":n.subscription_id,"protocol":n.protocol,"supported":n.outbound.is_some()})).collect();
+    let (c,removed,stored)=config_with_catalog()?;
+    let mut catalog:Vec<Value>=nodes()?.iter().map(|n|json!({"key":n.key,"revision":n.revision,"name":n.name,"subscription":n.subscription,"subscription_id":n.subscription_id,"protocol":n.protocol,"supported":n.outbound.is_some(),"enabled":true})).collect();
+    for (id,subscription,enabled,n) in &stored {if !enabled {catalog.push(json!({"key":stable_mode_key(id,&n.id),"revision":legacy_mode_key(id,&n.definition),"name":n.name,"subscription":subscription,"subscription_id":id,"protocol":n.protocol,"supported":false,"enabled":false}));}}
+    let subscriptions:Vec<Value>=stored.iter().map(|(id,name,enabled,_)|(id,json!({"id":id,"name":name,"enabled":enabled}))).collect::<BTreeMap<_,_>>().into_values().collect();
     let dns = super::dnsprofiles::load(Path::new(super::dnsprofiles::CONFIG_PATH)).map(|c|super::dnsprofiles::packages(&c)).unwrap_or_default();
-    Ok(json!({"ok":true,"config":config()?,"status":status(),"nodes":catalog,"dns_apps":dns}))
+    Ok(json!({"ok":true,"config":c,"status":status(),"nodes":catalog,"subscriptions":subscriptions,"selection_cleanup_count":removed,"dns_apps":dns}))
 }
 fn candidates(settings: &ModeSettings, all: &[Node], white: bool) -> Vec<Node> {
     if !mode_policy::automatic(if white {"white"} else {"normal"},settings.auto_enabled,settings.manual_override) {
@@ -244,7 +298,7 @@ fn start_core(all: &mut [Node]) -> Result<Core> {
         let validation=root().join("validation.runtime.json");
         for n in all.iter_mut().filter(|n|n.outbound.is_some()) {
             if !check_core(std::slice::from_ref(n),&validation)? {
-                REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).insert(n.key.clone());
+                REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).insert(n.revision.clone());
                 n.outbound=None;
             }
         }
@@ -337,7 +391,7 @@ fn safe_core_log(all:&[Node]) -> String {
 }
 pub fn diagnostics() -> Result<Value> {
     let bootstrap:Value=fs::read_to_string(root().join("bootstrap.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!([]));
-    Ok(json!({"ok":true,"version":"4.2.0-mod29","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
+    Ok(json!({"ok":true,"version":"4.2.0-mod30","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
 }
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}
@@ -458,7 +512,7 @@ pub fn start_worker(state:daemon::SharedState) {
                             if !current(g){return Ok(());}
                             let (delay,error)=node_delay(n,&config()?);
                             let mut pings=status()["pings"].clone();if !pings.is_object(){pings=json!({});}
-                            pings[&n.key]=json!({"ms":delay,"time":now(),"error":error,"url":config()?.latency_url});update(g,json!({"pings":pings,"message":format!("Проверен {}",n.name)}));
+                            pings[&n.key]=json!({"ms":delay,"time":now(),"error":error,"revision":n.revision,"url":config()?.latency_url});update(g,json!({"pings":pings,"message":format!("Проверен {}",n.name)}));
                         }
                         let c=config()?;
                         if rebuild && !c.active.is_empty() {connect(g,&c.active,&all)?;} else {update(g,json!({"mode":c.active,"state":if c.active.is_empty(){"idle"}else{"connected"},"message":"Проверка задержки завершена"}));}
@@ -491,3 +545,4 @@ pub fn start_worker(state:daemon::SharedState) {
         }
     });
 }
+
