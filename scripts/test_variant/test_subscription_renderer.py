@@ -8,6 +8,7 @@ functions='\n'.join([section('fn selection_definition(', 'fn preserve_existing_n
 mode_source=(ROOT/'rust/zdtd/src/programs/connection_modes.rs').read_text()
 mode_types=mode_source[mode_source.index('#[derive(Clone, Serialize, Deserialize)]'):mode_source.index('static CONFIG_LOCK:')]
 mode_key_functions=mode_source[mode_source.index('fn stable_mode_key('):mode_source.index('fn save_config(')]
+latency_function=mode_source[mode_source.index('fn latency_layout('):mode_source.index('fn start_latency_core(')]
 keys=subprocess.check_output([sys.argv[1],'generate','reality-keypair'],text=True)
 private=re.search(r'PrivateKey:\s*(\S+)',keys).group(1)
 public=re.search(r'PublicKey:\s*(\S+)',keys).group(1)
@@ -35,7 +36,8 @@ fn main() {
  assert_eq!(clash["enabled"],true);assert_eq!(clash["utls"]["fingerprint"],"chrome");
  let raw=tls_json(&json!({"tls":{"server_name":"localhost","reality":{"enabled":true,"public_key":public}}}),false).unwrap();assert_eq!(raw["enabled"],true);assert_eq!(raw["utls"]["enabled"],true);
  let old:Config=serde_json::from_str(r#"{"active":"","modes":{"browser":{"apps":["org.browser"],"app_policy":"selected"}}}"#).unwrap();
- assert_eq!(old.modes["browser"].check_sites.len(),3);assert!(old.modes["browser"].check_enabled);assert_eq!(old.latency_timeout_seconds,8);
+ assert_eq!(old.modes["browser"].check_sites.len(),3);assert!(old.modes["browser"].check_enabled);assert_eq!(old.latency_timeout_seconds,8);assert!(!old.refresh_enabled);assert_eq!(old.refresh_interval_minutes,60);
+ let mut schedule=old.clone();schedule.refresh_enabled=true;schedule.refresh_interval_minutes=120;let schedule:Config=serde_json::from_str(&serde_json::to_string(&schedule).unwrap()).unwrap();assert!(schedule.refresh_enabled);assert_eq!(schedule.refresh_interval_minutes,120);
  let mut disabled=old.modes["browser"].clone();disabled.check_enabled=false;disabled.check_sites[0].enabled=false;
  let saved=serde_json::to_string(&disabled).unwrap();let reread:ModeSettings=serde_json::from_str(&saved).unwrap();assert!(!reread.check_enabled);assert!(!reread.check_sites[0].enabled);
  assert!(!reread.auto_enabled);assert!(!reread.manual_override);
@@ -83,13 +85,16 @@ fn main() {
  assert_eq!(bootstrap[0]["server"],"127.0.0.1");assert_eq!(bootstrap[0]["tls"],before);assert_eq!(bootstrap[0]["uuid"],out["uuid"]);assert_eq!(bootstrap[0]["flow"],out["flow"]);
  assert_eq!(bootstrap[1]["server"],"127.0.0.1");assert_eq!(bootstrap[2]["tls"]["server_name"],"implicit.fixture.invalid");
  assert_eq!(bootstrap[4]["server"],"missing.invalid");assert!(report.last().unwrap()["ip"].is_null());
- println!("{}",out);
+ let latency=latency_layout(serde_json::from_str(include_str!("mode_core.json")).unwrap(),19976,19975);
+ assert_eq!(latency["inbounds"].as_array().unwrap().len(),1);assert_eq!(latency["inbounds"][0]["type"],"mixed");assert_eq!(latency["route"]["final"],"TEST");
+ println!("{}",json!({"client":out,"latency_layout":latency}));
 }
 '''
- (work/'src/main.rs').write_text(main+'\n'+functions+'\n'+mode_types+'\n'+mode_key_functions)
+ (work/'src/mode_core.json').write_text((ROOT/'rust/zdtd/src/programs/mode_core.json').read_text())
+ (work/'src/main.rs').write_text(main+'\n'+functions+'\n'+mode_types+'\n'+mode_key_functions+'\n'+latency_function)
  host=re.search(r'^host: (.+)$',subprocess.check_output(['rustc','-vV'],text=True),re.M).group(1)
  out=json.loads(subprocess.check_output(['cargo','run','--quiet','--target',host,'--manifest-path',str(work/'Cargo.toml'),'--',public],text=True,cwd=work))
- Path(sys.argv[2]).write_text(json.dumps({'client':out,'private_key':private,'public_key':public}))
+ Path(sys.argv[2]).write_text(json.dumps({'client':out['client'],'latency_layout':out['latency_layout'],'private_key':private,'public_key':public}))
  Path(sys.argv[2]).chmod(0o600)
  print('PASS: production VLESS/Reality renderer preserves Vision/SNI/keys; settings migration, stable refreshed/renamed/reordered nodes, legacy cleanup, incomplete catalog protection; Android bootstrap caches names, preserves explicit/implicit SNI and leaves failed nodes retryable',flush=True)
 

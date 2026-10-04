@@ -84,7 +84,7 @@ class ConnectionModesActivity : ComponentActivity() {
     suspend fun load(resetDraft: Boolean) {
       try {
         val value = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes") }
-        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod30.") }
+        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod31.") }
         snapshot = value
         if (resetDraft) { draft = JSONObject(value.getJSONObject("config").toString()); dirty = value.optInt("selection_cleanup_count") > 0 }
         status = value.getJSONObject("status")
@@ -92,6 +92,9 @@ class ConnectionModesActivity : ComponentActivity() {
       } catch (e: Exception) { message = e.message.orEmpty() }
     }
     LaunchedEffect(refreshTick.intValue) { load(!dirty) }
+    LaunchedEffect(status.optLong("maintenance_last_completed")) {
+      if (status.optLong("maintenance_last_completed") > 0) load(!dirty)
+    }
     LaunchedEffect(Unit) {
       apps = withContext(Dispatchers.IO) {
         @Suppress("DEPRECATION")
@@ -123,7 +126,7 @@ class ConnectionModesActivity : ComponentActivity() {
       }
     }) { contentPadding ->
       Column(Modifier.padding(contentPadding).safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Режимы подключения · mod30", style = MaterialTheme.typography.headlineSmall)
+        Text("Режимы подключения · mod31", style = MaterialTheme.typography.headlineSmall)
         Text("Нажми режим для подключения. Выбор сервера доступен удержанием кнопки.", style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           ModeClient.modes.forEach { mode ->
@@ -151,7 +154,7 @@ class ConnectionModesActivity : ComponentActivity() {
               val report = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes/diagnostics") }
               check(report.optBoolean("ok")) { "Не удалось прочитать диагностику" }
               val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod30", report.toString(2)))
+              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod31", report.toString(2)))
               message = "Диагностика скопирована; ссылка подписки и ключи серверов не включены"
             } catch (e: Exception) { message = "Не удалось скопировать: ${e.message}" }
           }
@@ -276,7 +279,24 @@ class ConnectionModesActivity : ComponentActivity() {
         }
         } else {
         Text("Серверы и задержка", style = MaterialTheme.typography.titleMedium)
-        Text("Задержка HTTPS-запроса через сервер. Текущий режим не переключается.", style = MaterialTheme.typography.bodySmall)
+        Text("Обновить серверы: загрузить включённые подписки, убрать удалённые записи и проверить задержку всех поддерживаемых серверов.", style = MaterialTheme.typography.bodySmall)
+        val maintenanceBusy = status.optString("maintenance_state") in listOf("pending", "refreshing", "checking")
+        Button(onClick = { ModeClient.maintenance(this@ConnectionModesActivity, true) }, enabled = !dirty && !maintenanceBusy, modifier = Modifier.fillMaxWidth()) { Text("Обновить серверы и проверить задержку") }
+        if (status.optString("maintenance_message").isNotBlank()) Text(status.optString("maintenance_message"), color = if (status.optString("maintenance_state") == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        if (maintenanceBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+          Column(Modifier.weight(1f)) {
+            Text("Автоматически обновлять и проверять")
+            Text("При запущенном ZDT-D. Обычное автообновление подписок сохраняется.", style = MaterialTheme.typography.bodySmall)
+          }
+          Switch(draft.optBoolean("refresh_enabled"), onCheckedChange = { draft = JSONObject(draft.toString()).put("refresh_enabled", it); dirty = true })
+        }
+        if (draft.optBoolean("refresh_enabled")) {
+          OutlinedTextField(draft.optInt("refresh_interval_minutes", 60).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) { draft = JSONObject(draft.toString()).put("refresh_interval_minutes", it.toIntOrNull() ?: 0); dirty = true } }, label = { Text("Интервал, минут · 15–10080") }, singleLine = true)
+          Text("Первый запуск после включения расписания — сразу, если прежняя проверка уже просрочена. Массовый тест расходует трафик и заряд.", style = MaterialTheme.typography.bodySmall)
+        }
+        Text("Порядок выбранных серверов сохраняется. Новые добавляются в Авто по правилам имени; без правила — выбери их вручную. Ручной выбор через виджет сохраняется.", style = MaterialTheme.typography.bodySmall)
+        Text("Задержка HTTPS-запроса через сервер. Отдельная проверка не переключает текущий режим.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { latencyExpanded = !latencyExpanded }) { Text("Адрес и таймаут задержки ${if (latencyExpanded) "▴" else "▾"}") }
         if (latencyExpanded) {
         OutlinedTextField(draft.optString("latency_url", "https://www.gstatic.com/generate_204"), onValueChange = { draft = JSONObject(draft.toString()).put("latency_url", it); dirty = true }, label = { Text("HTTPS-адрес для задержки всех серверов") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -284,8 +304,8 @@ class ConnectionModesActivity : ComponentActivity() {
         Text("Изменения сохраняются кнопкой внизу экрана.", style = MaterialTheme.typography.bodySmall)
         }
         OutlinedButton(onClick = {
-          ContextCompat.startForegroundService(this@ConnectionModesActivity, Intent(this@ConnectionModesActivity, ModeActionService::class.java).putExtra("ping", true).putExtra("mode", status.optString("mode")))
-        }, enabled = !dirty && status.optString("state") != "connecting", modifier = Modifier.fillMaxWidth()) { Text("Проверить задержку всех серверов") }
+          ModeClient.maintenance(this@ConnectionModesActivity, false)
+        }, enabled = !dirty && !maintenanceBusy, modifier = Modifier.fillMaxWidth()) { Text("Только проверить задержку") }
         OutlinedButton(onClick = { scope.launch { load(false) } }) { Text("Обновить список и статус") }
         OutlinedTextField(serverSearch, { serverSearch = it }, label = { Text("Поиск сервера или подписки") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         val ordered = sortedModeNodes(nodes, status).filter { it.optString("name").contains(serverSearch, true) || it.optString("subscription").contains(serverSearch, true) }

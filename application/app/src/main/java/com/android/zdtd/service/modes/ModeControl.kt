@@ -15,6 +15,7 @@ import com.android.zdtd.service.R
 import com.android.zdtd.service.RootConfigManager
 import com.android.zdtd.service.api.ApiClient
 import com.android.zdtd.service.api.ApiModels
+import com.android.zdtd.service.diagnostics.connection.ConnectionWidgetProvider
 import kotlinx.coroutines.*
 import org.json.JSONObject
 
@@ -42,13 +43,27 @@ object ModeClient {
     return status
   }
   fun failure(context: Context, mode: String, message: String) {
-    cache(context, JSONObject().put("mode", mode).put("state", "error").put("message", message))
+    cache(context, cached(context).put("mode", mode).put("state", "error").put("message", message))
   }
   fun pickServer(context: Context, mode: String) {
     context.startActivity(Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
   }
   fun switch(context: Context, mode: String) {
-    context.startActivity(Intent(context, ModeSwitchActivity::class.java).putExtra("mode", mode).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    val cm = context.getSystemService(ConnectivityManager::class.java)
+    val wifi = cm.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+    try {
+      if (mode == "white" && wifi) context.startActivity(confirmation(context, mode))
+      else ContextCompat.startForegroundService(context, Intent(context, ModeActionService::class.java).putExtra("mode", mode))
+    } catch (e: Exception) { failure(context, mode, "Не удалось запустить: ${e.message}") }
+  }
+  fun confirmation(context: Context, mode: String) = Intent(context, ModeSwitchActivity::class.java)
+    .putExtra("mode", mode).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+  fun maintenance(context: Context, refresh: Boolean) {
+    try { ContextCompat.startForegroundService(context, Intent(context, ModeActionService::class.java).putExtra(if (refresh) "refresh_servers" else "ping", true)) }
+    catch (e: Exception) { maintenanceFailure(context, e.message.orEmpty()) }
+  }
+  fun maintenanceFailure(context: Context, message: String) {
+    cache(context, cached(context).put("maintenance_state", "error").put("maintenance_message", message))
   }
 }
 
@@ -82,16 +97,19 @@ class ModeActionService : Service() {
     if (intent == null) { stopSelf(); return START_NOT_STICKY }
     val mode = intent.getStringExtra("mode").orEmpty()
     val ping = intent.getBooleanExtra("ping", false)
+    val refreshServers = intent.getBooleanExtra("refresh_servers", false)
+    val maintenance = ping || refreshServers
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel("modes", "Режимы подключения", NotificationManager.IMPORTANCE_LOW))
     startForeground(19972, Notification.Builder(this, "modes").setSmallIcon(R.drawable.ic_qs_tile)
-      .setContentTitle("ZDT-D · режимы").setContentText(if (ping) "Проверка серверов" else "Подключение…").build())
+      .setContentTitle("ZDT-D · режимы").setContentText(if (refreshServers) "Обновление и проверка серверов" else if (ping) "Проверка серверов" else "Подключение…").build())
     job?.cancel()
     job = scope.launch {
       try {
-        ModeClient.cache(this@ModeActionService, JSONObject().put("mode", mode).put("state", "connecting").put("message", "Ожидание службы…"))
+        if (maintenance) ModeClient.cache(this@ModeActionService, ModeClient.cached(this@ModeActionService).put("maintenance_state", "pending").put("maintenance_message", "Ожидание службы…"))
+        else ModeClient.cache(this@ModeActionService, ModeClient.cached(this@ModeActionService).put("mode", mode).put("state", "connecting").put("message", "Ожидание службы…"))
         val api = ModeClient.api(this@ModeActionService)
-        if (mode.isNotEmpty() || ping) {
+        if (mode.isNotEmpty() || maintenance) {
           if (!ApiModels.isServiceOn(api.getStatus())) check(api.startService()) { "Не удалось запустить ZDT-D" }
           var started = false
           repeat(30) {
@@ -103,15 +121,23 @@ class ModeActionService : Service() {
           }
           check(started) { "Служба не запустилась за 30 секунд" }
         }
-        val result = api.postJsonResult("/api/connection-modes/${if (ping) "ping" else "activate"}", JSONObject().put("mode", mode))
+        val result = api.postJsonResult("/api/connection-modes/${if (refreshServers) "refresh-servers" else if (ping) "ping" else "activate"}", JSONObject().put("mode", mode))
         check(result.optBoolean("ok", false)) { "Служба не приняла команду" }
         while (isActive) {
           val status = ModeClient.refresh(this@ModeActionService)
-          if (status.optString("state") != "connecting") break
+          if (maintenance) {
+            if (status.optString("maintenance_state") !in listOf("pending", "refreshing", "checking")) break
+          } else if (status.optString("state") != "connecting") break
           delay(1000)
         }
       } catch (e: CancellationException) { throw e }
-      catch (e: Exception) { ModeClient.failure(this@ModeActionService, mode, e.message ?: "Ошибка подключения") }
+      catch (e: Exception) {
+        if (maintenance) {
+          val latest = runCatching { ModeClient.refresh(this@ModeActionService) }.getOrNull()
+          if (latest?.optString("maintenance_state") !in listOf("pending", "refreshing", "checking")) ModeClient.maintenanceFailure(this@ModeActionService, e.message ?: "Ошибка обновления/проверки")
+        }
+        else ModeClient.failure(this@ModeActionService, mode, e.message ?: "Ошибка подключения")
+      }
       finally { if (isActive) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId) } }
     }
     return START_NOT_STICKY
@@ -140,9 +166,15 @@ class ModeWidgetProvider : android.appwidget.AppWidgetProvider() {
     fun render(context: Context) {
       val manager = AppWidgetManager.getInstance(context)
       val ids = manager.getAppWidgetIds(ComponentName(context, ModeWidgetProvider::class.java))
-      val status = ModeClient.cached(context)
-      for (id in ids) {
+      ids.forEach { id ->
         val views = RemoteViews(context.packageName, R.layout.widget_connection_modes)
+        bind(context, views)
+        manager.updateAppWidget(id, views)
+      }
+      renderCombined(context)
+    }
+    fun bind(context: Context, views: RemoteViews) {
+      val status = ModeClient.cached(context)
         views.setTextViewText(R.id.mode_message, status.optString("message", "Открой настройки режимов"))
         val buttons = listOf(R.id.mode_white, R.id.mode_normal, R.id.mode_browser)
         val pickers = listOf(R.id.pick_white, R.id.pick_normal, R.id.pick_browser)
@@ -150,14 +182,42 @@ class ModeWidgetProvider : android.appwidget.AppWidgetProvider() {
           views.setOnClickPendingIntent(pickers[index], PendingIntent.getActivity(context, 20100 + index,
             Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
           views.setInt(buttons[index], "setBackgroundColor", ModeState.color(mode, status.optString("mode"), status.optString("state")))
-          views.setOnClickPendingIntent(buttons[index], PendingIntent.getActivity(context, 19972 + index,
-            Intent(context, ModeSwitchActivity::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+          val launch = if (mode == "white") PendingIntent.getActivity(context, 19972 + index,
+            ModeClient.confirmation(context, mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+          else PendingIntent.getForegroundService(context, 19972 + index,
+            Intent(context, ModeActionService::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+          views.setOnClickPendingIntent(buttons[index], launch)
         }
         views.setOnClickPendingIntent(R.id.mode_settings, PendingIntent.getActivity(context, 19980,
           Intent(context, ConnectionModesActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        val working = status.optString("maintenance_state") in listOf("pending", "refreshing", "checking")
+        views.setTextViewText(R.id.mode_refresh, if (working) "Обновляется…" else "Обновить серверы")
+        views.setBoolean(R.id.mode_refresh, "setEnabled", !working)
+        views.setInt(R.id.mode_refresh, "setBackgroundColor", if (working) 0xFFFFE082.toInt() else 0xFFFFFFFF.toInt())
+        views.setOnClickPendingIntent(R.id.mode_refresh, PendingIntent.getForegroundService(context, 19981,
+          Intent(context, ModeActionService::class.java).putExtra("refresh_servers", true), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        views.setOnClickPendingIntent(R.id.mode_stop, PendingIntent.getForegroundService(context, 19982,
+          Intent(context, ModeActionService::class.java).putExtra("mode", ""), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        views.setTextViewText(R.id.mode_maintenance, status.optString("maintenance_message"))
+    }
+    fun renderCombined(context: Context) {
+      val manager = AppWidgetManager.getInstance(context)
+      manager.getAppWidgetIds(ComponentName(context, CombinedModeWidgetProvider::class.java)).forEach { id ->
+        val views = RemoteViews(context.packageName, R.layout.widget_connection_combined)
+        bind(context, views)
+        ConnectionWidgetProvider.bind(context, views)
         manager.updateAppWidget(id, views)
       }
     }
+  }
+}
+
+class CombinedModeWidgetProvider : android.appwidget.AppWidgetProvider() {
+  override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
+    ModeWidgetProvider.renderCombined(context)
+    context.sendBroadcast(Intent(context, ModeStatusReceiver::class.java))
+    com.android.zdtd.service.diagnostics.connection.ConnectionHealthJobService.schedule(context,
+      com.android.zdtd.service.diagnostics.connection.ConnectionHealth.preferences(context).getBoolean("automatic", false))
   }
 }
 
@@ -182,7 +242,7 @@ abstract class ConnectionModeTile(private val mode: String) : TileService() {
   @Suppress("DEPRECATION")
   override fun onClick() {
     super.onClick()
-    val intent = Intent(this, ModeSwitchActivity::class.java).putExtra("mode", mode).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val intent = ModeClient.confirmation(this, mode)
     if (Build.VERSION.SDK_INT >= 34) startActivityAndCollapse(PendingIntent.getActivity(this, 20000 + ModeClient.modes.indexOf(mode), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
     else startActivityAndCollapse(intent)
   }

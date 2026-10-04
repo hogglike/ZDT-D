@@ -58,10 +58,14 @@
 
         <activity android:name=".modes.ConnectionModesActivity" android:exported="false" />
         <activity android:name=".modes.ModeServerPickerActivity" android:exported="false" />
-        <activity android:name=".modes.ModeSwitchActivity" android:exported="false" android:excludeFromRecents="true" />
+        <activity android:name=".modes.ModeSwitchActivity" android:exported="false" android:excludeFromRecents="true" android:taskAffinity="" android:theme="@style/Theme.ModeConfirmation" />
         <service android:name=".modes.ModeActionService" android:exported="false" android:foregroundServiceType="dataSync" />
         <receiver android:name=".modes.ModeStatusReceiver" android:exported="true">
             <intent-filter><action android:name="com.android.zdtd.service.ACTION_MODES_STATUS" /></intent-filter>
+        </receiver>
+        <receiver android:name=".modes.CombinedModeWidgetProvider" android:exported="false" android:label="ZDT-D · связь и VPN">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_connection_combined" />
         </receiver>
         <receiver android:name=".modes.ModeWidgetProvider" android:exported="false" android:label="ZDT-D · 3 режима">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>

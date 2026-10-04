@@ -209,6 +209,12 @@ fun ProgramScreen(
             checked = program.enabled,
             onCheckedChange = { v -> actions.setProgramEnabled(program.id, v) },
           )
+          var beginnerHelp by remember { mutableStateOf(false) }
+          TextButton(onClick = { beginnerHelp = !beginnerHelp }) { Text("Как настроить Opera Proxy ${if (beginnerHelp) "▴" else "▾"}") }
+          if (beginnerHelp) {
+            Text("1. Включи Opera Proxy и выбери приложения.\n2. На вкладке SNI оставь рабочие записи; регион выбирается на отдельной вкладке.\n3. Если Opera не запускается, открой параметры API proxy и добавь адрес прокси или ссылку на список. Сохрани и перезапусти ZDT-D.\nAPI proxy помогает получить данные серверов Opera. Трафик выбранных приложений проходит через Opera Proxy.", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { context.startActivity(Intent(context, com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity::class.java)) }) { Text("Открыть проверку Opera и DNS") }
+          }
           AnimatedVisibility(
             visible = operaWebPanelVisible,
             enter = fadeIn(tween(180)) + expandVertically(animationSpec = tween(220)),
@@ -2966,7 +2972,7 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
     val trimmed = value.trim()
     if (trimmed.isEmpty()) return false
     val allowed = listOf("http://", "https://", "socks5://", "socks5h://")
-    return trimmed.split(',')
+    return trimmed.split(',', '\n')
       .map { it.trim() }
       .filter { it.isNotEmpty() }
       .any { token -> !token.startsWith("/") && allowed.none { prefix -> token.startsWith(prefix, ignoreCase = true) } }
@@ -3039,9 +3045,10 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
           value = apiProxy,
           onValueChange = { apiProxy = it },
           modifier = Modifier.fillMaxWidth(),
-          singleLine = true,
-          label = { Text("-api-proxy") },
-          placeholder = { Text("socks5://host:port or /sdcard/proxies.txt") },
+          minLines = 3,
+          maxLines = 6,
+          label = { Text("Источники API proxy · по одному на строку") },
+          placeholder = { Text("socks5://host:port\nhttps://example.com/proxies.txt") },
           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
           isError = apiProxyInvalid,
           supportingText = {
@@ -3054,6 +3061,7 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
             )
           },
         )
+        Text("Используй один тип источников: адреса прокси, HTTPS-ссылки на списки или пути к TXT-файлам. При запуске ZDT-D списки загружаются заново и выбирается доступный прокси. Пустое поле — запросы к API напрямую.", style = MaterialTheme.typography.bodySmall)
       }
     }
 

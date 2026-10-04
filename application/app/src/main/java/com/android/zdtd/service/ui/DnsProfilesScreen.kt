@@ -40,6 +40,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
   var showRuntimeDiagnostics by remember { mutableStateOf(false) }
 
   fun reload() {
+    runtimeDiagnostics = null
     loading = true
     actions.loadJsonData(DnsConfigPath) { result ->
       loading = false
@@ -244,7 +245,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
             val stateText = when {
               suspendedForTethering -> "○ Приостановлен режимом раздачи"
               !enabled -> "○ Выключен"
-              applied && running -> "● Работает · netId ${rs.optInt("netid")} · ${rs.optString("tun")} · DNS ${rs.optString("dns")}"
+              applied && running -> "● Запущен · для проверки ответа нажми «Расширенный тест DNS»"
               else -> "● Требует применения · перезапусти ZDT-D или проверь журнал"
             }
             Text(
@@ -256,6 +257,9 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
                 else -> MaterialTheme.colorScheme.error
               },
             )
+          }
+          runtimeDiagnostics?.optJSONObject("profiles")?.optJSONObject(id)?.takeIf { it.optBoolean("dns_query_sent") }?.let { probe ->
+            Text(if (probe.optBoolean("dns_query_ok")) "✓ Последний DNS-запрос получил ответ" else "× Последний DNS-запрос не получил ответ; открой журнал профиля", color = if (probe.optBoolean("dns_query_ok")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
           }
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { editId = id; error = null }, enabled = !busy && !loading) { Text("Изменить") }
@@ -332,8 +336,8 @@ private fun DnsProfileEditor(
       Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(id, { id = it }, label = { Text("ID: латиница, цифры, _ и -") }, enabled = !busy && originalId.isEmpty(), singleLine = true)
         OutlinedTextField(name, { name = it }, label = { Text("Название") }, enabled = !busy, singleLine = true)
-        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("DoH URL (HTTPS)") }, enabled = !busy, singleLine = true)
-        OutlinedTextField(bootstrap, { bootstrap = it }, label = { Text("Bootstrap IPv4 через запятую") }, enabled = !busy)
+        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Адрес DNS over HTTPS") }, supportingText = { Text("Полный URL от провайдера, например https://xbox-dns.ru/dns-query") }, enabled = !busy, singleLine = true)
+        OutlinedTextField(bootstrap, { bootstrap = it }, label = { Text("DNS для поиска адреса DoH-сервера") }, supportingText = { Text("IPv4 DNS-серверов через запятую. Используются при подключении к DoH; запросы приложений идут к адресу выше.") }, enabled = !busy)
         OutlinedTextField(timeout, { timeout = it }, label = { Text("Таймаут, мс (250–30000)") }, enabled = !busy, singleLine = true)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
           Column(Modifier.weight(1f)) { Text("Включить профиль"); Text("Применится после перезапуска ZDT-D", style = MaterialTheme.typography.bodySmall) }

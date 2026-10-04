@@ -7,17 +7,22 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs, io::Read, os::unix::fs::PermissionsExt,
     path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering}}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+    atomic::{AtomicBool, AtomicU64, Ordering}}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use crate::{daemon, iptables::{iptables_port::{DpiTunnelOptions, ProtoChoice}, iptables_tproxy}, shell::{self, Capture}};
 use super::{mihomo_subscription as subscriptions, mode_policy};
 
 const PORT: u16 = 19972;
 const TEST_PORT: u16 = 19974;
 const CONTROL_PORT: u16 = 19973;
+const LATENCY_CONTROL_PORT: u16 = 19975;
+const LATENCY_PORT: u16 = 19976;
 const BIN: &str = "/data/adb/modules/ZDT-D/bin/sing-box";
 const MODES: [&str; 3] = ["white", "normal", "browser"];
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static REQUEST: Mutex<Option<(u64, String, bool)>> = Mutex::new(None);
+static MAINTENANCE_REQUEST: Mutex<Option<(u64, bool)>> = Mutex::new(None);
+static MAINTENANCE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static MAINTENANCE_BUSY: AtomicBool = AtomicBool::new(false);
 static STATUS: OnceLock<Mutex<Value>> = OnceLock::new();
 fn root() -> PathBuf { crate::settings::working_root_path().join("connection_modes") }
 fn options() -> DpiTunnelOptions { DpiTunnelOptions { port_preference: 0, dpi_ports: "1-52 54-65535".into() } }
@@ -88,14 +93,14 @@ impl ModeSettings {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Config { pub active: String, pub modes: BTreeMap<String, ModeSettings>, pub latency_url:String, pub latency_timeout_seconds:u64, pub catalog:BTreeMap<String, SavedNode> }
+pub struct Config { pub active: String, pub modes: BTreeMap<String, ModeSettings>, pub latency_url:String, pub latency_timeout_seconds:u64, pub catalog:BTreeMap<String, SavedNode>, pub refresh_enabled:bool, pub refresh_interval_minutes:u64 }
 impl Default for Config {
     fn default() -> Self {
         let mut modes = BTreeMap::new();
         for name in MODES { modes.insert(name.into(), ModeSettings::default()); }
         let white = modes.get_mut("white").unwrap();
         white.app_policy = "all".into(); white.name_filters = vec!["LTE".into()];
-        Self { active: String::new(), modes, latency_url:"https://www.gstatic.com/generate_204".into(),latency_timeout_seconds:8, catalog:BTreeMap::new() }
+        Self { active: String::new(), modes, latency_url:"https://www.gstatic.com/generate_204".into(),latency_timeout_seconds:8, catalog:BTreeMap::new(), refresh_enabled:false, refresh_interval_minutes:60 }
     }
 }
 // Private selection metadata contains labels and hashes, never subscription URLs or credentials.
@@ -160,6 +165,7 @@ pub fn save(mut c: Config) -> Result<Config> {
     if !c.active.is_empty() && !MODES.contains(&c.active.as_str()) { bail!("Unknown mode"); }
     validate_url(&c.latency_url)?;
     if !(2..=30).contains(&c.latency_timeout_seconds) { bail!("Таймаут задержки: 2–30 секунд"); }
+    if !(15..=10080).contains(&c.refresh_interval_minutes) { bail!("Интервал обновления: 15–10080 минут"); }
     for (mode, v) in &mut c.modes {
         v.name_filters=v.name_filters.iter().map(|s|s.trim().to_string()).filter(|s|!s.is_empty()).collect();
         if !MODES.contains(&mode.as_str()) || !["all", "except_dns", "blacklist", "selected"].contains(&v.app_policy.as_str()) { bail!("Invalid mode/app policy"); }
@@ -178,7 +184,7 @@ pub fn save(mut c: Config) -> Result<Config> {
     let catalog=stored.iter().map(|(id,_,_,n)|(stable_mode_key(id,&n.id),SavedNode{subscription_id:id.clone(),node_id:n.id.clone(),name:n.name.clone(),protocol:n.protocol.clone(),legacy_key:legacy_mode_key(id,&n.definition)})).collect();
     c.reconcile(&catalog,ready);
     save_config(&c)?;
-    if !c.active.is_empty() { request(&c.active, false)?; }
+    if !c.active.is_empty() && serde_json::to_value(c.modes.get(&c.active))?!=serde_json::to_value(old.modes.get(&c.active))? { request(&c.active, false)?; }
     Ok(c)
 }
 
@@ -317,8 +323,11 @@ fn start_core(all: &mut [Node]) -> Result<Core> {
     bail!("Ядро режимов не ответило за 4 секунды")
 }
 fn select(group:&str,key:&str) -> Result<()> {
+    select_at(CONTROL_PORT,group,key)
+}
+fn select_at(port:u16,group:&str,key:&str) -> Result<()> {
     let client=Client::builder().no_proxy().timeout(Duration::from_secs(3)).build()?;
-    let response=client.put(format!("http://127.0.0.1:{CONTROL_PORT}/proxies/{group}"))
+    let response=client.put(format!("http://127.0.0.1:{port}/proxies/{group}"))
         .bearer_auth(crate::settings::read_or_create_token()?).header("content-type","application/json")
         .body(json!({"name":key}).to_string()).send()?;
     if !response.status().is_success() { bail!("Selector rejected server"); } Ok(())
@@ -364,9 +373,9 @@ fn node_delay(n:&Node,c:&Config) -> (Option<u64>,String) {
     let attempt=(||->Result<u64> {
         // TEST is isolated from MODE. Use the same validated HTTPS transport as
         // mode checks: Clash API's delay handler loses the certificate context.
-        select("TEST",&n.key)?;
+        select_at(LATENCY_CONTROL_PORT,"TEST",&n.key)?;
         let start=Instant::now();
-        let client=Client::builder().no_proxy().proxy(Proxy::all(format!("http://127.0.0.1:{TEST_PORT}"))?)
+        let client=Client::builder().no_proxy().proxy(Proxy::all(format!("http://127.0.0.1:{LATENCY_PORT}"))?)
             .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(c.latency_timeout_seconds.min(8)))
             .timeout(Duration::from_secs(c.latency_timeout_seconds)).pool_max_idle_per_host(0).build()?;
         let response=client.head(&c.latency_url).header("cache-control","no-cache").send()?;
@@ -375,6 +384,141 @@ fn node_delay(n:&Node,c:&Config) -> (Option<u64>,String) {
         Ok(start.elapsed().as_millis().max(1) as u64)
     })();
     match attempt {Ok(ms)=>(Some(ms),String::new()),Err(e)=>(None,format!("{e:#}").chars().take(600).collect())}
+}
+
+fn maintenance_current(g:u64) -> bool {MAINTENANCE_GENERATION.load(Ordering::SeqCst)==g}
+fn maintenance_update(g:u64,patch:Value) {
+    let mut value=status_lock().lock().unwrap_or_else(|e|e.into_inner());
+    if !maintenance_current(g) {return;}
+    let changed=patch.get("maintenance_state").map(|s|s!=&value["maintenance_state"]).unwrap_or(false);
+    for (key,item) in patch.as_object().into_iter().flatten(){value[key]=item.clone();}
+    value["updated_at"]=json!(now());
+    let _=write_private(&root().join("status.json"),&value.to_string());
+    drop(value);
+    if changed {thread::spawn(|| {
+        let _=shell::run_timeout("am",&["broadcast","--user","0","--receiver-foreground","-a",
+            "com.android.zdtd.service.ACTION_MODES_STATUS","-n","com.android.zdtd.service/.modes.ModeStatusReceiver"],Capture::None,Duration::from_secs(4));
+    });}
+}
+pub fn request_maintenance(refresh:bool) -> Result<()> {
+    let mut queue=MAINTENANCE_REQUEST.lock().unwrap_or_else(|e|e.into_inner());
+    if MAINTENANCE_BUSY.swap(true,Ordering::SeqCst){bail!("Обновление или проверка уже выполняется");}
+    let g=MAINTENANCE_GENERATION.fetch_add(1,Ordering::SeqCst)+1;
+    maintenance_update(g,json!({"maintenance_state":"pending","maintenance_message":if refresh {"Ожидание обновления подписок…"}else{"Ожидание проверки задержек…"},"maintenance_done":0,"maintenance_total":0}));
+    *queue=Some((g,refresh));
+    Ok(())
+}
+fn maintenance_record() -> Value {
+    fs::read_to_string(root().join("maintenance.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!({}))
+}
+
+/// A separate mixed-only listener: no TPROXY inbound, no app rules, no changes
+/// to MODE, DNS profiles or the traffic core's control port/log/config.
+fn latency_layout(mut cfg:Value,port:u16,control:u16) -> Value {
+    cfg["inbounds"]=json!([{"type":"mixed","tag":"mode-test","listen":"127.0.0.1","listen_port":port}]);
+    cfg["route"]["final"]=json!("TEST");
+    cfg["experimental"]["clash_api"]["external_controller"]=json!(format!("127.0.0.1:{control}"));
+    cfg
+}
+fn start_latency_core(all:&mut [Node],g:u64) -> Result<Core> {
+    let fingerprint=core_fingerprint(all);
+    let mut outbounds:Vec<Value>=all.iter().filter_map(|n|n.outbound.clone()).collect();
+    let _=super::mode_bootstrap::resolve_outbounds(&mut outbounds,crate::android_dns::resolve_ipv4_all);
+    if !maintenance_current(g){bail!("Проверка отменена");}
+    let mut resolved=outbounds.into_iter();
+    for n in all.iter_mut().filter(|n|n.outbound.is_some()){n.outbound=resolved.next();}
+    fn validate(all:&[Node],path:&Path) -> Result<bool> {
+        let cfg=latency_layout(render_core(all)?,LATENCY_PORT,LATENCY_CONTROL_PORT);
+        write_private(path,&cfg.to_string())?;
+        let (code,_) =shell::run_timeout(BIN,&["check","-c",path.to_str().context("latency config path")?],Capture::Both,Duration::from_secs(8))?;
+        Ok(code==0)
+    }
+    let path=root().join("latency.runtime.json");
+    if !validate(all,&path)? {
+        let validation=root().join("latency.validation.json");
+        for n in all.iter_mut().filter(|n|n.outbound.is_some()) {
+            if !maintenance_current(g){bail!("Проверка отменена");}
+            if !validate(std::slice::from_ref(n),&validation)? {
+                REJECTED_NODES.lock().unwrap_or_else(|e|e.into_inner()).insert(n.revision.clone());n.outbound=None;
+            }
+        }
+        if !validate(all,&path)?{bail!("Ядро отклонило конфигурацию проверки серверов");}
+    }
+    let log=fs::File::create(root().join("latency.log"))?;log.set_permissions(fs::Permissions::from_mode(0o600))?;
+    let child=Command::new(BIN).args(["run","-c"]).arg(path).stdin(Stdio::null()).stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log)).spawn()?;
+    let mut core=Core{child,fingerprint};
+    write_private(&root().join("latency.pid"),&core.child.id().to_string())?;
+    for _ in 0..40 {
+        if !maintenance_current(g){bail!("Проверка отменена");}
+        if !core.alive(){bail!("Ядро проверки остановилось; проверь порты 19975–19976");}
+        if std::net::TcpStream::connect_timeout(&format!("127.0.0.1:{LATENCY_CONTROL_PORT}").parse()?,Duration::from_millis(100)).is_ok(){return Ok(core);}
+        thread::sleep(Duration::from_millis(100));
+    }
+    bail!("Ядро проверки не ответило за 4 секунды")
+}
+fn run_maintenance(g:u64,refresh:bool) -> Result<()> {
+    let mut record=maintenance_record();record["last_attempt"]=json!(now());
+    write_private(&root().join("maintenance.json"),&record.to_string())?;
+    let mut failed=0;
+    if refresh {
+        let list=subscriptions::list_view()?;
+        let ids:Vec<String>=list["items"].as_array().into_iter().flatten().filter(|s|s["enabled"]==true).filter_map(|s|s["id"].as_str().map(str::to_owned)).collect();
+        maintenance_update(g,json!({"maintenance_state":"refreshing","maintenance_message":format!("Обновление подписок: {}",ids.len())}));
+        subscriptions::enqueue_refresh_all()?;
+        let start=Instant::now();
+        while ids.iter().any(|id|subscriptions::is_refreshing(id)) {
+            if !maintenance_current(g){return Ok(());}
+            if start.elapsed()>Duration::from_secs(180){bail!("Обновление не завершилось за 3 минуты. Повтори позже");}
+            thread::sleep(Duration::from_millis(250));
+        }
+        failed=subscriptions::list_view()?["items"].as_array().into_iter().flatten()
+            .filter(|s|s["enabled"]==true && s["status"]["last_error"].as_str().map(|e|!e.is_empty()).unwrap_or(false)).count();
+    }
+    if !maintenance_current(g){return Ok(());}
+    // Persist alias migration and prune deleted choices only when cached
+    // subscription catalogs are complete. Failed refreshes retain their cache.
+    {let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());let c=config()?;save_config(&c)?;}
+    let c=config()?;let mut all=nodes()?;
+    maintenance_update(g,json!({"maintenance_state":"checking","maintenance_message":"Подготовка проверки всех серверов…","maintenance_failed_subscriptions":failed}));
+    let _core=start_latency_core(&mut all,g)?;
+    let total=all.iter().filter(|n|n.outbound.is_some()).count();let mut passed=0;let mut done=0;
+    // Discard records for disappeared or changed definitions. They must never
+    // be displayed as fresh successes for a replaced endpoint.
+    let mut pings=status()["pings"].clone();if !pings.is_object(){pings=json!({});}
+    pings.as_object_mut().unwrap().retain(|key,v|all.iter().any(|n|&n.key==key && v["revision"]==n.revision));
+    maintenance_update(g,json!({"pings":pings,"maintenance_total":total}));
+    for n in all.iter().filter(|n|n.outbound.is_some()) {
+        if !maintenance_current(g){return Ok(());}
+        let (delay,error)=node_delay(n,&c);done+=1;if delay.is_some(){passed+=1;}
+        pings[&n.key]=json!({"ms":delay,"time":now(),"error":error,"revision":n.revision,"url":c.latency_url});
+        maintenance_update(g,json!({"pings":pings,"maintenance_done":done,"maintenance_passed":passed,"maintenance_message":format!("Проверено {done}/{total} · {}",n.name)}));
+    }
+    if maintenance_current(g) {
+        record["last_completed"]=json!(now());write_private(&root().join("maintenance.json"),&record.to_string())?;
+        maintenance_update(g,json!({"maintenance_state":"complete","maintenance_message":format!("Проверено {done}: работают {passed}, без ответа {}{}",done-passed,if failed>0{format!(" · не обновились подписки: {failed}; использован сохранённый список")}else{String::new()}),"maintenance_last_completed":now()}));
+    }
+    Ok(())
+}
+fn start_maintenance_worker(state:daemon::SharedState) {
+    thread::spawn(move || {
+        let mut schedule_check=Instant::now();
+        loop {
+            let running={let s=daemon::lock_state(&state);s.services_running&&!s.start_in_progress&&!s.stop_in_progress};
+            if running {
+                if schedule_check.elapsed()>=Duration::from_secs(15) {
+                    schedule_check=Instant::now();
+                    if let Ok(c)=config(){if mode_policy::maintenance_due(c.refresh_enabled,c.refresh_interval_minutes,maintenance_record()["last_attempt"].as_u64().unwrap_or(0),now()){let _=request_maintenance(true);}}
+                }
+                let req=MAINTENANCE_REQUEST.lock().unwrap_or_else(|e|e.into_inner()).take();
+                if let Some((g,refresh))=req {
+                    if maintenance_current(g) {if let Err(e)=run_maintenance(g,refresh){maintenance_update(g,json!({"maintenance_state":"error","maintenance_message":e.to_string()}));}}
+                    let _=fs::remove_file(root().join("latency.pid"));
+                    MAINTENANCE_BUSY.store(false,Ordering::SeqCst);
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
 }
 fn safe_core_log(all:&[Node]) -> String {
     fn redact(value:&Value,text:&mut String) {
@@ -391,7 +535,7 @@ fn safe_core_log(all:&[Node]) -> String {
 }
 pub fn diagnostics() -> Result<Value> {
     let bootstrap:Value=fs::read_to_string(root().join("bootstrap.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!([]));
-    Ok(json!({"ok":true,"version":"4.2.0-mod30","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
+    Ok(json!({"ok":true,"version":"4.2.0-mod31","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
 }
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}
@@ -404,6 +548,7 @@ pub fn choose_server(mode:&str,key:&str) -> Result<()> {
 }
 pub fn request(mode:&str,ping:bool) -> Result<()> {
     if !mode.is_empty() && !MODES.contains(&mode) { bail!("Unknown mode"); }
+    if ping {return request_maintenance(false);}
     let mut queue=REQUEST.lock().unwrap_or_else(|e|e.into_inner());
     let g=GENERATION.fetch_add(1,Ordering::SeqCst)+1;
     update(g,json!({"mode":mode,"state":if mode.is_empty()&&!ping {"idle"} else {"connecting"},"message":if ping {"Проверка задержки…"} else {"Подключение…"},"reconnect_reason":"user_request","round":0,"attempt":0,"total":0,"probe_results":[],"core_log":""}));
@@ -462,20 +607,28 @@ pub fn stop_for_service() {
         let mut queue=REQUEST.lock().unwrap_or_else(|e|e.into_inner());
         let g=GENERATION.fetch_add(1,Ordering::SeqCst)+1; *queue=None; g
     };
+    let mg={
+        let mut queue=MAINTENANCE_REQUEST.lock().unwrap_or_else(|e|e.into_inner());
+        let mg=MAINTENANCE_GENERATION.fetch_add(1,Ordering::SeqCst)+1;
+        if queue.take().is_some(){MAINTENANCE_BUSY.store(false,Ordering::SeqCst);}mg
+    };
+    maintenance_update(mg,json!({"maintenance_state":"cancelled","maintenance_message":"Обновление/проверка остановлены"}));
     let _=cleanup_routes();clear_active();
     update(g,json!({"mode":"","state":"idle","message":"Выключено"}));
     stop_orphan();
 }
 fn stop_orphan() {
-    if let Ok(s)=fs::read_to_string(root().join("core.pid")) {
+  for (pid_name,config_name) in [("core.pid","config.runtime.json"),("latency.pid","latency.runtime.json")] {
+    if let Ok(s)=fs::read_to_string(root().join(pid_name)) {
         if let Ok(pid)=s.trim().parse::<i32>() { if pid>1 {
             if let Ok(cmd)=fs::read(format!("/proc/{pid}/cmdline")) {
                 let args:Vec<&[u8]>=cmd.split(|b|*b==0).collect();
-                let config=root().join("config.runtime.json");
+                let config=root().join(config_name);
                 if args.first().map(|s|s.ends_with(b"sing-box")).unwrap_or(false) && args.iter().any(|s| *s==config.as_os_str().as_encoded_bytes()) { unsafe {libc::kill(pid,libc::SIGTERM);} }
             }
         } }
     }
+  }
 }
 fn physical_network() -> Option<String> {
     shell::run_timeout("ip",&["-o","-4","addr","show"],Capture::Stdout,Duration::from_secs(3)).ok()
@@ -484,6 +637,7 @@ fn physical_network() -> Option<String> {
 pub fn start_worker(state:daemon::SharedState) {
     thread::spawn(move || {
         let _=cleanup_routes();stop_orphan();
+        start_maintenance_worker(state.clone());
         let mut core:Option<Core>=None;
         let mut last_check=Instant::now();let mut last_network:Option<String>=None;let mut was_running=false;
         loop {
@@ -507,16 +661,7 @@ pub fn start_worker(state:daemon::SharedState) {
                     let rebuild=core.as_mut().map(|c|!c.alive()||c.fingerprint!=core_fingerprint(&all)).unwrap_or(true);
                     if rebuild { let _=cleanup_routes();core=None;core=Some(start_core(&mut all)?); }
                     if !current(g){if status()["state"]=="idle" {core=None;} return Ok(());}
-                    if ping {
-                        for n in all.iter().filter(|n|n.outbound.is_some()) {
-                            if !current(g){return Ok(());}
-                            let (delay,error)=node_delay(n,&config()?);
-                            let mut pings=status()["pings"].clone();if !pings.is_object(){pings=json!({});}
-                            pings[&n.key]=json!({"ms":delay,"time":now(),"error":error,"revision":n.revision,"url":config()?.latency_url});update(g,json!({"pings":pings,"message":format!("Проверен {}",n.name)}));
-                        }
-                        let c=config()?;
-                        if rebuild && !c.active.is_empty() {connect(g,&c.active,&all)?;} else {update(g,json!({"mode":c.active,"state":if c.active.is_empty(){"idle"}else{"connected"},"message":"Проверка задержки завершена"}));}
-                    } else {connect(g,&mode,&all)?;}
+                    connect(g,&mode,&all)?;
                     Ok(())
                 })();
                 if let Err(e)=result {if current(g){let _=cleanup_routes();clear_active();update(g,json!({"state":"error","message":e.to_string(),"core_log":safe_core_log(&nodes().unwrap_or_default())}));}}
@@ -545,4 +690,3 @@ pub fn start_worker(state:daemon::SharedState) {
         }
     });
 }
-

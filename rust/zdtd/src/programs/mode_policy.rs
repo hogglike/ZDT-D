@@ -73,9 +73,26 @@ pub fn refresh_reason(catalog_changed:bool, network_changed:bool, core_alive:boo
     else {None}
 }
 
+/// Persist attempts as well as completions: a failed refresh must not retry
+/// every daemon tick. A clock correction permits one fresh attempt.
+pub fn maintenance_due(enabled:bool, minutes:u64, last_attempt:u64, now:u64) -> bool {
+    enabled && (15..=10080).contains(&minutes)
+        && (last_attempt==0 || now<last_attempt || now-last_attempt>=minutes*60)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn refresh_schedule_is_optional_bounded_and_does_not_spin_on_failure() {
+        assert!(!maintenance_due(false,60,0,4000));
+        assert!(maintenance_due(true,60,0,4000));
+        assert!(!maintenance_due(true,60,4000,7599));
+        assert!(maintenance_due(true,60,4000,7600));
+        assert!(maintenance_due(true,60,4000,3000));
+        assert!(!maintenance_due(true,0,0,4000));
+        assert!(!maintenance_due(true,10081,0,4000));
+        assert!(maintenance_due(true,15,4000,4900));
+    }
     #[test] fn manual_override_and_auto_return_keep_the_same_candidate_list() {
         let keys=vec!["lte1".into(), "lte2".into()];
         for mode in ["normal", "browser", "white"] {

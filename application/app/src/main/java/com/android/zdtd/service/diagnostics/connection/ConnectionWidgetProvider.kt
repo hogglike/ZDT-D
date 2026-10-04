@@ -9,6 +9,7 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.widget.RemoteViews
 import com.android.zdtd.service.R
+import com.android.zdtd.service.modes.ModeWidgetProvider
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -21,6 +22,14 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
   companion object {
     fun render(context: Context) {
       val manager = AppWidgetManager.getInstance(context)
+      manager.getAppWidgetIds(ComponentName(context, ConnectionWidgetProvider::class.java)).forEach { id ->
+        val views = RemoteViews(context.packageName, R.layout.widget_connection_health)
+        bind(context, views)
+        manager.updateAppWidget(id, views)
+      }
+      ModeWidgetProvider.renderCombined(context)
+    }
+    fun bind(context: Context, views: RemoteViews) {
       val report = ConnectionHealth.read(context)
       val rows = report.optJSONArray("rows")
       val time = report.optLong("time")
@@ -36,9 +45,7 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
       }
       val open = PendingIntent.getActivity(context, 2383, Intent(context, ConnectionDiagnosticsActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
       val check = PendingIntent.getForegroundService(context, 2384, Intent(context, DiagnosticService::class.java).setAction("CHECK"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-      manager.getAppWidgetIds(ComponentName(context, ConnectionWidgetProvider::class.java)).forEach { id ->
-        val views = RemoteViews(context.packageName, R.layout.widget_connection_health)
-        views.setTextViewText(R.id.health_time, state)
+      views.setTextViewText(R.id.health_time, state)
         val colored = SpannableString(text)
         if (rows != null) {
           var offset = 0
@@ -55,8 +62,6 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
         views.setTextViewText(R.id.health_results, colored)
         views.setOnClickPendingIntent(R.id.health_check, check)
         views.setOnClickPendingIntent(R.id.health_root, open)
-        manager.updateAppWidget(id, views)
-      }
     }
   }
 }

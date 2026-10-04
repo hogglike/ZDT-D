@@ -183,8 +183,8 @@ def main():
                     except OSError:
                         time.sleep(0.1)
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                def api(group, body, token="fixture-token"):
-                    return opener.open(urllib.request.Request(f"http://127.0.0.1:{control_port}/proxies/{group}", data=json.dumps(body).encode(), method="PUT", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}), timeout=3)
+                def api(group, body, token="fixture-token", controller=control_port):
+                    return opener.open(urllib.request.Request(f"http://127.0.0.1:{controller}/proxies/{group}", data=json.dumps(body).encode(), method="PUT", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}), timeout=3)
                 try:
                     api("TEST", {"name": "dead"}, "wrong-token")
                     raise AssertionError("Unauthenticated selector change accepted")
@@ -240,6 +240,45 @@ def main():
                 request(live_port)
                 print("PASS: independent one-URL core latency returns milliseconds; failed node stays unavailable; MODE stays unchanged", flush=True)
                 if reality:
+                    # The layout comes from the compiled production Rust helper.
+                    # Run a second core concurrently; MODE must stay untouched.
+                    latency_port, latency_control = port(), port()
+                    latency_cfg = reality["latency_layout"]
+                    assert len(latency_cfg["inbounds"]) == 1 and latency_cfg["inbounds"][0]["type"] == "mixed"
+                    latency_cfg["inbounds"][0]["listen_port"] = latency_port
+                    latency_cfg["dns"] = cfg["dns"]
+                    latency_cfg["certificate"] = cfg["certificate"]
+                    latency_cfg["outbounds"] = cfg["outbounds"]
+                    latency_cfg["experimental"]["clash_api"] = {"external_controller": f"127.0.0.1:{latency_control}", "secret": "fixture-token"}
+                    latency_path = work / "latency.json"
+                    latency_path.write_text(json.dumps(latency_cfg))
+                    subprocess.run([binary, "check", "-c", str(latency_path)], check=True, stdout=subprocess.DEVNULL)
+                    with open(work / "latency.log", "w") as latency_log:
+                        latency_process = subprocess.Popen([binary, "run", "-c", str(latency_path)], stdout=latency_log, stderr=latency_log)
+                        try:
+                            for _ in range(50):
+                                try:
+                                    api("TEST", {"name":"good"}, controller=latency_control).close()
+                                    break
+                                except (OSError, urllib.error.URLError):
+                                    time.sleep(.1)
+                            request(latency_port)
+                            api("TEST", {"name":"dead"}, controller=latency_control).close()
+                            try:
+                                request(latency_port)
+                                raise AssertionError("Latency core reached origin through another selector or direct path")
+                            except (OSError, http.client.HTTPException):
+                                pass
+                            request(live_port)
+                            api("TEST", {"name":"reality-good"}, controller=latency_control).close()
+                            request(latency_port)
+                            request(live_port)
+                            assert process.poll() is None
+                            print("PASS: second production latency core checks good/dead/Reality nodes while the traffic core stays running; no TPROXY listener or direct fallback", flush=True)
+                        finally:
+                            latency_process.terminate()
+                            latency_process.wait(timeout=5)
+                if reality:
                     api("TEST", {"name":"reality-good"}).close()
                     request(test_port)
                     delay("reality-good")
@@ -262,3 +301,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

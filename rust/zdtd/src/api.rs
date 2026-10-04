@@ -7150,6 +7150,11 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
                 ("GET", "/api/connection-modes") => modes::snapshot(),
                 ("GET", "/api/connection-modes/status") => Ok(json!({"ok":true,"status":modes::status()})),
                 ("GET", "/api/connection-modes/diagnostics") => modes::diagnostics(),
+                ("POST", "/api/connection-modes/refresh-servers") => {
+                    if !services_running || start_in_progress || stop_in_progress {anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска");}
+                    modes::request_maintenance(true)?;
+                    Ok(json!({"ok":true}))
+                },
                 ("POST", "/api/connection-modes/select-server") => {
                     let input:serde_json::Value=serde_json::from_slice(&body)?;
                     modes::choose_server(input["mode"].as_str().unwrap_or(""),input["key"].as_str().unwrap_or(""))?;
