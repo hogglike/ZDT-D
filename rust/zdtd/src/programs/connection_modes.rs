@@ -457,8 +457,8 @@ fn start_latency_core(all:&mut [Node],g:u64) -> Result<Core> {
     bail!("Ядро проверки не ответило за 4 секунды")
 }
 fn run_maintenance(g:u64,refresh:bool) -> Result<()> {
-    let mut record=maintenance_record();record["last_attempt"]=json!(now());
-    write_private(&root().join("maintenance.json"),&record.to_string())?;
+    let mut record=maintenance_record();
+    if refresh {record["last_attempt"]=json!(now());write_private(&root().join("maintenance.json"),&record.to_string())?;}
     let mut failed=0;
     if refresh {
         let list=subscriptions::list_view()?;
