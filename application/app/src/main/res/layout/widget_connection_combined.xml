@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#EEF0F4">
+    <include layout="@layout/widget_connection_modes" android:layout_width="match_parent" android:layout_height="wrap_content" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingBottom="8dp">
+        <TextView android:id="@+id/health_root" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Проверка связи · подробности ▸" android:textColor="#151515" android:textStyle="bold" android:textSize="13sp" android:paddingBottom="4dp" />
+        <TextView android:id="@+id/health_time" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Ещё не проверено" android:textColor="#555555" android:textSize="11sp" />
+        <TextView android:id="@+id/health_results" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Opera · DNS · YouTube · интернет" android:textColor="#555555" android:textSize="12sp" android:maxLines="8" android:paddingVertical="4dp" />
+        <TextView android:id="@+id/health_check" android:layout_width="match_parent" android:layout_height="40dp" android:gravity="center" android:text="Проверить связь" android:textColor="#151515" android:textSize="12sp" android:background="#FFFFFF" />
+    </LinearLayout>
+</LinearLayout>

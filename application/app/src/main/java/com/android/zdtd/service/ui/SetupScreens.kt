@@ -319,15 +319,31 @@ fun WelcomeScreen(onAccept: () -> Unit) {
 }
 
 @Composable
-fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: () -> Unit) {
+fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: () -> Unit, onContinueWithoutRoot: () -> Unit) {
   val arm64Ok = remember { isArm64OnlySupported() }
   val compact = rememberIsCompactWidth()
   val tablet = rememberIsTabletLayout()
   val shortSetupHeight = rememberIsShortHeight()
   val screenPadding = rememberAdaptiveScreenPadding()
+  var showNonRootWarning by rememberSaveable { mutableStateOf(false) }
   val rootDescription = stringResource(R.string.setup_root_body)
   val rootHeroBody = rootDescription.substringBefore("\n\n")
   val rootDetailsBody = rootDescription.substringAfter("\n\n", "")
+
+  if (showNonRootWarning) {
+    SetupAlertDialog(
+      onDismissRequest = { showNonRootWarning = false },
+      titleText = stringResource(R.string.setup_non_root_warning_title),
+      bodyText = stringResource(R.string.setup_non_root_warning_body),
+      confirmButtonText = stringResource(R.string.common_continue),
+      onConfirm = {
+        showNonRootWarning = false
+        onContinueWithoutRoot()
+      },
+      dismissButtonText = stringResource(R.string.action_cancel),
+      onDismiss = { showNonRootWarning = false },
+    )
+  }
 
   SetupScaffold { padding ->
     Box(
@@ -425,6 +441,14 @@ fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: (
                 modifier = Modifier.fillMaxWidth(),
                 text = stringResource(R.string.setup_request_root),
               )
+              OutlinedButton(
+                onClick = { showNonRootWarning = true },
+                enabled = arm64Ok,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+              ) {
+                Text(stringResource(R.string.setup_continue_without_root), fontWeight = FontWeight.SemiBold)
+              }
               if (REMOTE_SETUP_ENTRY_ENABLED) {
                 OutlinedButton(onClick = onRemoteSetup, modifier = Modifier.fillMaxWidth()) {
                   Text("Удалённая настройка")
@@ -501,6 +525,15 @@ fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: (
                 text = stringResource(R.string.setup_request_root),
               )
 
+              OutlinedButton(
+                onClick = { showNonRootWarning = true },
+                enabled = arm64Ok,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+              ) {
+                Text(stringResource(R.string.setup_continue_without_root), fontWeight = FontWeight.SemiBold)
+              }
+
               if (REMOTE_SETUP_ENTRY_ENABLED) {
                 OutlinedButton(onClick = onRemoteSetup, modifier = Modifier.fillMaxWidth()) {
                   Text("Удалённая настройка")
@@ -540,7 +573,8 @@ private fun ModernSetupHeroCard(
   val heroModifier = if (fillAvailableHeight) {
     modifier.fillMaxWidth().fillMaxHeight()
   } else {
-    modifier.fillMaxWidth().height(if (compact) 224.dp else 244.dp)
+    // Narrow screens wrap the copy more, so give the hero a little more vertical room.
+    modifier.fillMaxWidth().height(244.dp)
   }
   Surface(
     modifier = heroModifier,
@@ -550,7 +584,7 @@ private fun ModernSetupHeroCard(
     tonalElevation = 0.dp,
     shadowElevation = if (setupIsLightTheme()) 1.dp else 2.dp,
   ) {
-    Box(
+    BoxWithConstraints(
       modifier = Modifier
         .fillMaxSize()
         .background(
@@ -563,16 +597,17 @@ private fun ModernSetupHeroCard(
           ),
         ),
     ) {
+      val narrowHero = maxWidth < 480.dp
+      val textWidthFraction = when {
+        fillAvailableHeight -> 0.57f
+        narrowHero -> 0.62f
+        compact -> 0.61f
+        else -> 0.62f
+      }
       Column(
         modifier = Modifier
           .align(Alignment.CenterStart)
-          .fillMaxWidth(
-            when {
-              fillAvailableHeight -> 0.57f
-              compact -> 0.61f
-              else -> 0.62f
-            },
-          )
+          .fillMaxWidth(textWidthFraction)
           .padding(start = 18.dp, top = 18.dp, bottom = 18.dp, end = 8.dp),
         verticalArrangement = Arrangement.Center,
       ) {
@@ -615,8 +650,11 @@ private fun ModernSetupHeroCard(
         modifier = Modifier
           .align(Alignment.CenterEnd)
           .then(
-            if (fillAvailableHeight) Modifier.fillMaxWidth(0.47f)
-            else Modifier.width(if (compact) 146.dp else 180.dp),
+            when {
+              fillAvailableHeight -> Modifier.fillMaxWidth(0.47f)
+              narrowHero -> Modifier.fillMaxWidth(0.38f)
+              else -> Modifier.width(if (compact) 146.dp else 180.dp)
+            },
           )
           .fillMaxHeight(),
       )
@@ -1484,7 +1522,8 @@ private fun InstallerHeroCard(
   val heroModifier = if (fillAvailableHeight) {
     modifier.fillMaxWidth().fillMaxHeight()
   } else {
-    modifier.fillMaxWidth().height(if (compact) 214.dp else 230.dp)
+    // Installation copy can contain version/update details and needs extra room on narrow screens.
+    modifier.fillMaxWidth().height(if (compact) 236.dp else 230.dp)
   }
 
   Surface(
@@ -1495,7 +1534,7 @@ private fun InstallerHeroCard(
     tonalElevation = 0.dp,
     shadowElevation = if (setupIsLightTheme()) 0.dp else 2.dp,
   ) {
-    Box(
+    BoxWithConstraints(
       modifier = Modifier
         .fillMaxSize()
         .background(
@@ -1508,16 +1547,17 @@ private fun InstallerHeroCard(
           ),
         ),
     ) {
+      val narrowHero = maxWidth < 460.dp
+      val textWidthFraction = when {
+        fillAvailableHeight -> 0.57f
+        narrowHero -> 0.62f
+        compact -> 0.60f
+        else -> 0.62f
+      }
       Column(
         modifier = Modifier
           .align(Alignment.CenterStart)
-          .fillMaxWidth(
-            when {
-              fillAvailableHeight -> 0.57f
-              compact -> 0.60f
-              else -> 0.62f
-            },
-          )
+          .fillMaxWidth(textWidthFraction)
           .padding(start = 18.dp, top = 18.dp, bottom = 18.dp, end = 8.dp),
         verticalArrangement = Arrangement.Center,
       ) {
@@ -1580,8 +1620,11 @@ private fun InstallerHeroCard(
         modifier = Modifier
           .align(Alignment.CenterEnd)
           .then(
-            if (fillAvailableHeight) Modifier.fillMaxWidth(0.47f)
-            else Modifier.width(if (compact) 142.dp else 174.dp),
+            when {
+              fillAvailableHeight -> Modifier.fillMaxWidth(0.47f)
+              narrowHero -> Modifier.fillMaxWidth(0.38f)
+              else -> Modifier.width(if (compact) 142.dp else 174.dp)
+            },
           )
           .fillMaxHeight(),
       )

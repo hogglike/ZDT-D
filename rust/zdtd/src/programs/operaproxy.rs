@@ -331,8 +331,8 @@ pub fn start_if_enabled() -> Result<()> {
     // Load configurable opera-proxy args (falls back to defaults if file missing/invalid)
     let opera_args = read_opera_args();
     info!(
-        "operaproxy: args loaded: api_proxy='{}' verbosity={} server_selection='{}' init_retry='{}'",
-        opera_args.api_proxy,
+        "operaproxy: args loaded: api_proxy_configured={} verbosity={} server_selection='{}' init_retry='{}'",
+        !opera_args.api_proxy.trim().is_empty(),
         opera_args.verbosity,
         opera_args.server_selection,
         opera_args.init_retry_interval,

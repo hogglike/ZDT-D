@@ -42,6 +42,7 @@ const XT_WAIT_SECS: &str = "5";
 const OUT_CHAIN: &str = "ZDT_TPROXY_OUT";
 const PRE_CHAIN: &str = "ZDT_TPROXY_PRE";
 const DIVERT_CHAIN: &str = "ZDT_TPROXY_DIVERT";
+const MODE_NAT_CHAIN: &str = "ZDT_MODE_NAT";
 
 /// IPv4 ranges that must never be TPROXY'd: they have to reach the local stack
 /// or the LAN directly.  Covers CGNAT/RFC1918 private space, link-local,
@@ -304,23 +305,56 @@ fn legacy_route_mask_hex() -> String { format!("0x{LEGACY_ROUTE_MARK:08x}/0x{LEG
 
 pub fn apply(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions) -> std::result::Result<(), TproxyApplyError> {
     let _xtables_guard = xtables_lock::lock();
-    apply_locked(uid_file, dest_port, proto_choice, ifaces_raw, opt)
+    apply_locked(uid_file, dest_port, proto_choice, ifaces_raw, opt, false)
 }
 
-fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions) -> std::result::Result<(), TproxyApplyError> {
-    match settings::load_api_settings() {
+/// Explicit connection modes require TCP+UDP; never silently fall back to TCP.
+/// Their lifetime is managed by the mode worker, separately from legacy profiles.
+pub fn apply_connection_mode(uid_file: &Path, dest_port: u16, opt: &DpiTunnelOptions) -> Result<()> {
+    let _guard = xtables_lock::lock();
+    apply_locked(uid_file, dest_port, ProtoChoice::TcpUdp, None, opt, true)
+        .map_err(|e| anyhow::anyhow!("Connection mode TPROXY: {e:?}"))?;
+    let scope = scope_label(uid_file, dest_port, ProtoChoice::TcpUdp, None, opt);
+    let chain = scoped_out_chain_name(&scope);
+    delete_rule_all("mangle", OUT_CHAIN, &["-j", &chain])?;
+    // Preserve the two loopback bypasses and every intranet bypass before modes.
+    insert_rule_at("mangle", OUT_CHAIN, INTRANET_V4.len() + 3, &["-j", &chain])?;
+    // mangle ACCEPT does not stop nat OUTPUT. Prevent a pre-existing per-app
+    // DNAT proxy from rewriting the destination after this mode marks it.
+    ensure_chain("nat", MODE_NAT_CHAIN)?;
+    let (rc,out)=ipt_run_timeout(&["-t","nat","-F",MODE_NAT_CHAIN],Capture::Both,IPT_CMD_TIMEOUT)?;
+    if rc!=0 { anyhow::bail!("mode NAT chain: {}",out.trim()); }
+    let mark=mark_mask_hex(mark_from_slot(alloc_slot_for_scope(&scope)?));
+    let args=crate::programs::mode_policy::nat_bypass_args("-A",MODE_NAT_CHAIN,&mark);
+    let refs:Vec<&str>=args.iter().map(String::as_str).collect();
+    let (rc,out)=ipt_run_timeout(&refs,Capture::Both,IPT_CMD_TIMEOUT)?;
+    if rc!=0 { anyhow::bail!("mode NAT bypass: {}",out.trim()); }
+    delete_rule_all("nat","OUTPUT", &["-j",MODE_NAT_CHAIN])?;
+    insert_rule_at("nat","OUTPUT",1,&["-j",MODE_NAT_CHAIN])
+}
+
+pub fn cleanup_connection_mode_nat() -> Result<()> {
+    let _guard=xtables_lock::lock();
+    delete_rule_all("nat","OUTPUT", &["-j",MODE_NAT_CHAIN])?;
+    let _=ipt_run_timeout(&["-t","nat","-F",MODE_NAT_CHAIN],Capture::None,IPT_CMD_TIMEOUT);
+    let _=ipt_run_timeout(&["-t","nat","-X",MODE_NAT_CHAIN],Capture::None,IPT_CMD_TIMEOUT);
+    Ok(())
+}
+
+fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifaces_raw: Option<&str>, opt: &DpiTunnelOptions, explicit_mode: bool) -> std::result::Result<(), TproxyApplyError> {
+    if !explicit_mode { match settings::load_api_settings() {
         Ok(st) if st.tproxy_enabled => {}
         Ok(_) => return Err(unsupported("disabled by setting: tproxy_enabled=false")),
         Err(e) => return Err(unsupported(format!("settings load failed: {e:#}"))),
-    }
+    } }
 
-    if tproxy_disabled_by_flag() {
+    if !explicit_mode && tproxy_disabled_by_flag() {
         return Err(unsupported(disabled_reason().unwrap_or_else(|| "disabled by tproxy_no flag".to_string())));
     }
 
     probe_tproxy_runtime().map_err(|e| {
         let msg = format!("{e:#}");
-        disable_tproxy_persistently(&msg);
+        if !explicit_mode { disable_tproxy_persistently(&msg); }
         unsupported(msg)
     })?;
 
@@ -340,7 +374,7 @@ fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifac
     if uids.is_empty() {
         warn!("TPROXY: no valid UIDs in file: {} (remove scoped chains)", uid_file.display());
         cleanup_scope_by_label(&scope).map_err(failed)?;
-        crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE);
+        if !explicit_mode { crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE); }
         return Ok(());
     }
 
@@ -381,7 +415,7 @@ fn apply_locked(uid_file: &Path, dest_port: u16, proto_choice: ProtoChoice, ifac
     // cannot leak straight out over IPv6 and instead falls back to IPv4 (which
     // is what gets TPROXY'd).  Best-effort: never fail the whole apply on it.
     apply_ipv6_block(&scope, &uids);
-    crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE);
+    if !explicit_mode { crate::runtime_refresh::register_tproxy(uid_file, dest_port, proto_choice, ifaces_raw, opt, mark, ROUTE_TABLE); }
     info!("TPROXY applied uid_file={} dest_port={} mark={} table={}", uid_file.display(), dest_port, mark_hex(mark), ROUTE_TABLE);
     Ok(())
 }
@@ -443,18 +477,18 @@ fn ensure_base_chains() -> Result<()> {
     // layout that reliably delivers TPROXY traffic to the local t2s sockets:
     //   OUTPUT      #1: selected app traffic gets only the high fwmark bits.
     //   PREROUTING #1: socket DIVERT.  Packets that already belong to an
-    //                  established local (t2s) socket are re-marked for the
-    //                  policy route and accepted before TPROXY, so existing
-    //                  connections are delivered locally instead of being
-    //                  re-TPROXY'd.  A plain `-m socket` match (no
-    //                  `--transparent`) is used so it also catches sockets
-    //                  that are not flagged transparent.
+    //                  established transparent socket are accepted before TPROXY.
+    //                  Match only our marked loopback packets; normal incoming
+    //                  DNS/DoH/backend connections must retain their routing.
     //   PREROUTING #2: scoped marked packets enter ZDT-D TPROXY delivery.
     delete_rule_all("mangle", "OUTPUT", &["-j", OUT_CHAIN])?;
     insert_rule_at("mangle", "OUTPUT", 1, &["-j", OUT_CHAIN])?;
 
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "--transparent", "-j", DIVERT_CHAIN])?;
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "-j", DIVERT_CHAIN])?;
+    let divert=crate::programs::mode_policy::divert_match_args(&route_mask_hex(),DIVERT_CHAIN);
+    let divert_refs:Vec<&str>=divert.iter().map(String::as_str).collect();
+    delete_rule_all("mangle", "PREROUTING", &divert_refs)?;
     delete_rule_all("mangle", "PREROUTING", &["-j", PRE_CHAIN])?;
 
     // Insert PRE first, then DIVERT in front of it, so the resulting order is
@@ -467,7 +501,7 @@ fn ensure_base_chains() -> Result<()> {
     // t2s down to the TCP-only DNAT fallback).  Both steps are best-effort.
     match ensure_divert_chain() {
         Ok(()) => {
-            if let Err(e) = insert_rule_at("mangle", "PREROUTING", 1, &["-p", "tcp", "-m", "socket", "-j", DIVERT_CHAIN]) {
+            if let Err(e) = insert_rule_at("mangle", "PREROUTING", 1, &divert_refs) {
                 warn!("TPROXY socket DIVERT hook not installed, continuing without it: {e:#}");
             }
         }
@@ -719,6 +753,9 @@ pub fn cleanup_all() -> Result<()> {
     delete_rule_all("mangle", "OUTPUT", &["-j", OUT_CHAIN])?;
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "--transparent", "-j", DIVERT_CHAIN])?;
     delete_rule_all("mangle", "PREROUTING", &["-p", "tcp", "-m", "socket", "-j", DIVERT_CHAIN])?;
+    let divert=crate::programs::mode_policy::divert_match_args(&route_mask_hex(),DIVERT_CHAIN);
+    let refs:Vec<&str>=divert.iter().map(String::as_str).collect();
+    delete_rule_all("mangle", "PREROUTING", &refs)?;
     delete_rule_all("mangle", "PREROUTING", &["-j", PRE_CHAIN])?;
 
     // First flush parents so scoped chains are no longer referenced, then delete

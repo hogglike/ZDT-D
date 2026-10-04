@@ -41,6 +41,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
@@ -58,12 +59,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import com.android.zdtd.service.R
+import com.android.zdtd.service.ZdtdActions
 import com.android.zdtd.service.api.ApiModels
 import com.android.zdtd.service.tgwsproxy.TgWsProxyComponentState
 import java.util.Locale
+import org.json.JSONObject
+
+private const val DnsProfilesConfigPath = "/api/programs/dnsprofiles/config"
+private const val DnsProfilesStatusPath = "/api/programs/dnsprofiles/status"
+
+private enum class DnsProfilesEntryHealth { READY, WORKING, NEEDS_RESTART, ERROR }
 
 @Composable
 fun AppsListScreen(
+  actions: ZdtdActions,
   programs: List<ApiModels.Program>,
   daemonOnline: Boolean,
   tgWsProxy: TgWsProxyComponentState,
@@ -85,6 +94,27 @@ fun AppsListScreen(
   val sectionGap = if (isShortHeight) 6.dp else 8.dp
   var query by rememberSaveable { mutableStateOf("") }
   val q = query.trim()
+  var dnsConfig by remember { mutableStateOf<JSONObject?>(null) }
+  var dnsStatus by remember { mutableStateOf<JSONObject?>(null) }
+  var dnsConfigLoaded by remember { mutableStateOf(false) }
+  var dnsStatusLoaded by remember { mutableStateOf(false) }
+
+  LaunchedEffect(daemonOnline) {
+    dnsConfig = null
+    dnsStatus = null
+    dnsConfigLoaded = !daemonOnline
+    dnsStatusLoaded = !daemonOnline
+    if (daemonOnline) {
+      actions.loadJsonData(DnsProfilesConfigPath) {
+        dnsConfig = it
+        dnsConfigLoaded = true
+      }
+      actions.loadJsonData(DnsProfilesStatusPath) {
+        dnsStatus = it
+        dnsStatusLoaded = true
+      }
+    }
+  }
 
   val all = remember(programs, tgWsProxy.installed) {
     if (tgWsProxy.installed && programs.none { it.id == "tgwsproxy" }) {
@@ -148,6 +178,17 @@ fun AppsListScreen(
         onQueryChange = { query = it },
         onClearQuery = { query = "" },
         onOpenAnalysisTools = onOpenAnalysisTools,
+      )
+    }
+
+    item(key = "dns_profiles_entry") {
+      DnsProfilesEntryCard(
+        compact = compactCards,
+        daemonOnline = daemonOnline,
+        config = dnsConfig,
+        status = dnsStatus,
+        loaded = dnsConfigLoaded && dnsStatusLoaded,
+        onClick = { onOpenProgram("dnsprofiles") },
       )
     }
 
@@ -283,6 +324,100 @@ fun AppsListScreen(
   }
 }
 
+@Composable
+private fun DnsProfilesEntryCard(
+  compact: Boolean,
+  daemonOnline: Boolean,
+  config: JSONObject?,
+  status: JSONObject?,
+  loaded: Boolean,
+  onClick: () -> Unit,
+) {
+  val profiles = config?.optJSONObject("profiles")
+  val ids = profiles?.keys()?.asSequence()?.toList().orEmpty()
+  val enabledCount = ids.count { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
+  val appCount = ids.sumOf { profiles?.optJSONObject(it)?.optJSONArray("apps")?.length() ?: 0 }
+  val runtimeProfiles = status?.optJSONObject("profiles")
+  val activeCount = ids.count { id ->
+    val runtime = runtimeProfiles?.optJSONObject(id)
+    profiles?.optJSONObject(id)?.optBoolean("enabled") == true &&
+      runtime != null && runtime.optBoolean("netd_applied") && runtime.optBoolean("process_running")
+  }
+  val blocked = status?.optBoolean("global_dnscrypt_enabled") == true ||
+    status?.optString("private_dns_mode") == "hostname"
+  val health = when {
+    !daemonOnline || (loaded && (config == null || status == null)) || blocked -> DnsProfilesEntryHealth.ERROR
+    !loaded -> null
+    enabledCount == 0 -> DnsProfilesEntryHealth.READY
+    activeCount == enabledCount -> DnsProfilesEntryHealth.WORKING
+    else -> DnsProfilesEntryHealth.NEEDS_RESTART
+  }
+  val accentColor = when (health) {
+    DnsProfilesEntryHealth.WORKING -> Color(0xFF2E7D32)
+    DnsProfilesEntryHealth.NEEDS_RESTART -> MaterialTheme.colorScheme.tertiary
+    DnsProfilesEntryHealth.ERROR -> MaterialTheme.colorScheme.error
+    DnsProfilesEntryHealth.READY, null -> MaterialTheme.colorScheme.primary
+  }
+  val statusLabel = when (health) {
+    DnsProfilesEntryHealth.WORKING -> "Работает"
+    DnsProfilesEntryHealth.NEEDS_RESTART -> "Нужен перезапуск"
+    DnsProfilesEntryHealth.ERROR -> if (daemonOnline) "Ошибка настройки" else "Демон не подключён"
+    DnsProfilesEntryHealth.READY -> "Готов к настройке"
+    null -> "Загрузка состояния"
+  }
+
+  Card(
+    onClick = onClick,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 2.dp),
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
+    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.34f)),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth()
+        .background(Brush.horizontalGradient(listOf(accentColor.copy(alpha = 0.16f), MaterialTheme.colorScheme.surface.copy(alpha = 0.64f))))
+        .padding(horizontal = if (compact) 11.dp else 13.dp, vertical = if (compact) 10.dp else 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Surface(
+        modifier = Modifier.size(if (compact) 48.dp else 54.dp),
+        shape = CircleShape,
+        color = accentColor.copy(alpha = 0.14f),
+        contentColor = accentColor,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.36f)),
+      ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          Icon(Icons.Outlined.Dns, contentDescription = null, modifier = Modifier.size(if (compact) 24.dp else 27.dp))
+        }
+      }
+      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("DNS-профили", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Text(
+          "Per-app DoH · системная сеть для остальных приложений и раздачи",
+          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+          style = MaterialTheme.typography.bodySmall,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          "Профили ${ids.size}  ·  Активно $activeCount  ·  Приложения $appCount",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        ProgramBadgeRow(
+          label = statusLabel,
+          containerColor = accentColor.copy(alpha = 0.14f),
+          contentColor = accentColor,
+        )
+      }
+      Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f), modifier = Modifier.size(22.dp))
+    }
+  }
+}
+
 
 @Composable
 private fun OptionalToolsEntryCard(
@@ -297,13 +432,13 @@ private fun OptionalToolsEntryCard(
       .fillMaxWidth()
       .padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 2.dp),
     shape = RoundedCornerShape(18.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     border = BorderStroke(1.dp, accentColor.copy(alpha = 0.34f)),
   ) {
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .background(Brush.horizontalGradient(listOf(accentColor.copy(alpha = 0.16f), MaterialTheme.colorScheme.surface.copy(alpha = 0.64f))))
         .padding(horizontal = if (compact) 11.dp else 13.dp, vertical = if (compact) 10.dp else 12.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -357,13 +492,13 @@ private fun VpsServersEntryCard(
       .fillMaxWidth()
       .padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 2.dp),
     shape = RoundedCornerShape(18.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     border = BorderStroke(1.dp, accentColor.copy(alpha = 0.34f)),
   ) {
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .background(Brush.horizontalGradient(listOf(accentColor.copy(alpha = 0.16f), MaterialTheme.colorScheme.surface.copy(alpha = 0.64f))))
         .padding(horizontal = if (compact) 11.dp else 13.dp, vertical = if (compact) 10.dp else 12.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -415,12 +550,12 @@ private fun SubscriptionsEntryCard(
     onClick = onClick,
     modifier = Modifier.fillMaxWidth().padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 2.dp),
     shape = RoundedCornerShape(18.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     border = BorderStroke(1.dp, accentColor.copy(alpha = 0.34f)),
   ) {
     Row(
       modifier = Modifier.fillMaxWidth()
-        .background(Brush.horizontalGradient(listOf(accentColor.copy(alpha = 0.16f), MaterialTheme.colorScheme.surface.copy(alpha = 0.64f))))
         .padding(horizontal = if (compact) 11.dp else 13.dp, vertical = if (compact) 10.dp else 12.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -765,14 +900,8 @@ private fun ProgramCard(
     isActive -> activeAccent
     else -> idleAccent
   }
-  val containerColor = when {
-    isActive -> MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
-    isProfiles -> MaterialTheme.colorScheme.surface.copy(alpha = 0.70f)
-    else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.62f)
-  }
+  val containerColor = MaterialTheme.colorScheme.surfaceContainerLow
   val shape = RoundedCornerShape(16.dp)
-  val gradientStart = if (isActive) accentColor.copy(alpha = 0.18f) else accentColor.copy(alpha = 0.04f)
-  val gradientEnd = containerColor.copy(alpha = 0.72f)
 
   Card(
     onClick = onClick,
@@ -781,96 +910,91 @@ private fun ProgramCard(
       .padding(horizontal = horizontalPadding),
     shape = shape,
     colors = CardDefaults.cardColors(containerColor = containerColor),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     border = BorderStroke(1.dp, accentColor.copy(alpha = if (isActive) 0.62f else 0.22f)),
   ) {
-    Box(
+    Row(
       modifier = Modifier
         .fillMaxWidth()
-        .background(Brush.horizontalGradient(listOf(gradientStart, gradientEnd))),
+        .padding(horizontal = if (compact) 10.dp else 12.dp, vertical = if (compact) 9.dp else 11.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
     ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = if (compact) 10.dp else 12.dp, vertical = if (compact) 9.dp else 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
+      Surface(
+        modifier = Modifier.size(if (compact) 50.dp else 56.dp),
+        color = accentColor.copy(alpha = if (isActive) 0.16f else 0.10f),
+        contentColor = accentColor,
+        shape = CircleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = if (isActive) 0.42f else 0.24f)),
       ) {
-        Surface(
-          modifier = Modifier.size(if (compact) 50.dp else 56.dp),
-          color = accentColor.copy(alpha = if (isActive) 0.16f else 0.10f),
-          contentColor = accentColor,
-          shape = CircleShape,
-          tonalElevation = 0.dp,
-          shadowElevation = 0.dp,
-          border = BorderStroke(1.dp, accentColor.copy(alpha = if (isActive) 0.42f else 0.24f)),
-        ) {
-          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            val iconSize = if (compact) 28.dp else 31.dp
-            val iconRes = programIconRes(program.id)
-            if (iconRes != null) {
-              Icon(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                modifier = Modifier.size(iconSize),
-              )
-            } else {
-              Icon(
-                imageVector = programIcon(program.id),
-                contentDescription = null,
-                modifier = Modifier.size(if (compact) 23.dp else 25.dp),
-              )
-            }
-          }
-        }
-
-        Column(
-          modifier = Modifier.weight(1f),
-          verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            maxLines = if (compact) 2 else 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            subtitle,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = if (compact) 2 else 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-
-          Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            ProgramBadgeRow(
-              label = primaryChip,
-              containerColor = if (isProfiles) {
-                profileAccent.copy(alpha = 0.15f)
-              } else if (isActive) {
-                Color(0xFF22C55E).copy(alpha = 0.16f)
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f)
-              },
-              contentColor = if (isProfiles) profileAccent else if (isActive) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          val iconSize = if (compact) 28.dp else 31.dp
+          val iconRes = programIconRes(program.id)
+          if (iconRes != null) {
+            Icon(
+              painter = painterResource(iconRes),
+              contentDescription = null,
+              modifier = Modifier.size(iconSize),
             )
-            if (!secondaryChip.isNullOrBlank()) {
-              ProgramBadgeRow(
-                label = secondaryChip,
-                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                contentColor = MaterialTheme.colorScheme.primary,
-              )
-            }
+          } else {
+            Icon(
+              imageVector = programIcon(program.id),
+              contentDescription = null,
+              modifier = Modifier.size(if (compact) 23.dp else 25.dp),
+            )
           }
         }
-
-        Icon(
-          imageVector = Icons.Outlined.ChevronRight,
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f),
-          modifier = Modifier.size(22.dp),
-        )
       }
+
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(
+          title,
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          maxLines = if (compact) 2 else 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          subtitle,
+          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+          style = MaterialTheme.typography.bodySmall,
+          maxLines = if (compact) 2 else 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+          ProgramBadgeRow(
+            label = primaryChip,
+            containerColor = if (isProfiles) {
+              profileAccent.copy(alpha = 0.15f)
+            } else if (isActive) {
+              Color(0xFF22C55E).copy(alpha = 0.16f)
+            } else {
+              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f)
+            },
+            contentColor = if (isProfiles) profileAccent else if (isActive) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+          )
+          if (!secondaryChip.isNullOrBlank()) {
+            ProgramBadgeRow(
+              label = secondaryChip,
+              containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+              contentColor = MaterialTheme.colorScheme.primary,
+            )
+          }
+        }
+      }
+
+      Icon(
+        imageVector = Icons.Outlined.ChevronRight,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f),
+        modifier = Modifier.size(22.dp),
+      )
     }
   }
 }

@@ -1122,6 +1122,8 @@ La protección no funciona en modo punto de acceso. Si el punto de acceso está 
     <string name="opera_args_api_proxy_desc">Proxy SOCKS5/HTTP(S) que usa opera-proxy para acceder a la API backend de Opera. Puedes indicar una URL de proxy, varias URL separadas por comas, una URL a una lista de proxies en texto plano o una ruta absoluta a un archivo de lista ya guardado en el dispositivo.</string>
     <string name="opera_args_api_proxy_invalid">Usa URL de proxy con esquema: http://, https://, socks5:// o socks5h://. También puedes usar una URL http(s) a una lista de proxies en texto plano o una ruta absoluta local que empiece por /.</string>
     <string name="opera_args_api_proxy_hint">Formato: http://, https://, socks5:// o socks5h://[login:password@]host[:port]. Se pueden separar varios proxies con comas. También puedes pegar una URL http(s) a una lista de texto plano o una ruta local absoluta como /sdcard/proxies.txt o /storage/emulated/0/proxies.txt. Los archivos locales se leen del dispositivo en cada inicio de Opera-proxy. No se admiten direcciones sin esquema salvo que sean rutas de archivo absolutas. Si no se encuentra un proxy operativo o no se puede descargar/leer la lista, Opera-proxy se inicia sin api-proxy.</string>
+    <string name="non_root_opera_api_proxy_choose_file">Seleccionar archivo local de lista de proxies</string>
+    <string name="non_root_opera_api_proxy_import_failed">No se pudo importar la lista de proxies seleccionada. Asegúrate de que sea un archivo de texto legible de hasta 1 MB.</string>
     <string name="opera_args_server_selection_title">Selección de servidor</string>
     <string name="opera_args_dl_limit_hint">Límite de descarga en bytes para la prueba de velocidad del servidor. Predeterminado: 204800 (200 KB)</string>
     <string name="opera_args_misc_title">Tiempos y detalle</string>
@@ -2410,4 +2412,164 @@ La causa restante probablemente está en el daemon/API. Revisa los registros del
     <string name="subscription_manual_target">Destino: %1$s</string>
     <string name="subscription_copy_config">Copiar configuración</string>
     <string name="subscription_copy_failed">No se pudo preparar la configuración para copiarla.</string>
+
+    <!-- Non-root runtime -->
+    <string name="setup_continue_without_root">Continuar sin root</string>
+    <string name="setup_non_root_warning_title">Modo limitado</string>
+    <string name="setup_non_root_warning_body">Vas a continuar sin acceso root. Solo estarán disponibles las funciones que trabajan mediante Android VPN y servicios proxy locales.\n\nLa protección, las funciones de seguridad y otras funciones que requieren acceso al sistema no estarán disponibles. El inicio automático de componentes del sistema y la integración avanzada de herramientas también estarán limitados.</string>
+    <string name="non_root_home_title">Modo sin root</string>
+    <string name="non_root_home_body">ZDT-D se ejecuta sin acceso al sistema. Aquí se configurarán los controles de VPN y proxy.</string>
+    <string name="non_root_home_restrictions">La protección del sistema, las funciones de seguridad, el inicio automático y la integración avanzada de herramientas no están disponibles en este modo.</string>
+
+    <string name="non_root_current_mode">Modo actual</string>
+    <string name="non_root_work_mode_title">Modo de trabajo</string>
+    <string name="non_root_mode_direct">Herramienta</string>
+    <string name="non_root_mode_cascade">Cascada</string>
+    <string name="non_root_mode_direct_desc">Conexión directa al programa proxy seleccionado.</string>
+    <string name="non_root_mode_cascade_desc">HEV envía el tráfico mediante T2S a los perfiles proxy habilitados.</string>
+    <string name="non_root_direct_opera_desc">Proxy non-root directo. La dirección está fijada en 127.0.0.1.</string>
+    <string name="non_root_loopback_port_hint">Solo se usa la dirección local 127.0.0.1. Los puertos empiezan en 10000.</string>
+    <string name="non_root_port_error">Elige un puerto libre entre 10000 y 65535.</string>
+    <string name="non_root_cascade_intro">T2S es el enrutador de la cascada. Aquí aparecerán la creación de perfiles y los ajustes de ruta.</string>
+
+    <string name="non_root_byedpi_restart_after_opera">Reiniciar después de iniciar Opera</string>
+    <string name="non_root_byedpi_restart_after_opera_desc">Reinicia ByeDPI con los argumentos de reinicio cuando Opera Proxy esté listo. Si está desactivado, ByeDPI se inicia solo una vez.</string>
+
+    <string name="non_root_create_profile">Crear perfil</string>
+    <string name="non_root_profile_tool_label">Herramienta</string>
+    <string name="non_root_profile_name">Nombre del perfil</string>
+    <string name="non_root_profile_settings">Ajustes del perfil</string>
+    <string name="non_root_profile_enabled">Activado</string>
+    <string name="non_root_profile_enabled_desc">Mantén este perfil en la ruta Cascade e inícialo cuando Cascade esté activo.</string>
+    <string name="non_root_profile_title_fmt">%1$s — %2$s</string>
+    <string name="non_root_delete_profile_title">¿Eliminar perfil?</string>
+    <string name="non_root_delete_profile_body">Se eliminarán el perfil «%1$s» y sus ajustes guardados.</string>
+    <string name="non_root_cascade_opera_desc">Ajustes de Opera Proxy para este perfil Cascade.</string>
+    <string name="non_root_t2s_settings">Ajustes de T2S</string>
+    <string name="non_root_t2s_backend_mode">Modo backend</string>
+    <string name="non_root_t2s_route_title">Ruta Cascade</string>
+    <string name="non_root_t2s_route_hint">Mantén pulsado ≡ y arrastra para cambiar el orden. Los perfiles desactivados conservan su lugar.</string>
+    <string name="non_root_t2s_route_empty">Crea al menos un perfil proxy para construir una ruta Cascade.</string>
+    <string name="non_root_t2s_palette_title">Elementos de ruta</string>
+    <string name="non_root_t2s_palette_hint">Mantén pulsado ≡ y arrastra un elemento hacia arriba para añadirlo a la ruta. Arrastra un elemento de servicio insertado hacia abajo para eliminarlo.</string>
+    <string name="non_root_t2s_group">Grupo ;</string>
+    <string name="non_root_t2s_direct">Modo directo 0</string>
+    <string name="non_root_t2s_block_direct">Bloquear directo 0</string>
+    <string name="non_root_t2s_group_short">; · Grupo</string>
+    <string name="non_root_t2s_direct_short">0 · Modo directo</string>
+    <string name="non_root_t2s_block_direct_short">0 · Bloquear directo</string>
+    <string name="non_root_t2s_group_help">El punto y coma separa grupos de prioridad backend. Colócalo entre dos perfiles proxy.</string>
+    <string name="non_root_t2s_direct_help">El modo directo usa el valor T2S 0 al principio de la ruta.</string>
+    <string name="non_root_t2s_block_direct_help">Bloquear directo usa el valor T2S 0 al final de la ruta.</string>
+    <string name="non_root_t2s_group_position">Colócalo entre dos perfiles proxy. Arrastra hacia abajo para eliminar.</string>
+    <string name="non_root_t2s_direct_position">Solo al principio de la ruta. Arrastra hacia abajo para eliminar.</string>
+    <string name="non_root_t2s_block_direct_position">Solo al final de la ruta. Arrastra hacia abajo para eliminar.</string>
+    <string name="non_root_t2s_drag_handle">Arrastrar</string>
+    <string name="non_root_t2s_help">Ayuda</string>
+    <string name="non_root_t2s_stats_title">Estadísticas de T2S</string>
+    <string name="non_root_direct_stats_empty">El modo directo todavía no tiene un panel de estadísticas separado.</string>
+    <!-- Non-root T2S runtime settings -->
+    <string name="non_root_t2s_runtime_settings">Ajustes de ejecución de T2S</string>
+    <string name="non_root_t2s_idle_timeout">Tiempo de espera inactivo (segundos)</string>
+    <string name="non_root_t2s_buffer_size">Tamaño del búfer (bytes)</string>
+    <string name="non_root_t2s_download_limit">Límite de descarga (Mbit/s, 0 = sin límite)</string>
+    <string name="non_root_t2s_peer_coordination">Coordinación entre instancias</string>
+    <string name="non_root_t2s_peer_coordination_desc">Coordina las comprobaciones de salud entre instancias T2S con los mismos backends.</string>
+    <string name="non_root_t2s_serialize_connects">Serializar conexiones al backend</string>
+    <string name="non_root_t2s_serialize_connects_desc">Evita handshakes simultáneos con el mismo backend sensible.</string>
+    <string name="non_root_t2s_connect_stagger">Retardo entre conexiones al backend (ms)</string>
+
+    <string name="non_root_t2s_stopped">T2S está detenido. Inicia la cascada para ver las estadísticas de la API.</string>
+
+    <!-- Non-root VPN lifecycle progress -->
+    <string name="non_root_runtime_logs_title">Inicio / detención de VPN</string>
+    <string name="non_root_service_state_running">Servicio: en ejecución</string>
+    <string name="non_root_service_state_starting">Servicio: iniciando</string>
+    <string name="non_root_service_state_stopping">Servicio: deteniéndose</string>
+    <string name="non_root_service_state_stopped">Servicio: detenido</string>
+    <string name="non_root_service_state_error">Servicio: error</string>
+    <string name="non_root_switch_root_title">¿Cambiar al modo root?</string>
+    <string name="non_root_switch_root_body">¿Deseas cambiar al modo root? El asistente de configuración existente se abrirá en el paso de solicitud de acceso root.</string>
+    <string name="non_root_log_preparing_runtime">Preparando el entorno sin root…</string>
+    <string name="non_root_log_start_mode">Iniciando el modo %1$s…</string>
+    <string name="non_root_log_start_component">Iniciando %1$s…</string>
+    <string name="non_root_log_component_ready">%1$s está listo.</string>
+    <string name="non_root_log_restart_component">Reiniciando %1$s…</string>
+    <string name="non_root_log_create_vpn_interface">Creando la interfaz VPN…</string>
+    <string name="non_root_log_vpn_running">La VPN está activa.</string>
+    <string name="non_root_log_stop_requested">Deteniendo la VPN…</string>
+    <string name="non_root_log_stop_component">Deteniendo %1$s…</string>
+    <string name="non_root_log_close_vpn_interface">Cerrando la interfaz VPN…</string>
+    <string name="non_root_log_stop_proxy_processes">Deteniendo los procesos proxy…</string>
+    <string name="non_root_log_vpn_stopped">La VPN está detenida.</string>
+    <string name="non_root_log_error">Error: %1$s</string>
+
+    <string name="non_root_t2s_advanced_settings">T2S avanzado</string>
+    <string name="non_root_profiles_empty_title">Aún no hay perfiles</string>
+    <string name="non_root_profiles_empty_body">Crea un perfil de Opera Proxy. Los mismos perfiles se usan en los modos Herramienta y Cascada.</string>
+    <string name="non_root_opera_server_title">Servidor Opera</string>
+    <string name="non_root_opera_server_desc">Un perfil de la aplicación usa un servidor Opera Proxy y un SNI.</string>
+    <string name="non_root_profile_opera_desc">Ajustes del servidor Opera Proxy para este perfil.</string>
+    <string name="non_root_group_name_title">Nombrar el grupo</string>
+    <string name="non_root_group_name_label">Nombre del grupo</string>
+    <string name="non_root_group_rename">Renombrar grupo</string>
+    <string name="non_root_t2s_group_unnamed">Grupo</string>
+
+    <string name="non_root_server_count_fmt">%1$d servidores</string>
+    <string name="non_root_servers_title">Servidores</string>
+    <string name="non_root_servers_desc">Los servidores de este perfil se convierten en backends SOCKS5 locales para T2S.</string>
+    <string name="non_root_add_server">Añadir servidor</string>
+    <string name="non_root_servers_empty">Aún no hay servidores. Añade uno para usar este perfil.</string>
+    <string name="non_root_delete_server_title">¿Eliminar servidor?</string>
+    <string name="non_root_delete_server_body">¿Eliminar “%1$s” de este perfil?</string>
+    <string name="non_root_server_name">Nombre del servidor</string>
+    <string name="non_root_local_socks_port">Puerto SOCKS5 local</string>
+    <string name="non_root_mieru_rpc_port">Puerto RPC de Mieru</string>
+    <string name="non_root_log_level">Nivel de registro</string>
+    <string name="non_root_singbox_import">Importar configuración de sing-box</string>
+    <string name="non_root_singbox_import_source">Enlace o JSON</string>
+    <string name="non_root_import_config">Importar configuración</string>
+    <string name="non_root_direct_multi_server_disabled">Varios servidores · usa Cascada</string>
+    <string name="non_root_additional_tools">Herramientas adicionales</string>
+    <string name="non_root_tgws_title">Telegram WS Proxy</string>
+    <string name="non_root_vps_desc">Gestiona servidores VPS e importa clientes generados a perfiles.</string>
+
+    <string name="non_root_vps_import_title">Añadir cliente VPS a ZDT-D</string>
+    <string name="non_root_vps_import_new_profile">Crear perfil nuevo</string>
+    <string name="non_root_vps_import_existing">Añadir servidor a un perfil existente</string>
+    <string name="non_root_vps_import_unsupported">Este servicio VPS no se puede importar a un perfil backend sin root.</string>
+
+    <string name="non_root_error_hysteria_server_required">La configuración de Hysteria2 debe especificar un servidor.</string>
+    <string name="non_root_error_wireproxy_empty">La configuración de WireProxy no puede estar vacía.</string>
+    <string name="non_root_error_import_failed">No se pudo importar la configuración.</string>
+    <string name="non_root_error_invalid_socks_port">Elige un puerto SOCKS5 válido entre 10000 y 65535.</string>
+    <string name="non_root_error_invalid_rpc_port">Elige un puerto RPC de Mieru válido entre 10000 y 65535.</string>
+    <string name="non_root_error_rpc_port_conflict">El puerto RPC de Mieru debe ser distinto del puerto SOCKS5.</string>
+    <string name="non_root_tgws_secret_error">El secreto debe contener exactamente 32 caracteres hexadecimales.</string>
+    <string name="non_root_tgws_faketls_error">Se requiere un dominio SNI de FakeTLS.</string>
+
+    <string name="non_root_app_routing_title">Enrutamiento de aplicaciones</string>
+    <string name="non_root_app_routing_body">Elige qué aplicaciones usan la ruta VPN de ZDT-D.</string>
+    <string name="non_root_app_routing_all">Todas las aplicaciones</string>
+    <string name="non_root_app_routing_all_desc">Envía todo el tráfico de aplicaciones por la VPN excepto ZDT-D.</string>
+    <string name="non_root_app_routing_only_selected">Solo las seleccionadas</string>
+    <string name="non_root_app_routing_only_selected_desc">Solo las aplicaciones marcadas usan la ruta VPN.</string>
+    <string name="non_root_app_routing_exclude_selected">Todas excepto las seleccionadas</string>
+    <string name="non_root_app_routing_exclude_selected_desc">Las aplicaciones marcadas omiten la ruta VPN.</string>
+    <string name="non_root_app_routing_select_apps">Seleccionar aplicaciones</string>
+    <string name="non_root_app_routing_selected_count">Seleccionadas: %1$d</string>
+    <string name="non_root_app_routing_only_selected_empty_hint">Selecciona al menos una aplicación antes de iniciar la VPN.</string>
+    <string name="non_root_app_routing_self_excluded">ZDT-D siempre queda fuera de su propia ruta VPN.</string>
+    <string name="non_root_app_routing_picker_title">Elegir aplicaciones</string>
+    <string name="non_root_app_routing_restart_title">¿Reconectar la VPN?</string>
+    <string name="non_root_app_routing_restart_body">Cambió el enrutamiento de aplicaciones. Reconecta la VPN para aplicarlo a la conexión actual.</string>
+    <string name="non_root_app_routing_restart_later">Más tarde</string>
+    <string name="non_root_app_routing_restart_now">Reconectar</string>
+    <string name="non_root_app_routing_only_selected_empty_error">Selecciona al menos una aplicación instalada al usar «Solo las seleccionadas».</string>
+
+    <string name="non_root_tgws_plugin_title">Plugin TGWS</string>
+    <string name="non_root_tgws_plugin_not_installed">El plugin TGWS no está instalado. Pulsa Instalar para descargarlo e instalarlo directamente desde ZDT-D.</string>
+    <string name="non_root_tgws_plugin_install_permission_required">Permite que ZDT-D instale aplicaciones desconocidas para continuar con la instalación del plugin TGWS.</string>
+    <string name="non_root_tgws_plugin_installed_fmt">Plugin instalado: %1$s</string>
+    <string name="non_root_tgws_plugin_latest_fmt">Plugin disponible: %1$s</string>
 </resources>

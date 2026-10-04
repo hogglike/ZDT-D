@@ -118,6 +118,7 @@ fun AppsHost(
   ) { r ->
     when (r) {
       AppsRoute.List -> AppsListScreen(
+        actions = actions,
         programs = programs,
         daemonOnline = daemonOnline,
         tgWsProxy = tgWsProxy,
@@ -212,6 +213,11 @@ fun AppsHost(
         bottomContentPadding = bottomContentPadding,
       )
       is AppsRoute.Program -> when (r.programId) {
+        "dnsprofiles" -> DnsProfilesScreen(
+          actions = actions,
+          topContentPadding = topContentPadding,
+          bottomContentPadding = bottomContentPadding,
+        )
         "tgwsproxy" -> TgWsProxySettingsScreen(
           programs = programs,
           actions = actions,

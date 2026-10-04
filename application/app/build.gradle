@@ -25,7 +25,14 @@ rootModuleProp.withInputStream { moduleProps.load(it) }
 def moduleVersionCode = (moduleProps.getProperty('versionCode') ?: '1').trim().toInteger()
 def moduleVersionName = (moduleProps.getProperty('version') ?: '1.0').trim()
 def generatedAssetsDir = file("$buildDir/generated/zdt-assets/main")
-def zdtCompileSdk = (findProperty('zdtCompileSdk') ?: System.getenv('ZDT_COMPILE_SDK') ?: '36').toString().trim().toInteger()
+def generatedNonRootJniDir = file("$buildDir/generated/zdt-nonroot-jni/main")
+def zdtCompileSdk = (findProperty('zdtCompileSdk') ?: System.getenv('ZDT_COMPILE_SDK') ?: '37').toString().trim().toInteger()
+def zdtCompileSdkMinor = (findProperty('zdtCompileSdkMinor') ?: System.getenv('ZDT_COMPILE_SDK_MINOR') ?: '0').toString().trim().toInteger()
+def hevSocks5TunnelAar = file('libs/hev-socks5-tunnel.aar')
+def zdtRequireHevAar = (findProperty('zdtRequireHevAar') ?: 'false').toString().toBoolean()
+if (zdtRequireHevAar && (!hevSocks5TunnelAar.exists() || hevSocks5TunnelAar.length() == 0L)) {
+  throw new GradleException("Required hev-socks5-tunnel AAR is missing: ${hevSocks5TunnelAar}")
+}
 def generatedModuleZip = file('../../out/module/zdt_module.zip')
 def generatedModuleProp = file('../../out/module/module.prop')
 def zdtModuleZip = file("$generatedAssetsDir/zdt_module.zip")
@@ -114,6 +121,10 @@ def ensurePrebuiltBusyBox = { String arch, File prebuiltBusyBox ->
 android {
   namespace 'com.android.zdtd.service'
   compileSdk zdtCompileSdk
+  if (zdtCompileSdk >= 37) {
+    // API 37 is published as a minor-versioned SDK platform (android-37.0).
+    compileSdkMinor zdtCompileSdkMinor
+  }
 
   defaultConfig {
     applicationId 'com.android.zdtd.service'
@@ -166,11 +177,22 @@ android {
     buildConfig true
     viewBinding false
     compose true
+    aidl true
   }
 
   sourceSets {
     main {
       assets.srcDirs += generatedAssetsDir
+      jniLibs.srcDirs += generatedNonRootJniDir
+    }
+  }
+
+  packaging {
+    jniLibs {
+      // Non-root helper executables are packaged under lib/<abi> so Android extracts
+      // them into the app-owned nativeLibraryDir, where ProcessBuilder can execute them.
+      useLegacyPackaging = true
+      keepDebugSymbols += ['**/libzdt_t2s.so', '**/libzdt_operaproxy.so', '**/libzdt_byedpi.so']
     }
   }
 }
@@ -342,12 +364,13 @@ tasks.register('verifyBundledHelperAssets') {
 }
 
 dependencies {
-  implementation 'androidx.core:core-ktx:1.18.0'
-  implementation 'androidx.appcompat:appcompat:1.7.1'
+  testImplementation 'junit:junit:4.13.2'
+  implementation 'androidx.core:core-ktx:1.19.1'
+  implementation 'androidx.appcompat:appcompat:1.8.0'
   implementation 'androidx.activity:activity-compose:1.13.0'
 
   // Compose
-  implementation platform('androidx.compose:compose-bom:2026.05.00')
+  implementation platform('androidx.compose:compose-bom:2026.09.00')
   implementation 'androidx.compose.ui:ui'
   implementation 'androidx.compose.ui:ui-tooling-preview'
   implementation 'androidx.compose.foundation:foundation'
@@ -356,15 +379,20 @@ dependencies {
   implementation 'androidx.compose.material:material-icons-extended'
 
   // Lifecycle / coroutines helpers
-  implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.10.0'
-  implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0'
-  implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0'
-  implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.10.0'
+  implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.11.0'
+  implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0'
+  implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0'
+  implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.11.0'
+
+  // Non-root VPN bridge. GitHub Actions builds this AAR from upstream source.
+  if (hevSocks5TunnelAar.exists()) {
+    implementation files(hevSocks5TunnelAar)
+  }
 
   // Networking
-  implementation 'com.squareup.okhttp3:okhttp:5.3.2'
-  implementation 'com.github.mwiede:jsch:2.28.4'
-  implementation 'org.bouncycastle:bcprov-jdk18on:1.84'
+  implementation 'com.squareup.okhttp3:okhttp:5.5.0'
+  implementation 'com.github.mwiede:jsch:2.28.7'
+  implementation 'org.bouncycastle:bcprov-jdk18on:1.86'
 
   // Remote setup
 

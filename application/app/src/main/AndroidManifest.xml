@@ -1,22 +1,32 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <permission
+        android:name="com.android.zdtd.service.plugin.com.permission.CONTROL_TGWS"
+        android:protectionLevel="signature" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Needed to request installing APK updates downloaded by the app (online update). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="com.android.zdtd.service.plugin.com.permission.CONTROL_TGWS" />
     <!-- Android 13+ runtime permission (requested only when user enables notifications). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Needed to list all installed apps (incl. system) for the app picker on Android 11+. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+
+    <queries>
+        <package android:name="com.android.zdtd.service.plugin.com" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -44,6 +54,35 @@
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />
+
+
+        <activity android:name=".modes.ConnectionModesActivity" android:exported="false" />
+        <activity android:name=".modes.ModeServerPickerActivity" android:exported="false" />
+        <activity android:name=".modes.ModeSwitchActivity" android:exported="false" android:excludeFromRecents="true" android:taskAffinity="" android:theme="@style/Theme.ModeConfirmation" />
+        <service android:name=".modes.ModeActionService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".modes.ModeStatusReceiver" android:exported="true">
+            <intent-filter><action android:name="com.android.zdtd.service.ACTION_MODES_STATUS" /></intent-filter>
+        </receiver>
+        <receiver android:name=".modes.CombinedModeWidgetProvider" android:exported="false" android:label="ZDT-D · связь и VPN">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_connection_combined" />
+        </receiver>
+        <receiver android:name=".modes.ModeWidgetProvider" android:exported="false" android:label="ZDT-D · 3 режима">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_connection_modes" />
+        </receiver>
+        <service android:name=".modes.WhiteModeTile" android:exported="true" android:label="ZDT-D · Белый" android:icon="@drawable/ic_qs_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
+        <service android:name=".modes.NormalModeTile" android:exported="true" android:label="ZDT-D · Обычный" android:icon="@drawable/ic_qs_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
+        <service android:name=".modes.BrowserModeTile" android:exported="true" android:label="ZDT-D · Браузер" android:icon="@drawable/ic_qs_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
 
         <activity
             android:name=".MainActivity"
@@ -95,6 +134,38 @@
             </intent-filter>
 
         </activity>
+
+        <activity
+            android:name=".NonRootActivity"
+            android:exported="false"
+            android:launchMode="singleTask" />
+
+
+        <receiver
+            android:name=".tgwsplugin.TgWsPluginInstallReceiver"
+            android:exported="false" />
+
+        <service
+            android:name=".NonRootTgWsService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-enabled non-root Telegram WS Proxy bound to the app-owned loopback interface" />
+        </service>
+
+        <service
+            android:name=".NonRootVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-initiated non-root VPN tunnel through app-owned proxy backends" />
+        </service>
 
         <activity
             android:name=".RemoteSetupActivity"
@@ -186,6 +257,14 @@
             android:name=".diagnostics.nfqws.NfqwsTesterOverlayService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <activity android:name=".diagnostics.connection.ConnectionDiagnosticsActivity" android:exported="false" />
+        <service android:name=".diagnostics.connection.DiagnosticService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".diagnostics.connection.ConnectionHealthJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
+        <receiver android:name=".diagnostics.connection.ConnectionWidgetProvider" android:label="ZDT-D · проверка связи" android:exported="false">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_connection_health_info" />
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
