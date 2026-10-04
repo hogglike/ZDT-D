@@ -13,11 +13,13 @@ public=re.search(r'PublicKey:\s*(\S+)',keys).group(1)
 with tempfile.TemporaryDirectory(prefix='zdtd-renderer-') as work:
  work=Path(work);(work/'src').mkdir()
  (work/'Cargo.toml').write_text('[package]\nname="zdtd-renderer-test"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nserde_json="1.0"\nanyhow="1.0"\nserde={version="1.0",features=["derive"]}\n')
+ (work/'src/mode_bootstrap.rs').write_text((ROOT/'rust/zdtd/src/programs/mode_bootstrap.rs').read_text())
  main=r'''
 use serde_json::{json, Value as JsonValue};
 use serde::{Serialize,Deserialize};
 use std::collections::BTreeMap;
 use anyhow::{Result,bail};
+mod mode_bootstrap;
 const MODES:[&str;3]=["white","normal","browser"];
 struct SubscriptionNode {protocol:String,server:String,port:u16,definition:JsonValue}
 fn main() {
@@ -33,6 +35,15 @@ fn main() {
  assert_eq!(old.modes["browser"].check_sites.len(),3);assert!(old.modes["browser"].check_enabled);assert_eq!(old.latency_timeout_seconds,8);
  let mut disabled=old.modes["browser"].clone();disabled.check_enabled=false;disabled.check_sites[0].enabled=false;
  let saved=serde_json::to_string(&disabled).unwrap();let reread:ModeSettings=serde_json::from_str(&saved).unwrap();assert!(!reread.check_enabled);assert!(!reread.check_sites[0].enabled);
+ let mut bootstrap=vec![out.clone(),out.clone(),out.clone(),json!({"type":"socks","server":"127.0.0.1"}),json!({"type":"socks","server":"missing.invalid"})];
+ bootstrap[0]["server"]=json!("proxy.fixture.invalid.");bootstrap[1]["server"]=json!("proxy.fixture.invalid");bootstrap[2]["server"]=json!("implicit.fixture.invalid");
+ bootstrap[2]["tls"].as_object_mut().unwrap().remove("server_name");
+ let before=bootstrap[0]["tls"].clone();let mut calls=Vec::new();
+ let report=mode_bootstrap::resolve_outbounds(&mut bootstrap,|host|{calls.push(host.to_owned());if host=="missing.invalid"{vec![]}else{vec!["::1".into(),"127.0.0.1".into()]}});
+ assert_eq!(calls,vec!["proxy.fixture.invalid","implicit.fixture.invalid","missing.invalid"]);
+ assert_eq!(bootstrap[0]["server"],"127.0.0.1");assert_eq!(bootstrap[0]["tls"],before);assert_eq!(bootstrap[0]["uuid"],out["uuid"]);assert_eq!(bootstrap[0]["flow"],out["flow"]);
+ assert_eq!(bootstrap[1]["server"],"127.0.0.1");assert_eq!(bootstrap[2]["tls"]["server_name"],"implicit.fixture.invalid");
+ assert_eq!(bootstrap[4]["server"],"missing.invalid");assert!(report.last().unwrap()["ip"].is_null());
  println!("{}",out);
 }
 '''
@@ -41,4 +52,4 @@ fn main() {
  out=json.loads(subprocess.check_output(['cargo','run','--quiet','--target',host,'--manifest-path',str(work/'Cargo.toml'),'--',public],text=True,cwd=work))
  Path(sys.argv[2]).write_text(json.dumps({'client':out,'private_key':private,'public_key':public}))
  Path(sys.argv[2]).chmod(0o600)
- print('PASS: production VLESS/Reality renderer preserves Vision/SNI/keys; Clash and native TLS defaults; mod25 settings migration',flush=True)
+ print('PASS: production VLESS/Reality renderer preserves Vision/SNI/keys; settings migration; Android bootstrap caches names, preserves explicit/implicit SNI and leaves failed nodes retryable',flush=True)

@@ -26,4 +26,5 @@ pub mod mieru;
 pub mod tgwsproxy;
 
 pub mod connection_modes;
+pub mod mode_bootstrap;
 pub(crate) mod mode_policy;

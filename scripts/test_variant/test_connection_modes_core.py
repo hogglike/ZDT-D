@@ -85,6 +85,32 @@ def socks_fixture():
     return server
 
 
+def dns_fixture():
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    queries = []
+    def serve():
+        while True:
+            try:
+                data, peer = server.recvfrom(4096)
+            except OSError:
+                return
+            offset, labels = 12, []
+            while data[offset]:
+                length = data[offset]; offset += 1
+                labels.append(data[offset:offset+length].decode()); offset += length
+            offset += 1
+            kind, _ = struct.unpack("!HH", data[offset:offset+4])
+            host = ".".join(labels)
+            queries.append((host, kind))
+            supported = host in ["mode-fixture.invalid", "reality-fixture.invalid"] and kind == 1
+            question = data[12:offset+4]
+            answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + socket.inet_aton("127.0.0.1") if supported else b""
+            server.sendto(data[:2] + struct.pack("!HHHHH", 0x8180, 1, int(supported), 0, 0) + question + answer, peer)
+    threading.Thread(target=serve, daemon=True).start()
+    return server, queries
+
+
 def main():
     binary = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="zdtd-mode-core-") as work:
@@ -111,8 +137,12 @@ def main():
         origin.socket = tls.wrap_socket(origin.socket, server_side=True)
         threading.Thread(target=origin.serve_forever, daemon=True).start()
         fixture = socks_fixture()
+        dns, dns_queries = dns_fixture()
         test_port, live_port, control_port, tproxy_port, dead_port, reality_port = [port() for _ in range(6)]
         cfg = json.loads((ROOT / "rust/zdtd/src/programs/mode_core.json").read_text())
+        bootstrap = cfg["dns"]["servers"][0]
+        assert bootstrap["type"] == "udp" and bootstrap["server"] == "1.1.1.1", "Root Android must not use absent ::1:53 DNS"
+        bootstrap.update(server="127.0.0.1", server_port=dns.getsockname()[1])
         cfg["certificate"]["certificate_path"] = [str(cert)]
         reality = json.loads(Path(sys.argv[2]).read_text()) if len(sys.argv)>2 else None
         cfg["inbounds"][0]["listen_port"] = tproxy_port
@@ -121,8 +151,10 @@ def main():
         cfg["inbounds"].append({"type": "mixed", "tag": "fixture-live", "listen": "127.0.0.1", "listen_port": live_port})
         cfg["experimental"]["clash_api"] = {"external_controller": f"127.0.0.1:{control_port}", "secret": "fixture-token"}
         cfg["outbounds"] = [{"type": "socks", "tag": tag, "server": "127.0.0.1", "server_port": target} for tag, target in [("good", fixture.getsockname()[1]), ("dead", dead_port)]]
+        cfg["outbounds"][0]["server"] = "mode-fixture.invalid"
         if reality:
             client = reality["client"]
+            client["server"] = "reality-fixture.invalid"
             client["server_port"] = reality_port
             client["tag"] = "reality-good"
             cfg["outbounds"].append(client)
@@ -168,7 +200,8 @@ def main():
                     finally:
                         conn.close()
                 request(test_port)
-                print("PASS: real TLS reply through TEST and selected SOCKS server", flush=True)
+                assert ("mode-fixture.invalid", 1) in dns_queries
+                print("PASS: real UDP DNS bootstrap for domain endpoint and TLS reply through TEST, without a local port 53 listener", flush=True)
                 api("TEST", {"name": "dead"}).close()
                 count = Origin.requests
                 try:
@@ -210,6 +243,7 @@ def main():
                     api("TEST", {"name":"reality-good"}).close()
                     request(test_port)
                     delay("reality-good")
+                    assert ("reality-fixture.invalid", 1) in dns_queries
                     api("TEST", {"name":"reality-bad"}).close()
                     try:
                         request(test_port)
@@ -223,6 +257,7 @@ def main():
                 process.wait(timeout=5)
                 origin.shutdown()
                 fixture.close()
+                dns.close()
 
 
 if __name__ == "__main__":

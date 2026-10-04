@@ -217,6 +217,14 @@ fn check_core(all:&[Node],path:&Path) -> Result<bool> {
     Ok(code==0)
 }
 fn start_core(all: &mut [Node]) -> Result<Core> {
+    // Fingerprint subscription definitions, not temporary resolved addresses.
+    // Use the same Android endpoint resolver as stock sing-box profiles.
+    let fingerprint=core_fingerprint(all);
+    let mut outbounds:Vec<Value>=all.iter().filter_map(|n|n.outbound.clone()).collect();
+    let bootstrap=super::mode_bootstrap::resolve_outbounds(&mut outbounds,crate::android_dns::resolve_ipv4_all);
+    let mut resolved=outbounds.into_iter();
+    for n in all.iter_mut().filter(|n|n.outbound.is_some()) {n.outbound=resolved.next();}
+    write_private(&root().join("bootstrap.json"),&serde_json::to_string(&bootstrap)?)?;
     let path=root().join("config.runtime.json");
     if !check_core(all,&path)? {
         // A malformed or obsolete node must not disable every other server.
@@ -232,7 +240,7 @@ fn start_core(all: &mut [Node]) -> Result<Core> {
     let log=fs::File::create(root().join("sing-box.log"))?;
     log.set_permissions(fs::Permissions::from_mode(0o600))?;
     let child=Command::new(BIN).args(["run","-c"]).arg(&path).stdin(Stdio::null()).stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log)).spawn()?;
-    let mut core=Core{child,fingerprint:core_fingerprint(all)};
+    let mut core=Core{child,fingerprint};
     write_private(&root().join("core.pid"),&core.child.id().to_string())?;
     for _ in 0..40 {
         if !core.alive() { bail!("Ядро режимов остановилось. Возможно, занят порт 19972–19974"); }
@@ -314,7 +322,10 @@ fn safe_core_log(all:&[Node]) -> String {
     if let Ok(token)=crate::settings::read_or_create_token(){if !token.is_empty(){text=text.replace(&token,"<скрыто>");}}
     text.chars().take(8000).collect()
 }
-pub fn diagnostics() -> Result<Value> { Ok(json!({"ok":true,"version":"4.2.0-mod26","status":status(),"core_log":safe_core_log(&nodes()?)})) }
+pub fn diagnostics() -> Result<Value> {
+    let bootstrap:Value=fs::read_to_string(root().join("bootstrap.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!([]));
+    Ok(json!({"ok":true,"version":"4.2.0-mod27","status":status(),"bootstrap":bootstrap,"core_log":safe_core_log(&nodes()?)}))
+}
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}
     if !nodes()?.iter().any(|n|n.key==key && n.outbound.is_some()){bail!("Сервер удалён или не поддерживается");}
@@ -449,6 +460,9 @@ pub fn start_worker(state:daemon::SharedState) {
                 let all=nodes().unwrap_or_default();let key=status()["key"].as_str().unwrap_or("").to_owned();
                 let changed=core.as_ref().map(|c|c.fingerprint!=core_fingerprint(&all)).unwrap_or(true);
                 let network=physical_network();let network_changed=!last_network.is_empty() && network!=last_network;last_network=network;
+                // Refresh endpoint IPs after Wi-Fi/mobile changes. Do not reuse
+                // a core that still contains bootstrap addresses from the old network.
+                if network_changed {if let Some(c)=core.as_mut(){c.fingerprint.clear();}}
                 let mode=status()["mode"].as_str().unwrap_or("").to_owned();
                 let settings=config().ok().and_then(|c|c.modes.get(&mode).cloned());
                 let healthy=if changed||network_changed {false} else {match settings {Some(ref s) if !s.check_enabled=>true,Some(ref s)=>all.iter().find(|n|n.key==key).and_then(|n|test_node(g,n,s).ok().and_then(|r|r.delay)).is_some(),None=>false}};
