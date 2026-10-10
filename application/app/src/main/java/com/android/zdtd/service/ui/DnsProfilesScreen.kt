@@ -107,6 +107,10 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
           Text("DNS-профили", style = MaterialTheme.typography.headlineSmall)
           OutlinedButton(onClick = {
             diagnosticContext.startActivity(android.content.Intent(diagnosticContext,
+              com.android.zdtd.service.watch.WatchDnsActivity::class.java))
+          }) { Text("DNS для часов · VPN") }
+          OutlinedButton(onClick = {
+            diagnosticContext.startActivity(android.content.Intent(diagnosticContext,
               com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity::class.java))
           }) { Text("Проверка соединения и ошибки раздачи") }
           Text(
@@ -431,3 +435,4 @@ private fun DnsProfileAppPicker(initial: Set<String>, onDismiss: () -> Unit, onS
     dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
   )
 }
+

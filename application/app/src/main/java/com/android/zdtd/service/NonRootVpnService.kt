@@ -76,9 +76,14 @@ class NonRootVpnService : VpnService() {
   private fun requestStart() {
     val current = NonRootVpnRuntime.state.value
     if (current == NonRootVpnState.STARTING || current == NonRootVpnState.RUNNING) return
+    if (com.android.zdtd.service.watch.WatchDnsRuntime.active()) {
+      NonRootVpnRuntime.update(NonRootVpnState.ERROR, "Сначала выключи DNS часов")
+      return
+    }
     stopRequested = false
     startForegroundCompat(buildNotification())
     runtimeJob?.cancel()
+    NonRootVpnRuntime.update(NonRootVpnState.STARTING)
     runtimeJob = serviceScope.launch {
       NonRootVpnRuntime.clearLogs()
       NonRootVpnRuntime.update(NonRootVpnState.STARTING)
@@ -757,14 +762,15 @@ class NonRootVpnService : VpnService() {
   private data class ManagedProcess(val name: String, val process: Process)
 
   private object HevBridge {
-    private val clazz by lazy { Class.forName("hev.htproxy.TProxyService") }
-    private val startMethod by lazy { clazz.getMethod("TProxyStartService", String::class.java, java.lang.Integer.TYPE) }
-    private val stopMethod by lazy { clazz.getMethod("TProxyStopService") }
-    private val runningMethod by lazy { clazz.getMethod("TProxyIsRunning") }
-
-    fun start(configPath: String, fd: Int): Boolean = startMethod.invoke(null, configPath, fd) as? Boolean ?: false
-    fun stop(): Boolean = stopMethod.invoke(null) as? Boolean ?: false
-    fun isRunning(): Boolean = runningMethod.invoke(null) as? Boolean ?: false
+    @Volatile private var lease: VpnHevBridge.Lease? = null
+    fun start(configPath: String, fd: Int): Boolean {
+      val current = VpnHevBridge.reserve("nonroot")
+      lease = current
+      try { return VpnHevBridge.run(current, configPath, fd) }
+      finally { if (lease === current) lease = null }
+    }
+    fun stop(): Boolean = lease?.let { VpnHevBridge.stop(it) } ?: false
+    fun isRunning(): Boolean = lease?.let { VpnHevBridge.isRunning(it) } ?: false
   }
 
   private fun upsertWireProxySocks5Bind(configText: String, port: Int): String {
@@ -843,3 +849,4 @@ class NonRootVpnService : VpnService() {
     }
   }
 }
+
