@@ -53,6 +53,11 @@ class WatchDnsActivity : ComponentActivity() {
       var samsungOnly by remember { mutableStateOf(true) }
       var testing by remember { mutableStateOf(false) }
       var diagnosticMessage by remember { mutableStateOf<String?>(null) }
+      var observe by remember { mutableStateOf(store.observe) }
+      var observation by remember { mutableStateOf(WatchDnsObserved.journal.snapshot()) }
+      LaunchedEffect(active) {
+        do { observation = WatchDnsObserved.journal.snapshot(); delay(1000) } while (active)
+      }
 
       fun reload() {
         loading = true
@@ -122,6 +127,25 @@ class WatchDnsActivity : ComponentActivity() {
           }
           error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
           item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+              Text("Диагностика реальных DNS-запросов", modifier = Modifier.weight(1f))
+              Switch(observe, { observe = it; store.observe = it }, enabled = !active)
+            }
+            Text("Включи до запуска DNS часов. Запись хранится в памяти и начинается отдельной кнопкой на 30 секунд. В ней имена доменов и DNS-ответы выбранных приложений; их содержимое и HTTPS-запросы не записываются.", style = MaterialTheme.typography.bodySmall)
+            if (observation.available && state.state == WatchDnsState.RUNNING) {
+              OutlinedButton(onClick = {
+                runCatching { WatchDnsObserved.journal.start() }
+                  .onSuccess {
+                    observation = WatchDnsObserved.journal.snapshot()
+                    diagnosticMessage = "Теперь открой Gemini на часах. Через 30 секунд скопируй отчёт кнопкой ниже."
+                  }.onFailure { error = it.message }
+              }, enabled = observation.remaining == 0 && !testing) {
+                Text(if (observation.remaining > 0) "Запись DNS · ${observation.remaining} с" else "Записать DNS · 30 секунд")
+              }
+            }
+            if (observation.started > 0) Text("За окно записи: вопросов ${observation.events.count { it.response == false }}, ответов ${observation.events.count { it.response == true }}. Запись относится ко всем выбранным приложениям вместе.", style = MaterialTheme.typography.bodySmall)
+            if (observation.started > 0 && observation.remaining == 0 && observation.events.isEmpty())
+              Text("DNS-запросов в этом окне не было. Причиной может быть кэш, свой DNS приложения или другой путь соединения часов.", style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = {
               testing = true
               diagnosticMessage = "Проверка DNS по UDP и TCP…"
@@ -130,7 +154,7 @@ class WatchDnsActivity : ComponentActivity() {
                   val report = withContext(Dispatchers.IO) { WatchDnsDiagnostics.collect(this@WatchDnsActivity) }
                   getSystemService(ClipboardManager::class.java).setPrimaryClip(
                     ClipData.newPlainText("ZDT-D · DNS часов", report.toString(2)))
-                  diagnosticMessage = "Отчёт скопирован. В нём ответы DNS для example.com и доменов Google/Gemini, а также счётчики пакетов выбранных приложений."
+                  diagnosticMessage = "Отчёт скопирован. В нём тестовые ответы профиля, счётчики пакетов и запись реальных DNS-запросов, если она была запущена."
                 } catch (e: Exception) { diagnosticMessage = e.message ?: "Не удалось собрать отчёт" }
                 finally { testing = false }
               }
@@ -158,7 +182,7 @@ class WatchDnsActivity : ComponentActivity() {
           item {
             HorizontalDivider()
             Text("Приложения связи с часами", style = MaterialTheme.typography.titleMedium)
-            Text("Отметь те же приложения Samsung, с которыми часы заработали в HAPP. Обычно это Galaxy Wearable и Galaxy Watch7 Manager.", style = MaterialTheme.typography.bodySmall)
+            Text("Начни с Galaxy Wearable и Galaxy Watch7 Manager, которые работали в HAPP. Если этого недостаточно, добавь Google, Gemini и Сервисы Google Play, отключив фильтр Samsung в списке. Добавление приложений само по себе не гарантирует работу часов.", style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = { showApps = true }, enabled = !active && apps.isNotEmpty()) {
               Text("Выбрать приложения · ${selectedApps.size}")
             }

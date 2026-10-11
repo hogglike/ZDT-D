@@ -33,6 +33,7 @@ class WatchDnsVpnService : VpnService() {
   private var nativeJob: Job? = null
   private var tun: ParcelFileDescriptor? = null
   private var lease: VpnHevBridge.Lease? = null
+  private var observer: WatchDnsObserverRelay? = null
   @Volatile private var stopping = false
   @Volatile private var nativeError: String? = null
 
@@ -112,7 +113,10 @@ class WatchDnsVpnService : VpnService() {
           val descriptor = builder.establish() ?: error("Не удалось создать Android VPN")
           tun = descriptor
           WatchDnsRuntime.setRoutes(routes.map { it.display })
-          val configFile = writeHevConfig(port)
+          val bridgePort = if (store.observe) {
+            WatchDnsObserverRelay(port, WatchDnsObserved.journal).also { observer = it }.port
+          } else port
+          val configFile = writeHevConfig(bridgePort)
           nativeError = null
           nativeJob = scope.launch {
             runCatching { VpnHevBridge.run(session, configFile.absolutePath, descriptor.fd) }
@@ -185,6 +189,8 @@ class WatchDnsVpnService : VpnService() {
       }
     }
     runCatching { tun?.close() }
+    runCatching { observer?.close() }
+    observer = null
     tun = null
     lease = null
     nativeJob = null
@@ -197,6 +203,7 @@ class WatchDnsVpnService : VpnService() {
     job?.cancel()
     lease?.let { runCatching { VpnHevBridge.stop(it) }; if (nativeJob == null) VpnHevBridge.release(it) }
     runCatching { tun?.close() }
+    runCatching { observer?.close() }
     scope.cancel()
     if (WatchDnsRuntime.status.value.state != WatchDnsState.ERROR)
       WatchDnsRuntime.update(WatchDnsState.STOPPED, "DNS часов выключен")

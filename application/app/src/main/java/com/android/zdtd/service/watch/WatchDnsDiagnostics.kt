@@ -13,11 +13,31 @@ internal object WatchDnsDiagnostics {
   fun collect(context: Context): JSONObject {
     val store = WatchDnsStore(context)
     val state = WatchDnsRuntime.status.value
+    val observed = WatchDnsObserved.journal.snapshot()
+    val events = JSONArray()
+    observed.events.forEach { event ->
+      events.put(JSONObject().put("time_ms", event.time).put("flow", event.flow)
+        .put("transport", event.transport).put("direction", event.direction)
+        .put("socks_address", event.destination).put("port", event.port)
+        .put("dns_id", event.id ?: JSONObject.NULL).put("name", event.name ?: JSONObject.NULL)
+        .put("type", when (event.type) { 1 -> "A"; 28 -> "AAAA"; null -> JSONObject.NULL; else -> event.type })
+        .put("response", event.response ?: JSONObject.NULL).put("rcode", event.code ?: JSONObject.NULL)
+        .put("addresses", JSONArray(event.addresses)).put("truncated", event.truncated)
+        .put("error", event.error ?: JSONObject.NULL))
+    }
     val report = JSONObject().put("version", BuildConfig.VERSION_NAME).put("time_ms", System.currentTimeMillis())
       .put("profile_id", store.profile).put("apps", JSONArray(store.apps.sorted()))
       .put("vpn_state", state.state.name).put("vpn_message", state.message)
       .put("routing", "dns_host_routes; ordinary traffic uses underlying network")
       .put("dns_routes", JSONArray(state.routes))
+      .put("observed_dns", JSONObject().put("available", observed.available)
+        .put("enabled_in_settings", store.observe).put("started_ms", observed.started)
+        .put("until_ms", observed.until).put("remaining_seconds", observed.remaining)
+        .put("dropped_events", observed.dropped)
+        .put("queries", observed.events.count { it.direction == "sent" && it.response == false })
+        .put("answers", observed.events.count { it.direction == "received" && it.response == true })
+        .put("events", events)
+        .put("scope", "Selected phone apps together; no per-app or watch attribution. Synthetic probes bypass observer."))
       // HEV counts IP packets on the DNS routes, not decoded DNS questions.
       // These are sampled BEFORE synthetic probes, which bypass the TUN.
       .put("dns_route_traffic", JSONObject().put("available", state.statsAvailable)
@@ -42,6 +62,7 @@ internal object WatchDnsDiagnostics {
       val port = WatchDnsPolicy.requireProfile(profile.optBoolean("enabled") &&
         profile.optBoolean("process_running") && profile.optBoolean("config_current"), profile.optInt("proxy_port"))
       val config = api.getJsonData(WatchDnsVpnService.CONFIG).optJSONObject("profiles")?.optJSONObject(store.profile)
+      report.put("profile_name", config?.optString("display_name", store.profile) ?: store.profile)
       val timeout = ((config?.optInt("timeout_ms", 8000) ?: 8000) + 1000).coerceIn(3000, 31000)
       val results = JSONArray()
       listOf(Triple("example.com", 1, false), Triple("example.com", 1, true),

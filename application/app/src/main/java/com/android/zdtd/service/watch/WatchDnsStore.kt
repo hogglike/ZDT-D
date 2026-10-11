@@ -16,6 +16,9 @@ internal class WatchDnsStore(context: Context) {
   var initialized: Boolean
     get() = prefs.getBoolean("initialized", false)
     set(value) { prefs.edit().putBoolean("initialized", value).apply() }
+  var observe: Boolean
+    get() = prefs.getBoolean("observe_dns", false)
+    set(value) { prefs.edit().putBoolean("observe_dns", value).apply() }
 }
 
 internal enum class WatchDnsState { STOPPED, STARTING, RUNNING, STOPPING, ERROR }
@@ -34,7 +37,10 @@ internal data class WatchDnsStatus(
 internal object WatchDnsRuntime {
   private val mutable = MutableStateFlow(WatchDnsStatus())
   val status = mutable.asStateFlow()
-  fun begin() { mutable.value = WatchDnsStatus(WatchDnsState.STARTING, "Проверка DNS-профиля…") }
+  fun begin() {
+    WatchDnsObserved.journal.reset()
+    mutable.value = WatchDnsStatus(WatchDnsState.STARTING, "Проверка DNS-профиля…")
+  }
   fun update(state: WatchDnsState, message: String) { mutable.update { it.copy(state = state, message = message) } }
   fun setRoutes(routes: List<String>) { mutable.update { it.copy(routes = routes) } }
   fun traffic(values: LongArray) {
