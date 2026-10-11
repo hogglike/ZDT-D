@@ -32,7 +32,7 @@ public final class WatchActivity extends Activity implements MessageClient.OnMes
         if (!prefs.contains("conversation")) prefs.edit().putString("conversation", UUID.randomUUID().toString()).apply();
         ScrollView scroll = new ScrollView(this); content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
         content.setPadding(dp(26),dp(28),dp(26),dp(38)); content.setBackgroundColor(Color.rgb(16,25,21)); scroll.addView(content); setContentView(scroll);
-        text("Hogg", 23); text("Мост Gemini · 0.2.1", 12);
+        text("Hogg", 23); text("Мост Gemini · 0.2.2", 12);
         status = text("Отвечает Gemini на телефоне", 14);
         talk = button("Продиктовать", this::recognize);
         cancel = button("Отмена", this::cancelRequest); cancel.setVisibility(View.GONE);

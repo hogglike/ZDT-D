@@ -122,6 +122,9 @@ public final class GeminiAccess extends AccessibilityService {
             for (Entry e : f.entries) if (e.node.isEditable() && e.node.isVisibleToUser() && e.node.isEnabled()) editors.add(e);
             if (editors.size() == 1) {
                 Entry editor = editors.get(0);
+                if (!GeminiText.prompt(editor.hint) && !GeminiText.prompt(editor.description)) {
+                    finish("", "У поля ввода не распознана подпись вопроса Gemini. Мост не вводит текст в неизвестные поля. Скопируй диагностику интерфейса."); return;
+                }
                 if (!editor.text.trim().isEmpty()) { finish("", "В Gemini уже есть неотправленный текст. Мост не заменяет его: очисти поле вручную."); return; }
                 p.baseline = f.plain();
                 Bundle b = new Bundle(); b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, p.question);

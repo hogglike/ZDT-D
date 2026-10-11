@@ -19,6 +19,9 @@ public class GeminiTextTest {
     @Test public void actionsAreExplicitAndDoNotClickFeedbackOrConfirmation() {
         assertTrue(GeminiText.send("Отправить запрос")); assertTrue(GeminiText.keyboard("Клавиатура"));
         assertFalse(GeminiText.send("Отправить отзыв")); assertFalse(GeminiText.send("Подтвердить отправку"));
+        assertFalse(GeminiText.send("Отправить сообщение"));
+        assertTrue(GeminiText.prompt("Спросите Gemini")); assertTrue(GeminiText.prompt("Ask Gemini"));
+        assertFalse(GeminiText.prompt("Сообщение")); assertFalse(GeminiText.prompt("Получатель"));
         assertFalse(GeminiText.copy("Копировать ссылку"));
         assertTrue(GeminiText.unlock("Разблокируйте телефон, чтобы продолжить"));
         assertFalse(GeminiText.unlock("Ответ: разблокируйте телефон, если хотите изменить настройки"));

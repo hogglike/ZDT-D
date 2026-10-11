@@ -6,7 +6,8 @@ import java.util.*;
 public final class GeminiText {
     private GeminiText() {}
     public static String norm(String s) { return s == null ? "" : s.toLowerCase(Locale.ROOT).replace('\u00a0', ' ').replaceAll("\\s+", " ").trim(); }
-    public static boolean send(String s) { return Arrays.asList("отправить", "отправить запрос", "отправить сообщение", "send", "send message", "send prompt", "submit").contains(norm(s)); }
+    public static boolean send(String s) { return Arrays.asList("отправить", "отправить запрос", "send", "send prompt", "submit").contains(norm(s)); }
+    public static boolean prompt(String s) { return Arrays.asList("спросите gemini", "спросить gemini", "ask gemini", "введите запрос", "введите вопрос", "напишите запрос", "enter a prompt", "type a prompt").contains(norm(s)); }
     public static boolean keyboard(String s) { return Arrays.asList("клавиатура", "открыть клавиатуру", "ввести текст", "ввод с клавиатуры", "keyboard", "open keyboard", "type").contains(norm(s)); }
     public static boolean copy(String s) { return Arrays.asList("копировать ответ", "скопировать ответ", "copy response", "copy answer").contains(norm(s)); }
     public static boolean generating(String s) { return Arrays.asList("остановить ответ", "остановить генерацию", "остановить", "stop response", "stop generating").contains(norm(s)); }

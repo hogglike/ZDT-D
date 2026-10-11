@@ -21,7 +21,7 @@ public final class BridgeService extends Service {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, PhoneActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, BridgeService.class).setAction("stop"), PendingIntent.FLAG_IMMUTABLE);
         Notification n = new Notification.Builder(this, "bridge").setSmallIcon(R.drawable.ic_assistant)
-            .setContentTitle("Hogg — мост Gemini").setContentText("Связь с часами включена · 0.2.1")
+            .setContentTitle("Hogg — мост Gemini").setContentText("Связь с часами включена · 0.2.2")
             .setContentIntent(open).addAction(new Notification.Action.Builder(null, "Выключить", stop).build()).setOngoing(true).build();
         startForeground(1, n); current = this; state("Связь с часами включена");
     }
@@ -55,7 +55,7 @@ public final class BridgeService extends Service {
             PowerManager.WakeLock wake = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hogg:question");
             wake.acquire(110_000);
             try {
-                if (data.containsKey("audio")) throw new IllegalStateException("Обнови оба APK Hogg до 0.2.1. Голос теперь распознаётся системным вводом часов.");
+                if (data.containsKey("audio")) throw new IllegalStateException("Обнови оба APK Hogg до 0.2.2. Голос теперь распознаётся системным вводом часов.");
                 text = data.getString("text", "").trim();
                 if (text.isEmpty() || text.length() > Protocol.MAX_TEXT) throw new IllegalStateException("Нужен вопрос длиной до 3000 символов.");
                 if (cancelled) throw new InterruptedException();

@@ -58,19 +58,19 @@ jobs:
           mkdir -p out/hogg-watch
           for app in phone wear; do
             "$tools/zipalign" -f 4 "watch-assistant/$app/build/outputs/apk/release/$app-release-unsigned.apk" "$RUNNER_TEMP/$app-aligned.apk"
-            "$tools/apksigner" sign --ks "$signing_file" --ks-key-alias "$ZDT_KEY_ALIAS" --ks-pass env:ZDT_KEYSTORE_PASSWORD --key-pass env:ZDT_KEY_PASSWORD --out "out/hogg-watch/Hogg-Assistant_${app}_0.2.1.apk" "$RUNNER_TEMP/$app-aligned.apk"
-            "$tools/apksigner" verify --verbose --print-certs "out/hogg-watch/Hogg-Assistant_${app}_0.2.1.apk"
+            "$tools/apksigner" sign --ks "$signing_file" --ks-key-alias "$ZDT_KEY_ALIAS" --ks-pass env:ZDT_KEYSTORE_PASSWORD --key-pass env:ZDT_KEY_PASSWORD --out "out/hogg-watch/Hogg-Assistant_${app}_0.2.2.apk" "$RUNNER_TEMP/$app-aligned.apk"
+            "$tools/apksigner" verify --verbose --print-certs "out/hogg-watch/Hogg-Assistant_${app}_0.2.2.apk"
           done
           rm -f "$signing_file"
-          phone_cert="$("$tools/apksigner" verify --print-certs out/hogg-watch/Hogg-Assistant_phone_0.2.1.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
-          wear_cert="$("$tools/apksigner" verify --print-certs out/hogg-watch/Hogg-Assistant_wear_0.2.1.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          phone_cert="$("$tools/apksigner" verify --print-certs out/hogg-watch/Hogg-Assistant_phone_0.2.2.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          wear_cert="$("$tools/apksigner" verify --print-certs out/hogg-watch/Hogg-Assistant_wear_0.2.2.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
           test -n "$phone_cert"
           test "$phone_cert" = "$wear_cert"
           cp watch-assistant/README_RU.md out/hogg-watch/INSTRUCTION_RU.md
           sha256sum out/hogg-watch/*.apk > out/hogg-watch/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Hogg-Assistant-0.2.1
+          name: Hogg-Assistant-0.2.2
           path: out/hogg-watch/
           retention-days: 30
       - name: Publish separate assistant test release
@@ -78,9 +78,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag='hogg-assistant-v0.2.1'
+          tag='hogg-assistant-v0.2.2'
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title 'Hogg — мост Gemini 0.2.1 (эксперимент)' --notes-file watch-assistant/README_RU.md
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title 'Hogg — мост Gemini 0.2.2 (эксперимент)' --notes-file watch-assistant/README_RU.md
           fi
           gh release upload "$tag" out/hogg-watch/* --clobber
 
