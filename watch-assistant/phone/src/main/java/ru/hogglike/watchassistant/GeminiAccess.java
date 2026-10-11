@@ -16,6 +16,7 @@ public final class GeminiAccess extends AccessibilityService {
     private final Handler main = new Handler(Looper.getMainLooper());
     private Pending pending;
     private final Map<String, Runnable> scheduled = new HashMap<>();
+    private final Map<String, PowerManager.WakeLock> scheduledWake = new HashMap<>();
     interface Callback { void progress(String message); void done(String answer, String error); }
     private static final class Pending {
         String id, question, baseline = "", candidate = "";
@@ -23,6 +24,7 @@ public final class GeminiAccess extends AccessibilityService {
         int phase;
         boolean keyboardClicked;
         Callback callback;
+        PowerManager.WakeLock wake;
     }
     private static final class Entry {
         AccessibilityNodeInfo node;
@@ -39,7 +41,11 @@ public final class GeminiAccess extends AccessibilityService {
     }
     @Override public void onServiceConnected() { current = this; }
     @Override public void onInterrupt() { cancelActive("Android прервал управление Gemini. Повтори запрос."); }
-    @Override public void onDestroy() { cancelActive("Доступ к Gemini выключен."); current = null; main.removeCallbacksAndMessages(null); super.onDestroy(); }
+    @Override public void onDestroy() {
+        cancelActive("Доступ к Gemini выключен."); current = null; main.removeCallbacksAndMessages(null);
+        for (PowerManager.WakeLock wake : scheduledWake.values()) if (wake.isHeld()) wake.release();
+        scheduledWake.clear(); scheduled.clear(); super.onDestroy();
+    }
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
         if (pending != null || System.currentTimeMillis() < getSharedPreferences("bridge", MODE_PRIVATE).getLong("diagnostic_until", 0)) {
             main.removeCallbacks(tick); main.postDelayed(tick, 150);
@@ -54,7 +60,9 @@ public final class GeminiAccess extends AccessibilityService {
     void ask(String id, String question, Callback callback) {
         main.post(() -> {
             if (pending != null) { callback.done("", "Мост ещё обрабатывает предыдущий запрос."); return; }
-            Pending p = new Pending(); p.id = id; p.question = question; p.start = SystemClock.elapsedRealtime(); p.callback = callback; pending = p;
+            Pending p = new Pending(); p.id = id; p.question = question; p.start = SystemClock.elapsedRealtime(); p.callback = callback;
+            p.wake = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hogg:gemini");
+            p.wake.acquire(100_000); pending = p;
             callback.progress("Вызываю телефонный Gemini…");
             if (getSharedPreferences("bridge", MODE_PRIVATE).getBoolean("root_launch", false)) {
                 new Thread(() -> {
@@ -80,17 +88,24 @@ public final class GeminiAccess extends AccessibilityService {
     void askLater(String id, String question, long delay, Callback callback) {
         main.post(() -> {
             if (pending != null || !scheduled.isEmpty()) { callback.done("", "Мост ещё обрабатывает предыдущий запрос."); return; }
-            Runnable run = () -> { scheduled.remove(id); ask(id, question, callback); };
+            PowerManager.WakeLock wake = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hogg:scheduled-test");
+            wake.acquire(delay + 5000); scheduledWake.put(id, wake);
+            Runnable run = () -> { scheduled.remove(id); releaseScheduled(id); ask(id, question, callback); };
             scheduled.put(id, run); main.postDelayed(run, delay);
         });
     }
     void cancel(String id) { main.post(() -> {
         Runnable run = scheduled.remove(id); if (run != null) main.removeCallbacks(run);
+        releaseScheduled(id);
         if (pending != null && pending.id.equals(id)) finish("", "Запрос отменён. Уже отправленную команду Gemini отменить этим нельзя.");
     }); }
+    private void releaseScheduled(String id) {
+        PowerManager.WakeLock wake = scheduledWake.remove(id); if (wake != null && wake.isHeld()) wake.release();
+    }
     private void cancelActive(String error) { if (pending != null) finish("", error); }
     private void finish(String answer, String error) {
         Pending p = pending; if (p == null) return; pending = null; main.removeCallbacks(tick);
+        if (p.wake != null && p.wake.isHeld()) p.wake.release();
         getSharedPreferences("bridge", MODE_PRIVATE).edit().putString("last_phase", "phase=" + p.phase).apply();
         p.callback.done(answer, error);
     }
