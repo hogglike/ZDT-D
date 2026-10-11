@@ -10,11 +10,13 @@ internal object VpnHevBridge {
   private val startMethod by lazy { clazz.getMethod("TProxyStartService", String::class.java, java.lang.Integer.TYPE) }
   private val stopMethod by lazy { clazz.getMethod("TProxyStopService") }
   private val runningMethod by lazy { clazz.getMethod("TProxyIsRunning") }
+  private val statsMethod by lazy { clazz.getMethod("TProxyGetStats") }
 
   private val sessions = Sessions(
     { config, fd -> startMethod.invoke(null, config, fd) as? Boolean ?: false },
     { stopMethod.invoke(null) as? Boolean ?: false },
     { runningMethod.invoke(null) as? Boolean ?: false },
+    { statsMethod.invoke(null) as LongArray },
   )
 
   fun reserve(owner: String) = sessions.reserve(owner)
@@ -22,12 +24,14 @@ internal object VpnHevBridge {
   fun run(lease: Lease, config: String, fd: Int) = sessions.run(lease, config, fd)
   fun stop(lease: Lease) = sessions.stop(lease)
   fun isRunning(lease: Lease) = sessions.isRunning(lease)
+  fun stats(lease: Lease) = sessions.stats(lease)
 
   /** JNI start returns immediately; keep the lease until its pthread actually exits. */
   internal class Sessions(
     private val startNative: (String, Int) -> Boolean,
     private val stopNative: () -> Boolean,
     private val runningNative: () -> Boolean,
+    private val statsNative: () -> LongArray = { longArrayOf(0, 0, 0, 0) },
   ) {
     private val lock = Any()
     private var active: Lease? = null
@@ -71,6 +75,11 @@ internal object VpnHevBridge {
 
     fun isRunning(lease: Lease): Boolean = synchronized(lock) {
       active === lease && lease.started && runningNative()
+    }
+
+    fun stats(lease: Lease): LongArray? = synchronized(lock) {
+      if (active !== lease || !lease.started || !runningNative()) null
+      else statsNative().takeIf { it.size == 4 && it.all { value -> value >= 0 } }?.copyOf()
     }
   }
 }

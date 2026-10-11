@@ -32,6 +32,7 @@ class VpnHevBridgeTest {
     val sessions = VpnHevBridge.Sessions(
       { _, _ -> running.set(true); started.countDown(); true },
       { running.set(false); true }, { running.get() },
+      { longArrayOf(3, 96, 2, 128) },
     )
     val lease = sessions.reserve("watch")
     var failure: Throwable? = null
@@ -42,13 +43,16 @@ class VpnHevBridgeTest {
       worker.join(150)
       assertTrue("Returning from JNI start must not end the VPN session", worker.isAlive)
       assertTrue(sessions.isRunning(lease))
+      assertArrayEquals(longArrayOf(3, 96, 2, 128), sessions.stats(lease))
       sessions.release(lease)
       refusesReserve(sessions)
       assertTrue(sessions.stop(lease))
+      assertNull(sessions.stats(lease))
       worker.join(2000)
       assertFalse(worker.isAlive)
       failure?.let { throw it }
       val next = sessions.reserve("nonroot")
+      assertNull(sessions.stats(lease))
       sessions.release(next)
     } finally { sessions.stop(lease); worker.join(2000) }
   }

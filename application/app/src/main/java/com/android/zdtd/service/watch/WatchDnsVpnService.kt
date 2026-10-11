@@ -6,9 +6,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.android.zdtd.service.R
@@ -22,7 +25,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
-/** App-scoped Android VPN -> existing DNS profile SOCKS -> DoH, other traffic direct. */
+/** DNS host routes -> existing profile SOCKS -> DoH; companion data bypasses the TUN. */
 class WatchDnsVpnService : VpnService() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val lifecycle = Mutex()
@@ -51,7 +54,7 @@ class WatchDnsVpnService : VpnService() {
   private fun start() {
     if (WatchDnsRuntime.active()) return
     stopping = false
-    WatchDnsRuntime.update(WatchDnsState.STARTING, "Проверка DNS-профиля…")
+    WatchDnsRuntime.begin()
     val open = PendingIntent.getActivity(this, 47032, Intent(this, WatchDnsActivity::class.java),
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val off = PendingIntent.getService(this, 47033, stopIntent(this),
@@ -89,14 +92,26 @@ class WatchDnsVpnService : VpnService() {
           check(VpnService.prepare(this@WatchDnsVpnService) == null) { "Разрешение Android VPN отозвано" }
           val session = VpnHevBridge.reserve("watch-dns")
           lease = session
+          val cm = getSystemService(ConnectivityManager::class.java)
+          val networkDns = cm.allNetworks.filter {
+            cm.getNetworkCapabilities(it)?.let { capabilities ->
+              !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            } == true
+          }.flatMap { cm.getLinkProperties(it)?.dnsServers.orEmpty() }
+          val routes = WatchDnsRoutes.routes(networkDns)
           val builder = Builder().setSession("ZDT-D · DNS часов").setMtu(1500)
-            .addAddress("198.19.255.1", 32).addAddress("fd90:7a64:7464::1", 128)
-            .addRoute("0.0.0.0", 0).addRoute("::", 0).addDnsServer("198.19.255.2")
+            .addAddress(WatchDnsRoutes.IPV4_ADDRESS, 32).addAddress(WatchDnsRoutes.IPV6_ADDRESS, 128)
+            .addDnsServer(WatchDnsRoutes.IPV4_DNS).addDnsServer(WatchDnsRoutes.IPV6_DNS)
+            .allowFamily(OsConstants.AF_INET).allowFamily(OsConstants.AF_INET6)
+            .setUnderlyingNetworks(null)
+          routes.forEach { builder.addRoute(it.address, it.prefix) }
           if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
           // Never establish without a non-empty allowlist: it would capture all apps.
           apps.forEach { builder.addAllowedApplication(it) }
           val descriptor = builder.establish() ?: error("Не удалось создать Android VPN")
           tun = descriptor
+          WatchDnsRuntime.setRoutes(routes.map { it.display })
           val configFile = writeHevConfig(port)
           nativeError = null
           nativeJob = scope.launch {
@@ -110,12 +125,13 @@ class WatchDnsVpnService : VpnService() {
             }
           }
         }
-        WatchDnsRuntime.update(WatchDnsState.RUNNING, "$name · приложений ${apps.size}\nDNS-профиль ответил. Проверь Gemini на часах по Bluetooth")
+        WatchDnsRuntime.update(WatchDnsState.RUNNING, "$name · приложений ${apps.size}\nТолько DNS через VPN; обычные соединения идут напрямую. Проверь Gemini на часах по Bluetooth")
         var unavailable = 0
         while (isActive) {
           delay(5000)
           val session = lease ?: error("Мост Android VPN остановлен")
           check(VpnHevBridge.isRunning(session)) { "Мост Android VPN остановился" }
+          runCatching { VpnHevBridge.stats(session) }.getOrNull()?.let { WatchDnsRuntime.traffic(it) }
           val snapshot = runCatching {
             val latest = api.getJsonData(CONFIG).optJSONObject("profiles")?.optJSONObject(id)
               ?: error("DNS-профиль удалён")
@@ -156,6 +172,7 @@ class WatchDnsVpnService : VpnService() {
     val session = lease
     val native = nativeJob
     if (session != null) {
+      runCatching { VpnHevBridge.stats(session)?.let { WatchDnsRuntime.traffic(it) } }
       if (native == null) VpnHevBridge.release(session)
       else {
         // A stop may arrive just before the native worker enters JNI.
@@ -188,8 +205,8 @@ class WatchDnsVpnService : VpnService() {
 
   private fun writeHevConfig(port: Int): File = File(filesDir, "watch_dns_vpn/hev.yml").apply {
     parentFile?.mkdirs()
-    // No mapdns: the existing profile answers real UDP/TCP DNS, including the
-    // resolver addresses specified by Wear OS instead of Android's DNS hint.
+    // No mapdns/FakeIP. Only DNS-address routes enter this bridge; sing-box
+    // answers real UDP/TCP DNS and handles other ports at these addresses directly.
     writeText("""
       tunnel:
         name: tun-watch-dns

@@ -10,7 +10,7 @@ internal object WatchDnsPolicy {
 
   fun requireProfile(ready: Boolean, port: Int): Int {
     check(ready && port in 1024..65535) {
-      "DNS-профиль не запущен. Обнови APK и модуль до mod32, включи профиль и перезапусти ZDT-D"
+      "DNS-профиль не запущен. Нужен модуль mod32 или новее; включи профиль и перезапусти ZDT-D"
     }
     return port
   }

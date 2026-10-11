@@ -1,9 +1,9 @@
 id=ZDT-D
 name=ZDT-D
-version=4.2.0-mod32
-versionCode=42032
+version=4.2.0-mod33
+versionCode=42033
 upstreamVersion=4.2.0
-modVersion=32
+modVersion=33
 author=Ggover 
 description=DPI bypass tool.
 banner=/files/images/banner.png

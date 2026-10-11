@@ -1,6 +1,8 @@
 package com.android.zdtd.service.watch
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -16,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.android.zdtd.service.modes.ModeClient
+import com.android.zdtd.service.BuildConfig
 import com.android.zdtd.service.NonRootVpnRuntime
 import com.android.zdtd.service.NonRootVpnState
 import kotlinx.coroutines.*
@@ -48,6 +51,8 @@ class WatchDnsActivity : ComponentActivity() {
       var showApps by remember { mutableStateOf(false) }
       var search by remember { mutableStateOf("") }
       var samsungOnly by remember { mutableStateOf(true) }
+      var testing by remember { mutableStateOf(false) }
+      var diagnosticMessage by remember { mutableStateOf<String?>(null) }
 
       fun reload() {
         loading = true
@@ -87,14 +92,15 @@ class WatchDnsActivity : ComponentActivity() {
         LazyColumn(Modifier.safeDrawingPadding().padding(horizontal = 16.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
           item {
-            Text("DNS для часов · mod32", style = MaterialTheme.typography.headlineSmall)
-            Text("Для Galaxy Watch по Bluetooth. Выбранные приложения связи с часами используют DNS-профиль через Android VPN; интернет идёт напрямую.")
+            Text("DNS для часов · ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.headlineSmall)
+            Text("Для Galaxy Watch по Bluetooth. Android VPN перехватывает DNS выбранных приложений связи с часами. Обычные соединения идут через Wi-Fi или мобильную сеть телефона.")
           }
           item {
             Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Text(state.message, color = if (state.state == WatchDnsState.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
               if (state.state in setOf(WatchDnsState.STARTING, WatchDnsState.STOPPING)) LinearProgressIndicator(Modifier.fillMaxWidth())
               Text("Включение заменяет HAPP и другой системный VPN. Остальные DNS-профили ZDT-D продолжают работать. При прямом Wi-Fi или LTE на часах этот режим их соединение не меняет.", style = MaterialTheme.typography.bodySmall)
+              if (state.statsAvailable) Text("Пакеты на DNS-маршрутах: отправлено ${state.sentPackets}, получено ${state.receivedPackets}", style = MaterialTheme.typography.bodySmall)
               if (active) OutlinedButton(onClick = {
                 runCatching { startService(WatchDnsVpnService.stopIntent(this@WatchDnsActivity)) }
                   .onFailure { error = it.message }
@@ -115,6 +121,26 @@ class WatchDnsActivity : ComponentActivity() {
             } }
           }
           error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+          item {
+            OutlinedButton(onClick = {
+              testing = true
+              diagnosticMessage = "Проверка DNS по UDP и TCP…"
+              scope.launch {
+                try {
+                  val report = withContext(Dispatchers.IO) { WatchDnsDiagnostics.collect(this@WatchDnsActivity) }
+                  getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                    ClipData.newPlainText("ZDT-D · DNS часов", report.toString(2)))
+                  diagnosticMessage = "Отчёт скопирован. В нём ответы DNS для example.com и доменов Google/Gemini, а также счётчики пакетов выбранных приложений."
+                } catch (e: Exception) { diagnosticMessage = e.message ?: "Не удалось собрать отчёт" }
+                finally { testing = false }
+              }
+            }, enabled = !testing && !loading && profiles.any { it.first == selectedProfile && it.second.optBoolean("enabled") }) {
+              Text(if (testing) "Проверка DNS…" else "Проверить DNS и скопировать отчёт")
+            }
+            if (testing) LinearProgressIndicator(Modifier.fillMaxWidth())
+            diagnosticMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            Text("Сначала открой Gemini на часах, подожди 10–15 секунд и собери отчёт. Пакеты считаются на DNS-маршрутах VPN; тестовые запросы приложения в этот счётчик не входят. Отчёт не содержит ссылку подписки или токен DNS.", style = MaterialTheme.typography.bodySmall)
+          }
           item { Text("DNS-профиль", style = MaterialTheme.typography.titleMedium) }
           items(profiles, key = { it.first }) { (id, profile) ->
             val enabled = profile.optBoolean("enabled")

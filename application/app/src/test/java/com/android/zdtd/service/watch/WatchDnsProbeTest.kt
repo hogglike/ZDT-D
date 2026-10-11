@@ -2,6 +2,7 @@ package com.android.zdtd.service.watch
 
 import java.io.DataInputStream
 import java.net.*
+import org.junit.Assert.*
 import org.junit.Test
 
 class WatchDnsProbeTest {
@@ -9,6 +10,62 @@ class WatchDnsProbeTest {
 
   @Test(expected = IllegalStateException::class)
   fun servfailDoesNotClaimWorkingDns() { fixture(2) { WatchDnsProbe.check(it, 2000) } }
+
+  @Test fun reportContainsTheActualSmartDnsAnswer() {
+    fixture(0) { port ->
+      val answer = WatchDnsProbe.query(port, 2000, "gemini.google.com")
+      assertEquals(0, answer.code)
+      assertEquals(listOf("127.0.0.2"), answer.addresses)
+    }
+  }
+
+  @Test fun realTcpDnsAnswerCanBeReadInFragments() {
+    ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+      server.soTimeout = 3000
+      var failure: Throwable? = null
+      val worker = Thread {
+        try {
+          server.accept().use { tcp ->
+            tcp.soTimeout = 3000
+            val input = DataInputStream(tcp.getInputStream())
+            val greeting = ByteArray(3); input.readFully(greeting)
+            check(greeting.contentEquals(byteArrayOf(5, 1, 0)))
+            tcp.getOutputStream().write(byteArrayOf(5, 0))
+            val request = ByteArray(10); input.readFully(request)
+            check(request.contentEquals(byteArrayOf(5, 1, 0, 1, 8, 8, 8, 8, 0, 53)))
+            tcp.getOutputStream().write(byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+            val data = ByteArray(input.readUnsignedShort()); input.readFully(data)
+            data[2] = 0x81.toByte(); data[3] = 0x80.toByte(); data[7] = 1
+            val answer = data + byteArrayOf(0xc0.toByte(), 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 2)
+            val framed = byteArrayOf((answer.size ushr 8).toByte(), answer.size.toByte()) + answer
+            framed.forEach { tcp.getOutputStream().write(it.toInt() and 255) }
+            tcp.getOutputStream().flush()
+          }
+        } catch (e: Throwable) { failure = e }
+      }
+      worker.start()
+      try { assertEquals(listOf("127.0.0.2"), WatchDnsProbe.query(server.localPort, 2000, "example.com", overTcp = true).addresses) }
+      finally { worker.join(4000); failure?.let { throw it } }
+    }
+  }
+
+  @Test fun emptyIpv6AnswerIsReportedWithoutPretendingItIsTransportFailure() {
+    val data = byteArrayOf(0x12, 0x34, 0x81.toByte(), 0x80.toByte(), 0, 1, 0, 0, 0, 0, 0, 0, 1, 97, 0, 0, 28, 0, 1)
+    val answer = WatchDnsProbe.parseAnswer(data, 0x1234)
+    assertEquals(0, answer.code)
+    assertEquals(0, answer.records)
+    assertTrue(answer.addresses.isEmpty())
+  }
+
+  @Test(expected = IllegalStateException::class)
+  fun mismatchedTransactionCannotPassDiagnostics() {
+    WatchDnsProbe.parseAnswer(byteArrayOf(0x12, 0x34, 0x81.toByte(), 0x80.toByte(), 0, 0, 0, 0, 0, 0, 0, 0), 0x1235)
+  }
+
+  @Test(expected = IllegalStateException::class)
+  fun truncatedResourceRecordCannotPassDiagnostics() {
+    WatchDnsProbe.parseAnswer(byteArrayOf(0x12, 0x34, 0x81.toByte(), 0x80.toByte(), 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1), 0x1234)
+  }
 
   private fun fixture(rcode: Int, run: (Int) -> Unit) {
     val loopback = InetAddress.getByName("127.0.0.1")
