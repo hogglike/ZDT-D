@@ -41,8 +41,7 @@ public final class PhoneActivity extends Activity {
         button("Включить доступ к Gemini", () -> new AlertDialog.Builder(this).setTitle("Доступ через спецвозможности")
             .setMessage("Hogg сможет читать интерфейс Google/Gemini, вводить твой вопрос и нажимать отправку по твоей команде. Мост не разблокирует телефон и не нажимает подтверждения действий Gemini. Полный текст интерфейса записывается только при отдельном включении диагностики на 60 секунд. Доступ включается тобой в настройках Android.")
             .setPositiveButton("Открыть настройки", (d,w) -> {
-                Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).putExtra(Intent.EXTRA_COMPONENT_NAME, new ComponentName(this, GeminiAccess.class).flattenToString());
-                try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             }).setNegativeButton("Отмена", null).show());
         text("При установке APK Android может заблокировать спецвозможности. В настройках приложения Hogg нажми меню ⋮ → «Разрешить ограниченные настройки», затем включи сервис. Настрой Gemini помощником по умолчанию и разреши его использование на экране блокировки.", 15);
         CheckBox root = new CheckBox(this); root.setText("Вызов помощника через root"); root.setChecked(prefs.getBoolean("root_launch", false)); content.addView(root);

@@ -61,7 +61,7 @@ public final class GeminiAccess extends AccessibilityService {
                     String error = "";
                     try {
                         // Fixed wake/assistant keys only: no user text is interpolated into a shell.
-                        Process process = new ProcessBuilder("su", "-c", "input keyevent 224\ninput keyevent 219").redirectErrorStream(true).start();
+                        java.lang.Process process = new ProcessBuilder("su", "-c", "input keyevent 224\ninput keyevent 219").redirectErrorStream(true).start();
                         if (!process.waitFor(8, TimeUnit.SECONDS)) { process.destroyForcibly(); error = "Root-вызов не завершился. Проверь разрешение в ReSukiSU."; }
                         else if (process.exitValue() != 0) error = "Root-вызов не разрешён. Проверь разрешение Hogg в ReSukiSU или отключи root-вызов.";
                     } catch (Exception e) { error = "Не удалось вызвать Gemini через root. Отключи root-вызов или проверь ReSukiSU."; }
