@@ -24,9 +24,4 @@ public class ProtocolTest {
         assertEquals("прив", Protocol.bounded("привет", 4));
         assertTrue(Protocol.MAX_AUDIO <= 512 * 1024);
     }
-    @Test public void errorsExplainLimitRatherThanAdvertisingPaidUpgrade() {
-        assertTrue(Protocol.httpError(429).contains("Подожди"));
-        assertTrue(Protocol.httpError(401).contains("ключ"));
-        assertTrue(Protocol.httpError(403).contains("региона"));
-    }
 }

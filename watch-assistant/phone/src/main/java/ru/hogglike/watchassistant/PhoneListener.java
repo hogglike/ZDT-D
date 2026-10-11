@@ -16,7 +16,7 @@ public final class PhoneListener extends WearableListenerService {
     }
     @Override public void onMessageReceived(MessageEvent e) {
         if (e.getPath().equals(Protocol.PING)) {
-            String message = BridgeService.current == null ? "На телефоне открой Hogg и включи связь с часами." : new KeyStoreSettings(this).hasKey() ? "Готов" : "Добавь ключ Groq на телефоне.";
+            String message = BridgeService.current == null ? "На телефоне открой Hogg и включи связь с часами." : GeminiAccess.current != null ? "Готов" : "Включи Hogg — мост Gemini в специальных возможностях телефона.";
             Wearable.getMessageClient(this).sendMessage(e.getSourceNodeId(), Protocol.PONG, message.getBytes(StandardCharsets.UTF_8));
         } else if (e.getPath().equals(Protocol.CANCEL)) {
             String id = new String(e.getData(), StandardCharsets.UTF_8);

@@ -4,10 +4,7 @@ import android.app.*;
 import android.content.*;
 import android.net.Uri;
 import android.os.*;
-import com.google.android.gms.tasks.Tasks;
 import com.google.android.gms.wearable.*;
-import org.json.JSONArray;
-import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.*;
 
@@ -15,7 +12,6 @@ public final class BridgeService extends Service {
     static volatile BridgeService current;
     private final Protocol.Gate gate = new Protocol.Gate();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private volatile GroqClient client;
     private volatile String currentId = "", currentNode = "";
     private volatile boolean cancelled;
     @Override public void onCreate() {
@@ -25,7 +21,7 @@ public final class BridgeService extends Service {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, PhoneActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, BridgeService.class).setAction("stop"), PendingIntent.FLAG_IMMUTABLE);
         Notification n = new Notification.Builder(this, "bridge").setSmallIcon(R.drawable.ic_assistant)
-            .setContentTitle("Hogg — помощник часов").setContentText("Готов принимать вопросы с часов")
+            .setContentTitle("Hogg — мост Gemini").setContentText("Связь с часами включена · 0.2.0")
             .setContentIntent(open).addAction(new Notification.Action.Builder(null, "Выключить", stop).build()).setOngoing(true).build();
         startForeground(1, n); current = this; state("Связь с часами включена");
     }
@@ -35,7 +31,7 @@ public final class BridgeService extends Service {
     }
     @Override public IBinder onBind(Intent i) { return null; }
     @Override public void onDestroy() {
-        current = null; cancelled = true; if (client != null) client.cancel(); worker.shutdownNow();
+        current = null; cancelled = true; if (GeminiAccess.current != null) GeminiAccess.current.cancel(currentId); worker.shutdownNow();
         state("Связь выключена. Для вопросов с часов включи её снова."); super.onDestroy();
     }
     void accept(Uri uri, DataMap data) {
@@ -57,43 +53,38 @@ public final class BridgeService extends Service {
         worker.execute(() -> {
             String text = "", answer = "", error = "";
             PowerManager.WakeLock wake = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hogg:question");
-            wake.acquire(130_000);
+            wake.acquire(110_000);
             try {
-                KeyStoreSettings settings = new KeyStoreSettings(this);
-                client = new GroqClient(settings.readKey(), settings.model());
-                if (cancelled) throw new IOException("Запрос отменён.");
-                if (data.containsKey("audio")) {
-                    progress(node, id, "Распознаю русский вопрос…");
-                    DataClient.GetFdForAssetResponse fd = Tasks.await(Wearable.getDataClient(this).getFdForAsset(data.getAsset("audio")), 20, TimeUnit.SECONDS);
-                    byte[] audio;
-                    try (InputStream in = fd.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-                        if (in == null) throw new IOException("Запись не получена.");
-                        byte[] b = new byte[4096]; int n;
-                        while ((n = in.read(b)) != -1) { if (cancelled) throw new IOException("Запрос отменён."); if (out.size() + n > Protocol.MAX_AUDIO) throw new IOException("Запись слишком большая."); out.write(b, 0, n); }
-                        audio = out.toByteArray();
-                    } finally { fd.release(); }
-                    text = client.transcribe(audio);
-                } else text = Protocol.bounded(data.getString("text", ""), Protocol.MAX_TEXT);
-                if (cancelled) throw new IOException("Запрос отменён.");
-                progress(node, id, "Думаю…");
-                String conversation = node + ":" + data.getString("conversation");
-                JSONArray history = new JSONArray(p.getString("conversation", "").equals(conversation) ? p.getString("history", "[]") : "[]");
-                answer = client.answer(text, history);
-                if (cancelled) throw new IOException("Запрос отменён.");
-                history.put(new org.json.JSONObject().put("role", "user").put("content", text));
-                history.put(new org.json.JSONObject().put("role", "assistant").put("content", answer));
-                JSONArray bounded = new JSONArray(); for (int i = Math.max(0, history.length() - 6); i < history.length(); i++) bounded.put(history.get(i));
-                p.edit().putString("conversation", conversation).putString("history", bounded.toString()).putString("last_question", text).putString("last_answer", answer).apply();
-            } catch (Exception e) { error = cancelled ? "Запрос отменён." : GroqClient.readable(e); answer = ""; }
+                if (data.containsKey("audio")) throw new IllegalStateException("Обнови оба APK Hogg до 0.2.0. Голос теперь распознаётся системным вводом часов.");
+                text = data.getString("text", "").trim();
+                if (text.isEmpty() || text.length() > Protocol.MAX_TEXT) throw new IllegalStateException("Нужен вопрос длиной до 3000 символов.");
+                if (cancelled) throw new InterruptedException();
+                GeminiAccess access = GeminiAccess.current;
+                if (access == null) throw new IllegalStateException("На телефоне включи Hogg — мост Gemini в специальных возможностях Android.");
+                CountDownLatch done = new CountDownLatch(1);
+                String[] result = {"", ""};
+                access.ask(id, text, new GeminiAccess.Callback() {
+                    @Override public void progress(String message) { if (!cancelled && currentId.equals(id)) BridgeService.this.progress(node, id, message); }
+                    @Override public void done(String value, String failure) { result[0] = value; result[1] = failure; done.countDown(); }
+                });
+                if (cancelled) access.cancel(id);
+                if (!done.await(95, TimeUnit.SECONDS)) { access.cancel(id); throw new IllegalStateException("Ответ Gemini не получен вовремя. Автоматического повтора нет; проверь телефон и диагностику."); }
+                if (cancelled) throw new InterruptedException();
+                answer = result[0]; error = result[1];
+                p.edit().putString("last_question", text).putString("last_answer", answer).apply();
+            } catch (InterruptedException e) {
+                error = "Запрос отменён. Уже отправленную команду Gemini отменить этим нельзя."; answer = "";
+                if (GeminiAccess.current != null) GeminiAccess.current.cancel(id); Thread.currentThread().interrupt();
+            } catch (Exception e) { error = e.getMessage() == null ? "Не удалось передать команду Gemini. Скопируй диагностику." : e.getMessage(); answer = ""; }
             finally {
-                if (wake.isHeld()) wake.release(); client = null;
+                if (wake.isHeld()) wake.release();
                 Wearable.getDataClient(this).deleteDataItems(uri);
                 reply(id, node, text, answer, error); currentId = ""; currentNode = ""; gate.finish(id);
                 state(error.isEmpty() ? "Ответ отправлен на часы" : error);
             }
         });
     }
-    void cancel(String node, String id) { if (node.equals(currentNode) && id.equals(currentId)) { cancelled = true; if (client != null) client.cancel(); } }
+    void cancel(String node, String id) { if (node.equals(currentNode) && id.equals(currentId)) { cancelled = true; if (GeminiAccess.current != null) GeminiAccess.current.cancel(id); } }
     static void reply(Context c, String id, String node, String text, String answer, String error) {
         if (!Protocol.validId(id)) return;
         PutDataMapRequest r = PutDataMapRequest.create(Protocol.ANSWER + node);

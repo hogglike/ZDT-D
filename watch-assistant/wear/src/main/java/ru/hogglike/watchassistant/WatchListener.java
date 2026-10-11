@@ -7,10 +7,11 @@ import org.json.JSONObject;
 
 public final class WatchListener extends WearableListenerService {
     @Override public void onDataChanged(DataEventBuffer events) {
-        for (DataEvent e : events) if (e.getType() == DataEvent.TYPE_CHANGED && e.getDataItem().getUri().getPath().startsWith(Protocol.ANSWER)) save(this, DataMapItem.fromDataItem(e.getDataItem()).getDataMap());
+        for (DataEvent e : events) if (e.getType() == DataEvent.TYPE_CHANGED && e.getDataItem().getUri().getPath().startsWith(Protocol.ANSWER)) save(this, e.getDataItem().getUri(), DataMapItem.fromDataItem(e.getDataItem()).getDataMap());
     }
-    static synchronized boolean save(Context c, DataMap d) {
+    static synchronized boolean save(Context c, android.net.Uri uri, DataMap d) {
         android.content.SharedPreferences p = c.getSharedPreferences("watch", MODE_PRIVATE);
+        if (!p.getString("phone_node", "").equals(uri.getHost()) || !uri.getPath().equals(Protocol.ANSWER + d.getString("target", ""))) return false;
         String id = d.getString("id", "");
         if (!id.equals(p.getString("request", "")) || id.equals(p.getString("completed", ""))) return false;
         String answer = Protocol.bounded(d.getString("answer", ""), Protocol.MAX_ANSWER);
