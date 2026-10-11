@@ -34,7 +34,7 @@ public final class PhoneActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         ScrollView scroll = new ScrollView(this); content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(22), dp(30), dp(22), dp(36)); content.setBackgroundColor(Color.rgb(246,248,245)); scroll.addView(content); setContentView(scroll);
-        text("Hogg — мост Gemini", 26); text("0.2.0 · экспериментальная версия", 14);
+        text("Hogg — мост Gemini", 26); text("0.2.1 · экспериментальная версия", 14);
         text("Команда с часов вводится в телефонный Gemini. Его ответ возвращается на часы. Используется твой аккаунт Gemini, ключ не нужен. Работа моста зависит от интерфейса твоей версии Google/Gemini.", 17);
         status = text("", 18); status.setTextColor(Color.rgb(44,102,87));
         text("1. Доступ к телефонному Gemini", 22);
