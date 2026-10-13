@@ -6,6 +6,7 @@ import java.util.Locale
 const val OPERA_UPSTREAM_DIRECT = "direct"
 const val OPERA_UPSTREAM_BYEDPI = "byedpi"
 const val OPERA_UPSTREAM_CUSTOM = "custom"
+const val OPERA_UPSTREAM_AUTO = "auto"
 
 private val OPERA_UPSTREAM_SCHEMES = setOf("http", "https", "socks5", "socks5h")
 
@@ -14,6 +15,7 @@ fun normalizeOperaUpstreamMode(raw: String?, legacyUseByedpi: Boolean): String =
     OPERA_UPSTREAM_DIRECT -> OPERA_UPSTREAM_DIRECT
     OPERA_UPSTREAM_BYEDPI -> OPERA_UPSTREAM_BYEDPI
     OPERA_UPSTREAM_CUSTOM -> OPERA_UPSTREAM_CUSTOM
+    OPERA_UPSTREAM_AUTO -> OPERA_UPSTREAM_AUTO
     else -> if (legacyUseByedpi) OPERA_UPSTREAM_BYEDPI else OPERA_UPSTREAM_DIRECT
   }
 

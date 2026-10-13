@@ -232,6 +232,8 @@ struct OperaSniEntry {
     #[serde(default)]
     custom_proxy: Option<String>,
     #[serde(default)]
+    custom_proxies: Vec<String>,
+    #[serde(default)]
     override_proxy_address: Option<String>,
 }
 
@@ -240,6 +242,7 @@ enum OperaUpstreamMode {
     Direct,
     ByeDpi,
     Custom,
+    Auto,
 }
 
 fn opera_upstream_mode(entry: &OperaSniEntry) -> OperaUpstreamMode {
@@ -253,6 +256,7 @@ fn opera_upstream_mode(entry: &OperaSniEntry) -> OperaUpstreamMode {
         Some("direct") => OperaUpstreamMode::Direct,
         Some("byedpi") => OperaUpstreamMode::ByeDpi,
         Some("custom") => OperaUpstreamMode::Custom,
+        Some("auto") => OperaUpstreamMode::Auto,
         _ if entry.use_byedpi => OperaUpstreamMode::ByeDpi,
         _ => OperaUpstreamMode::Direct,
     }
@@ -299,7 +303,7 @@ fn is_valid_custom_upstream_proxy(raw: &str) -> bool {
 
 fn opera_upstream_proxy(entry: &OperaSniEntry, byedpi_port: u16) -> Result<Option<String>> {
     match opera_upstream_mode(entry) {
-        OperaUpstreamMode::Direct => Ok(None),
+        OperaUpstreamMode::Direct | OperaUpstreamMode::Auto => Ok(None),
         OperaUpstreamMode::ByeDpi => Ok(Some(format!("socks5://127.0.0.1:{}", byedpi_port))),
         OperaUpstreamMode::Custom => {
             let proxy = entry.custom_proxy.as_deref().unwrap_or("").trim();
@@ -442,7 +446,9 @@ pub fn start_if_enabled() -> Result<()> {
     // be downloaded, opera-proxy is started as if api_proxy was empty.
     let api_proxy_check_log = log_dir.join("api_proxy_check.log");
     truncate_file(&api_proxy_check_log)?;
-    let selected_api_proxy = select_working_api_proxy(&opera_args.api_proxy, &api_proxy_check_log);
+    let selected_api_proxy = if sni_list.iter().any(|entry| opera_upstream_mode(entry) != OperaUpstreamMode::Auto) {
+        select_working_api_proxy(&opera_args.api_proxy, &api_proxy_check_log)
+    } else { None };
 
     // 1) Start byedpi (initial) only if at least one SNI entry requests it.
     let mut byedpi_bin_opt: Option<PathBuf> = None;
@@ -480,15 +486,32 @@ pub fn start_if_enabled() -> Result<()> {
         truncate_file(&log_path)?;
 
         let upstream_proxy = opera_upstream_proxy(entry, port_cfg.byedpi_port)?;
+        let auto = opera_upstream_mode(entry) == OperaUpstreamMode::Auto;
+        let pool_path = Path::new(OPERA_ROOT).join(format!("config/zdt_upstream_{}.json", idx));
+        let state_path = log_dir.join(format!("zdt_upstream_state_{}.json", idx));
+        if auto {
+            use std::os::unix::fs::OpenOptionsExt;
+            if entry.custom_proxies.is_empty() || entry.custom_proxies.len() > 1000 ||
+                entry.custom_proxies.iter().any(|url| !is_valid_custom_upstream_proxy(url)) {
+                bail!("Opera Auto: invalid proxy list for SNI '{}'", entry.sni);
+            }
+            let raw = serde_json::to_vec(&entry.custom_proxies)?;
+            if raw.len() > 1024 * 1024 { bail!("Opera Auto: proxy list exceeds 1 MiB"); }
+            let mut file = OpenOptions::new().create(true).truncate(true).write(true).mode(0o600).open(&pool_path)?;
+            file.write_all(&raw)?;
+            let _ = fs::remove_file(&state_path);
+        }
         spawn_opera_proxy(
             &opera_bin,
             port,
             &entry.sni,
             upstream_proxy.as_deref(),
+            if auto { Some(pool_path.as_path()) } else { None },
+            if auto { Some(state_path.as_path()) } else { None },
             entry.override_proxy_address.as_deref(),
             &country,
             &bootstrap_dns,
-            selected_api_proxy.as_deref(),
+            if auto { None } else { selected_api_proxy.as_deref() },
             &opera_args,
             &log_path,
         )?;
@@ -702,6 +725,7 @@ fn read_sni_entries(path: &Path) -> Result<Vec<OperaSniEntry>> {
             use_byedpi: item.use_byedpi,
             proxy_mode: item.proxy_mode,
             custom_proxy: item.custom_proxy,
+            custom_proxies: item.custom_proxies,
             override_proxy_address,
         });
     }
@@ -1450,6 +1474,8 @@ fn spawn_opera_proxy(
     bind_port: u16,
     fake_sni: &str,
     upstream_proxy: Option<&str>,
+    proxy_list: Option<&Path>,
+    upstream_state: Option<&Path>,
     override_proxy_address: Option<&str>,
     country: &str,
     bootstrap_dns: &str,
@@ -1496,6 +1522,10 @@ fn spawn_opera_proxy(
         .arg(&opera_args.server_selection_test_url);
     if let Some(upstream) = upstream_proxy.map(str::trim).filter(|s| !s.is_empty()) {
         cmd.arg("-proxy").arg(upstream);
+    }
+    if let Some(proxy_list) = proxy_list {
+        cmd.arg("-zdt-proxy-list").arg(proxy_list);
+        if let Some(state_path) = upstream_state { cmd.arg("-zdt-upstream-state").arg(state_path); }
     }
     if let Some(override_proxy_address) = override_proxy_address {
         cmd.arg("-override-proxy-address").arg(override_proxy_address);

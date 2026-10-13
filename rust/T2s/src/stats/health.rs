@@ -90,7 +90,7 @@ async fn probe_backend_once(
     wrapper_auth: Option<(String, String)>,
 ) -> (Option<String>, Option<f64>, Option<f64>, Option<u32>) {
     let socks_ping_ms = check_backend_rtt(backend, timeout, auth.clone(), wrapper, wrapper_auth.clone()).await;
-    let mut err = if socks_ping_ms.is_some() { None } else { Some("connect/greeting/auth failed".to_string()) };
+    let mut err = if socks_ping_ms.is_some() { None } else { Some("SOCKS-прокси недоступен: ошибка подключения, согласования протокола или авторизации. Проверь запуск прокси и его журнал".to_string()) };
     let full_internet_probe = probe_mode == ProbeMode::Full && backend_requires_full_internet_probe(backend);
     let internet_ping_ms = if socks_ping_ms.is_some() && full_internet_probe {
         let summary = check_internet_via_backend(backend, timeout, auth, wrapper, wrapper_auth).await;

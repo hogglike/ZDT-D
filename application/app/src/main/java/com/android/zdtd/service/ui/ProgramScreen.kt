@@ -3,6 +3,9 @@ package com.android.zdtd.service.ui
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.android.zdtd.service.proxy.ProxyCatalogStore
+import com.android.zdtd.service.OPERA_UPSTREAM_AUTO
+import com.android.zdtd.service.maskOperaProxyForLog
 import com.android.zdtd.service.proxy.ProxyCatalogActivity
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.animation.AnimatedVisibility
@@ -2328,6 +2331,7 @@ private data class OperaSniItemUi(
   val sni: String = "",
   val proxyMode: String = OPERA_UPSTREAM_BYEDPI,
   val customProxy: String = "",
+  val customProxies: List<String> = emptyList(),
   val overrideProxyAddress: String = "",
 ) {
   val useByedpi: Boolean get() = proxyMode == OPERA_UPSTREAM_BYEDPI
@@ -2378,6 +2382,7 @@ private fun OperaSniJsonSection(
                 legacyUseByedpi = o.optBoolean("use_byedpi", false),
               ),
               customProxy = o.optString("custom_proxy", "").trim(),
+              customProxies = o.optJSONArray("custom_proxies")?.let { list -> (0 until list.length()).map { list.optString(it) } } ?: emptyList(),
               overrideProxyAddress = o.optString("override_proxy_address", "").trim(),
             )
           )
@@ -2394,6 +2399,7 @@ private fun OperaSniJsonSection(
       arr.put(JSONObject().apply {
         put("sni", sni)
         put("proxy_mode", item.proxyMode)
+        put("custom_proxies", JSONArray(item.customProxies))
         put("use_byedpi", item.useByedpi) // backwards compatibility with older service builds
         val customProxy = item.customProxy.trim()
         if (customProxy.isNotEmpty()) {
@@ -2590,6 +2596,7 @@ private fun OperaSniJsonSection(
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
               val upstreamLabel = when (item.proxyMode) {
                 OPERA_UPSTREAM_BYEDPI -> stringResource(R.string.tab_byedpi)
+                OPERA_UPSTREAM_AUTO -> "Авто · ${item.customProxies.size}"
                 OPERA_UPSTREAM_CUSTOM -> stringResource(R.string.operaproxy_upstream_custom)
                 else -> stringResource(R.string.operaproxy_upstream_direct)
               }
@@ -2648,10 +2655,18 @@ private fun OperaSniServerDialog(
   var sni by remember(initial) { mutableStateOf(initial.sni) }
   var proxyMode by remember(initial) { mutableStateOf(initial.proxyMode) }
   var customProxy by remember(initial) { mutableStateOf(initial.customProxy) }
+  var customProxies by remember(initial) { mutableStateOf(initial.customProxies) }
+  var proxyMessage by remember { mutableStateOf("") }
   val context = LocalContext.current
   val pickProxy = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     val selected = result.data?.getStringExtra(ProxyCatalogActivity.EXTRA_URL)
-    if (result.resultCode == Activity.RESULT_OK && selected != null && isValidOperaCustomProxy(selected)) {
+    val list = result.data?.getStringExtra(ProxyCatalogActivity.EXTRA_URLS)?.let { raw ->
+      runCatching { JSONArray(raw).let { values -> (0 until values.length()).map { values.getString(it) } } }.getOrNull()
+    }
+    if (result.resultCode == Activity.RESULT_OK && !list.isNullOrEmpty() && list.all(::isValidOperaCustomProxy)) {
+      customProxies = list
+      proxyMode = OPERA_UPSTREAM_AUTO
+    } else if (result.resultCode == Activity.RESULT_OK && selected != null && isValidOperaCustomProxy(selected)) {
       customProxy = selected
       proxyMode = OPERA_UPSTREAM_CUSTOM
     }
@@ -2668,9 +2683,14 @@ private fun OperaSniServerDialog(
     sni = sni.trim(),
     proxyMode = proxyMode,
     customProxy = customProxy.trim(),
+    customProxies = customProxies,
     overrideProxyAddress = address.trim(),
   )
-  val customProxyValid = proxyMode != OPERA_UPSTREAM_CUSTOM || isValidOperaCustomProxy(customProxy)
+  val customProxyValid = when (proxyMode) {
+    OPERA_UPSTREAM_CUSTOM -> isValidOperaCustomProxy(customProxy)
+    OPERA_UPSTREAM_AUTO -> customProxies.isNotEmpty() && customProxies.all(::isValidOperaCustomProxy)
+    else -> true
+  }
   val inputValid = currentItem.sni.isNotEmpty() && isValidOverrideProxyAddress(address) && customProxyValid
   val hasChanges = !isEditing || currentItem != initial
   val canSave = inputValid && hasChanges
@@ -2804,9 +2824,19 @@ private fun OperaSniServerDialog(
               label = { Text(stringResource(R.string.operaproxy_upstream_custom)) },
             )
           }
+          FilterChip(selected = proxyMode == OPERA_UPSTREAM_AUTO, onClick = {
+            proxyMode = OPERA_UPSTREAM_AUTO
+            if (customProxies.isEmpty()) {
+              runCatching { ProxyCatalogStore(context).read().map { it.url } }
+                .onSuccess { customProxies = it }.onFailure { proxyMessage = "Не удалось прочитать каталог" }
+            }
+          }, label = { Text("Авто · весь список") })
+          if (proxyMode == OPERA_UPSTREAM_AUTO) Text("Серверов: ${customProxies.size}. Последний рабочий — первым, при отказе перебираются остальные. Обнови список кнопкой ниже.", style = MaterialTheme.typography.bodySmall)
+          if (proxyMessage.isNotBlank()) Text(proxyMessage, color = MaterialTheme.colorScheme.error)
           OutlinedButton(onClick = {
             pickProxy.launch(Intent(context, ProxyCatalogActivity::class.java).putExtra(ProxyCatalogActivity.EXTRA_PICK, true))
           }, modifier = Modifier.fillMaxWidth()) { Text("Из списка прокси") }
+          if (proxyMode == OPERA_UPSTREAM_CUSTOM && isValidOperaCustomProxy(customProxy)) Text(maskOperaProxyForLog(customProxy), style = MaterialTheme.typography.bodySmall)
           AnimatedVisibility(
             visible = proxyMode == OPERA_UPSTREAM_CUSTOM,
             enter = expandVertically(animationSpec = tween(200)) + fadeIn(tween(150)),

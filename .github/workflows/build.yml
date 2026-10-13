@@ -3016,6 +3016,8 @@ jobs:
           OPERA_PROXY_COMMIT="$(git -C "$SRC/opera-proxy" rev-parse HEAD)"
           printf '%s\n' "$OPERA_PROXY_COMMIT" | tee "$ARTIFACT_DIR/opera-proxy.commit"
 
+          python3 scripts/opera_proxy_auto/patch.py "$SRC/opera-proxy"
+          (cd "$SRC/opera-proxy" && gofmt -w main.go dialer/zdt_pool.go dialer/zdt_pool_test.go && CC=gcc CXX=g++ CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go test -race ./dialer)
           echo "=== Build opera-proxy (${OPERA_PROXY_REF}) ==="
           pushd "$SRC/opera-proxy" > /dev/null
           GOOS=android \
@@ -7372,7 +7374,7 @@ jobs:
           test -s "out/mod/${stem}_PLAIN.zip"
           mv "out/mod/${stem}.apk" "out/mod/${apk}"
           mv "out/mod/${stem}_PLAIN.zip" "out/mod/${zip}"
-          cp docs/UPDATE_4.3.0-mod36_RU.md out/mod/INSTRUCTION_RU.md
+          cp docs/UPDATE_4.3.0-mod37_RU.md out/mod/INSTRUCTION_RU.md
           (cd out/mod && sha256sum "$apk" "$zip" INSTRUCTION_RU.md > SHA256SUMS.txt)
           tag="v${version}"
           # Preserve a previously published version; fixes use a new mod number.
@@ -7382,5 +7384,5 @@ jobs:
           fi
           gh release create "$tag" --target "$GITHUB_SHA" \
             --title "ZDT-D ${version} — без функций для часов" \
-            --notes-file docs/UPDATE_4.3.0-mod36_RU.md --prerelease --latest=false \
+            --notes-file docs/UPDATE_4.3.0-mod37_RU.md --prerelease --latest=false \
             "out/mod/${apk}" "out/mod/${zip}" out/mod/INSTRUCTION_RU.md out/mod/SHA256SUMS.txt

@@ -6459,6 +6459,29 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        ("GET", ["api", "programs", "operaproxy", "upstreams"]) => {
+            let root = program_root("operaproxy");
+            let mut statuses = Vec::new();
+            if let Ok(raw) = fs::read_to_string(root.join("config/sni.json")) {
+                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) {
+                    for (index, entry) in entries.iter().enumerate() {
+                        if entry.get("proxy_mode").and_then(|v| v.as_str()) != Some("auto") { continue; }
+                        let path = root.join(format!("log/zdt_upstream_state_{}.json", index));
+                        let mut status = fs::read_to_string(&path).ok()
+                            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                            .unwrap_or_else(|| json!({"state":"waiting"}));
+                        let pid = status.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
+                        if pid <= 0 || pid > i32::MAX as i64 || unsafe { libc::kill(pid as i32, 0) } != 0 {
+                            status["state"] = json!("stopped");
+                        }
+                        status["sni"] = entry.get("sni").cloned().unwrap_or_else(|| json!(""));
+                        statuses.push(status);
+                    }
+                }
+            }
+            write_json(stream, 200, json!({"ok":true,"statuses":statuses}))
+        }
+
         // --- operaproxy sni.json
         ("GET", ["api", "programs", "operaproxy", "sni"]) => {
             let p = program_root("operaproxy").join("config/sni.json");

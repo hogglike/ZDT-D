@@ -3,6 +3,10 @@ package com.android.zdtd.service.proxy
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import com.android.zdtd.service.modes.ModeClient
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlinx.coroutines.delay
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -23,6 +27,7 @@ class ProxyCatalogActivity : ComponentActivity() {
   companion object {
     const val EXTRA_PICK = "pick_proxy"
     const val EXTRA_URL = "selected_proxy_url"
+    const val EXTRA_URLS = "selected_proxy_urls"
   }
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -44,6 +49,17 @@ class ProxyCatalogActivity : ComponentActivity() {
     var text by remember { mutableStateOf("") }
     var preview by remember { mutableStateOf<ProxyImport?>(null) }
     var deleting by remember { mutableStateOf<SavedProxy?>(null) }
+    var applying by remember { mutableStateOf(false) }
+    var statuses by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    LaunchedEffect(Unit) {
+      while (true) {
+        runCatching { withContext(Dispatchers.IO) { ModeClient.api(this@ProxyCatalogActivity).getJsonData("/api/programs/operaproxy/upstreams") } }.onSuccess { result ->
+          val list = result.optJSONArray("statuses")
+          statuses = if (list == null) emptyList() else (0 until list.length()).mapNotNull { list.optJSONObject(it) }
+        }
+        delay(5000)
+      }
+    }
     LaunchedEffect(Unit) {
       try { entries = withContext(Dispatchers.IO) { store.read() }; loaded = true }
       catch (_: Exception) { message = "Не удалось прочитать каталог. Существующий список не изменён." }
@@ -95,7 +111,7 @@ class ProxyCatalogActivity : ComponentActivity() {
           Text(if (pick) "Выбрать прокси" else "Прокси", style = MaterialTheme.typography.headlineSmall)
           TextButton(onClick = { finish() }) { Text("Назад") }
         }
-        Text("Импортируй TXT Webshare: адрес:порт:логин:пароль. Затем выбери сервер в Opera Proxy → SNI → карандаш → «Из списка прокси».", style = MaterialTheme.typography.bodySmall)
+        Text("Импортируй TXT Webshare: адрес:порт:логин:пароль. Включи «Авто» для перебора всего списка или выбери один сервер вручную в настройках SNI.", style = MaterialTheme.typography.bodySmall)
         Text("Протокол строк без http:// или socks5://:", style = MaterialTheme.typography.labelMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           FilterChip(protocol == "http", onClick = { protocol = "http" }, label = { Text("HTTP") }, enabled = !busy)
@@ -107,6 +123,16 @@ class ProxyCatalogActivity : ComponentActivity() {
         }
         Text("Сохранено: ${entries.size}. Импорт добавляет серверы, совпадения пропускаются. Пароли скрыты в списке.", style = MaterialTheme.typography.bodySmall)
         if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall)
+        Button(onClick = {
+          if (pick) { setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_URLS, JSONArray(entries.map { it.url }).toString())); finish() }
+          else applying = true
+        }, enabled = loaded && !busy && entries.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+          Text(if (pick) "Авто — весь список · ${entries.size}" else "Авто — использовать весь список в Opera")
+        }
+        statuses.forEach { status ->
+          val state = status.optString("state")
+          Text("${status.optString("sni")}: ${when(state) { "ready" -> "Соединение установлено · ${status.optString("endpoint")}"; "connecting" -> "Перебор · ${status.optString("endpoint")}"; "error" -> status.optString("error"); "stopped" -> "Opera остановлена или нужен перезапуск"; else -> "Ожидание подключения" }}", color = when(state) { "error" -> MaterialTheme.colorScheme.error; "ready" -> androidx.compose.ui.graphics.Color(0xFF2E7D32); else -> MaterialTheme.colorScheme.onSurface }, style = MaterialTheme.typography.bodySmall)
+        }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         OutlinedTextField(search, { search = it }, label = { Text("Поиск адреса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         if (loaded && entries.isEmpty()) Text("Список пуст. Загрузи файл или вставь строки.")
@@ -116,6 +142,9 @@ class ProxyCatalogActivity : ComponentActivity() {
               Column(Modifier.padding(12.dp)) {
                 Text(entry.endpoint, style = MaterialTheme.typography.titleSmall)
                 Text(entry.display, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                val failed = statuses.flatMap { s -> s.optJSONArray("failures")?.let { list -> (0 until list.length()).mapNotNull { list.optJSONObject(it) } } ?: emptyList() }
+                  .firstOrNull { it.optString("endpoint") == entry.url.substringBefore("://") + "://" + java.net.URI(entry.url).rawAuthority.substringAfterLast('@') }
+                if (failed != null) Text(failed.optString("error"), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 Row {
                   if (pick) TextButton(onClick = {
                     setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_URL, entry.url)); finish()
@@ -126,7 +155,7 @@ class ProxyCatalogActivity : ComponentActivity() {
             }
           }
         }
-        Text("Каталог сам не переключает Opera. Изменения SNI нужно сохранить и применить перезапуском ZDT-D.", style = MaterialTheme.typography.bodySmall)
+        Text("После применения списка перезапусти ZDT-D один раз. Дальше перебор работает внутри Opera, при установлении новых соединений. Уже открытые соединения сохраняют свой сервер.", style = MaterialTheme.typography.bodySmall)
       }
     }
     if (paste) AlertDialog(onDismissRequest = { paste = false }, title = { Text("Список прокси") }, text = {
@@ -143,6 +172,22 @@ class ProxyCatalogActivity : ComponentActivity() {
         }
       }, confirmButton = { TextButton(onClick = { save(added, "Добавлено серверов: $count") }, enabled = !busy && count > 0 && added.size <= MAX_PROXY_ENTRIES) { Text("Добавить $count") } }, dismissButton = { TextButton(onClick = { preview = null }, enabled = !busy) { Text("Отмена") } })
     }
+    if (applying) AlertDialog(onDismissRequest = { if (!busy) applying = false }, title = { Text("Авто для Opera Proxy") }, text = { Text("Список из ${entries.size} прокси будет применён ко всем существующим записям SNI. После сохранения перезапусти ZDT-D.") }, confirmButton = {
+      TextButton(onClick = { scope.launch {
+        busy = true
+        try {
+          withContext(Dispatchers.IO) {
+            val api = ModeClient.api(this@ProxyCatalogActivity)
+            val list = JSONArray(api.getTextContent("/api/programs/operaproxy/sni"))
+            check(list.length() > 0) { "Сначала создай запись SNI в Opera Proxy" }
+            for (i in 0 until list.length()) { list.getJSONObject(i).put("proxy_mode", "auto").put("use_byedpi", false).put("custom_proxies", JSONArray(entries.map { it.url })) }
+            check(api.putTextContent("/api/programs/operaproxy/sni", list.toString(2))) { "Не удалось сохранить настройки Opera" }
+          }
+          applying = false; message = "Авто сохранено. Перезапусти ZDT-D для применения списка."
+        } catch (_: Exception) { message = "Не удалось применить список. Проверь связь со службой и наличие записей SNI." }
+        finally { busy = false }
+      } }, enabled = !busy) { Text("Применить Авто") }
+    }, dismissButton = { TextButton(onClick = { applying = false }, enabled = !busy) { Text("Отмена") } })
     deleting?.let { entry -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Удалить прокси?") }, text = { Text("${entry.endpoint}\nНастройки SNI останутся прежними.") }, confirmButton = { TextButton(onClick = { save(entries - entry, "Сервер удалён из каталога") }, enabled = !busy) { Text("Удалить") } }, dismissButton = { TextButton(onClick = { deleting = null }, enabled = !busy) { Text("Отмена") } }) }
   }
 }
