@@ -13,8 +13,6 @@
 -keep class com.maxmind.db.** { *; }
 -dontwarn com.maxmind.db.**
 
-# Keep LSPosed/Xposed entry point referenced from assets/xposed_init.
--keep class com.android.zdtd.service.xposed.ZdtdHideHook { *; }
 -dontwarn de.robv.android.xposed.**
 
 # VPS SSH client. Bouncy Castle keeps modern OpenSSH host-key/KEX support on older Android runtimes.
@@ -22,3 +20,9 @@
 -dontwarn com.jcraft.jsch.**
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
+
+# Invoked externally through root app_process; R8 must keep the class and main entry point.
+-keep class com.android.zdtd.service.dns.DnsResolverBridge { *; }
+
+# Non-root VPN bridge JNI entry point from the self-built hev-socks5-tunnel AAR.
+-keep class hev.htproxy.TProxyService { *; }

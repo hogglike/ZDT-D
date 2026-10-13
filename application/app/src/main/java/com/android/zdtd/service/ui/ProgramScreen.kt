@@ -1,5 +1,13 @@
 package com.android.zdtd.service.ui
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.android.zdtd.service.proxy.ProxyCatalogStore
+import com.android.zdtd.service.OPERA_UPSTREAM_AUTO
+import com.android.zdtd.service.maskOperaProxyForLog
+import com.android.zdtd.service.proxy.ProxyCatalogActivity
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -46,6 +54,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -60,6 +69,11 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import com.android.zdtd.service.R
+import com.android.zdtd.service.OPERA_UPSTREAM_BYEDPI
+import com.android.zdtd.service.OPERA_UPSTREAM_CUSTOM
+import com.android.zdtd.service.OPERA_UPSTREAM_DIRECT
+import com.android.zdtd.service.isValidOperaCustomProxy
+import com.android.zdtd.service.normalizeOperaUpstreamMode
 import androidx.compose.material.icons.filled.Edit
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -194,6 +208,11 @@ fun ProgramScreen(
           ),
           selected = dnscryptTab,
           onSelect = { dnscryptTab = it },
+          activeTextColor = if (MaterialTheme.colorScheme.background.luminance() > 0.5f) {
+            Color.Black
+          } else {
+            Color(0xFF7DD3FC)
+          },
         )
       }
     } else if (program.id == "operaproxy") {
@@ -203,6 +222,12 @@ fun ProgramScreen(
             checked = program.enabled,
             onCheckedChange = { v -> actions.setProgramEnabled(program.id, v) },
           )
+          var beginnerHelp by remember { mutableStateOf(false) }
+          TextButton(onClick = { beginnerHelp = !beginnerHelp }) { Text("Как настроить Opera Proxy ${if (beginnerHelp) "▴" else "▾"}") }
+          if (beginnerHelp) {
+            Text("1. Включи Opera Proxy и выбери приложения.\n2. На вкладке SNI оставь рабочие записи; регион выбирается на отдельной вкладке.\n3. Если Opera не запускается, открой параметры API proxy и добавь адрес прокси или ссылку на список. Сохрани и перезапусти ZDT-D.\nAPI proxy помогает получить данные серверов Opera. Трафик выбранных приложений проходит через Opera Proxy.", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { context.startActivity(Intent(context, com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity::class.java)) }) { Text("Открыть проверку Opera и DNS") }
+          }
           AnimatedVisibility(
             visible = operaWebPanelVisible,
             enter = fadeIn(tween(180)) + expandVertically(animationSpec = tween(220)),
@@ -2093,6 +2118,7 @@ private fun OperaProxySection(
   var tab by remember { mutableStateOf(0) }
 
   val scope = rememberCoroutineScope()
+  val context = LocalContext.current
   fun snack(msg: String) { scope.launch { snackHost.showSnackbar(msg) } }
 
   val labels = listOf(
@@ -2104,6 +2130,9 @@ private fun OperaProxySection(
   )
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    OutlinedButton(onClick = {
+      context.startActivity(android.content.Intent(context, com.android.zdtd.service.proxy.OperaDiagnosticsActivity::class.java))
+    }, modifier = Modifier.fillMaxWidth()) { Text("Диагностика Opera · проверить SNI") }
     OperaProxyTabSelector(
       labels = labels,
       selected = tab,
@@ -2135,6 +2164,7 @@ private fun OperaProxySection(
           title = stringResource(R.string.byedpi_start_args_title),
           desc = stringResource(R.string.byedpi_start_args_desc),
           path = "/api/programs/operaproxy/byedpi/start_args",
+          validationKind = "byedpi",
           actions = actions,
           snackHost = snackHost,
         )
@@ -2142,6 +2172,7 @@ private fun OperaProxySection(
           title = stringResource(R.string.byedpi_restart_args_title),
           desc = stringResource(R.string.byedpi_restart_args_desc),
           path = "/api/programs/operaproxy/byedpi/restart_args",
+          validationKind = "byedpi",
           actions = actions,
           snackHost = snackHost,
         )
@@ -2304,9 +2335,13 @@ private fun OperaMiniBadge(
 
 private data class OperaSniItemUi(
   val sni: String = "",
-  val useByedpi: Boolean = false,
+  val proxyMode: String = OPERA_UPSTREAM_BYEDPI,
+  val customProxy: String = "",
+  val customProxies: List<String> = emptyList(),
   val overrideProxyAddress: String = "",
-)
+) {
+  val useByedpi: Boolean get() = proxyMode == OPERA_UPSTREAM_BYEDPI
+}
 
 private fun isValidOverrideProxyAddress(value: String): Boolean {
   val text = value.trim()
@@ -2348,7 +2383,12 @@ private fun OperaSniJsonSection(
           add(
             OperaSniItemUi(
               sni = sni,
-              useByedpi = o.optBoolean("use_byedpi", false),
+              proxyMode = normalizeOperaUpstreamMode(
+                raw = o.optString("proxy_mode", ""),
+                legacyUseByedpi = o.optBoolean("use_byedpi", false),
+              ),
+              customProxy = o.optString("custom_proxy", "").trim(),
+              customProxies = o.optJSONArray("custom_proxies")?.let { list -> (0 until list.length()).map { list.optString(it) } } ?: emptyList(),
               overrideProxyAddress = o.optString("override_proxy_address", "").trim(),
             )
           )
@@ -2364,7 +2404,13 @@ private fun OperaSniJsonSection(
       if (sni.isEmpty()) return@forEach
       arr.put(JSONObject().apply {
         put("sni", sni)
-        put("use_byedpi", item.useByedpi)
+        put("proxy_mode", item.proxyMode)
+        put("custom_proxies", JSONArray(item.customProxies))
+        put("use_byedpi", item.useByedpi) // backwards compatibility with older service builds
+        val customProxy = item.customProxy.trim()
+        if (customProxy.isNotEmpty()) {
+          put("custom_proxy", customProxy)
+        }
         val overrideAddress = item.overrideProxyAddress.trim()
         if (overrideAddress.isNotEmpty()) {
           put("override_proxy_address", overrideAddress)
@@ -2554,9 +2600,20 @@ private fun OperaSniJsonSection(
               overflow = TextOverflow.Ellipsis,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+              val upstreamLabel = when (item.proxyMode) {
+                OPERA_UPSTREAM_BYEDPI -> stringResource(R.string.tab_byedpi)
+                OPERA_UPSTREAM_AUTO -> "Авто · ${item.customProxies.size}"
+                OPERA_UPSTREAM_CUSTOM -> stringResource(R.string.operaproxy_upstream_custom)
+                else -> stringResource(R.string.operaproxy_upstream_direct)
+              }
+              val upstreamAccent = when (item.proxyMode) {
+                OPERA_UPSTREAM_BYEDPI -> Color(0xFF22C55E)
+                OPERA_UPSTREAM_CUSTOM -> MaterialTheme.colorScheme.tertiary
+                else -> accent
+              }
               OperaMiniBadge(
-                text = if (item.useByedpi) stringResource(R.string.tab_byedpi) else stringResource(R.string.opera_proxy_title),
-                accent = if (item.useByedpi) Color(0xFF22C55E) else accent,
+                text = upstreamLabel,
+                accent = upstreamAccent,
               )
               Text(
                 text = item.overrideProxyAddress.ifBlank { stringResource(R.string.operaproxy_sni_address_not_set) },
@@ -2602,7 +2659,24 @@ private fun OperaSniServerDialog(
   onSave: (OperaSniItemUi) -> Unit,
 ) {
   var sni by remember(initial) { mutableStateOf(initial.sni) }
-  var useByedpi by remember(initial) { mutableStateOf(initial.useByedpi) }
+  var proxyMode by remember(initial) { mutableStateOf(initial.proxyMode) }
+  var customProxy by remember(initial) { mutableStateOf(initial.customProxy) }
+  var customProxies by remember(initial) { mutableStateOf(initial.customProxies) }
+  var proxyMessage by remember { mutableStateOf("") }
+  val context = LocalContext.current
+  val pickProxy = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    val selected = result.data?.getStringExtra(ProxyCatalogActivity.EXTRA_URL)
+    val list = result.data?.getStringExtra(ProxyCatalogActivity.EXTRA_URLS)?.let { raw ->
+      runCatching { JSONArray(raw).let { values -> (0 until values.length()).map { values.getString(it) } } }.getOrNull()
+    }
+    if (result.resultCode == Activity.RESULT_OK && !list.isNullOrEmpty() && list.all(::isValidOperaCustomProxy)) {
+      customProxies = list
+      proxyMode = OPERA_UPSTREAM_AUTO
+    } else if (result.resultCode == Activity.RESULT_OK && selected != null && isValidOperaCustomProxy(selected)) {
+      customProxy = selected
+      proxyMode = OPERA_UPSTREAM_CUSTOM
+    }
+  }
   var address by remember(initial) { mutableStateOf(initial.overrideProxyAddress) }
   var attemptedSave by remember { mutableStateOf(false) }
   val shortHeight = rememberIsShortHeight()
@@ -2613,14 +2687,24 @@ private fun OperaSniServerDialog(
 
   val currentItem = OperaSniItemUi(
     sni = sni.trim(),
-    useByedpi = useByedpi,
+    proxyMode = proxyMode,
+    customProxy = customProxy.trim(),
+    customProxies = customProxies,
     overrideProxyAddress = address.trim(),
   )
-  val inputValid = currentItem.sni.isNotEmpty() && isValidOverrideProxyAddress(address)
+  val customProxyValid = when (proxyMode) {
+    OPERA_UPSTREAM_CUSTOM -> isValidOperaCustomProxy(customProxy)
+    OPERA_UPSTREAM_AUTO -> customProxies.isNotEmpty() && customProxies.all(::isValidOperaCustomProxy)
+    else -> true
+  }
+  val sniValid = currentItem.sni.length in 1..253 && !currentItem.sni.matches(Regex("[0-9.]+")) && currentItem.sni.split('.').all { part -> part.length in 1..63 && !part.startsWith('-') && !part.endsWith('-') && part.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' } }
+  val inputValid = sniValid && isValidOverrideProxyAddress(address) && customProxyValid
   val hasChanges = !isEditing || currentItem != initial
   val canSave = inputValid && hasChanges
-  val sniError = attemptedSave && currentItem.sni.isEmpty()
+  val sniError = attemptedSave && !sniValid
   val addressError = attemptedSave && !isValidOverrideProxyAddress(address)
+  val customProxyError = proxyMode == OPERA_UPSTREAM_CUSTOM && customProxy.isNotBlank() &&
+    !isValidOperaCustomProxy(customProxy)
 
   fun attemptSave() {
     attemptedSave = true
@@ -2715,25 +2799,74 @@ private fun OperaSniServerDialog(
           isError = sniError,
           supportingText = {
             if (sniError) {
-              Text(stringResource(R.string.operaproxy_sni_required))
+              Text("Нужен домен, например m.vk.com. Адреса Webshare вводятся в API Прокси.")
             }
           },
         )
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(stringResource(R.string.operaproxy_sni_use_byedpi), fontWeight = FontWeight.Medium)
-            Text(
-              stringResource(R.string.operaproxy_sni_use_byedpi_desc),
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(stringResource(R.string.operaproxy_upstream_title), fontWeight = FontWeight.Medium)
+          Text(
+            stringResource(R.string.operaproxy_upstream_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            FilterChip(
+              selected = proxyMode == OPERA_UPSTREAM_DIRECT,
+              onClick = { proxyMode = OPERA_UPSTREAM_DIRECT },
+              label = { Text(stringResource(R.string.operaproxy_upstream_direct)) },
+            )
+            FilterChip(
+              selected = proxyMode == OPERA_UPSTREAM_BYEDPI,
+              onClick = { proxyMode = OPERA_UPSTREAM_BYEDPI },
+              label = { Text(stringResource(R.string.tab_byedpi)) },
+            )
+            FilterChip(
+              selected = proxyMode == OPERA_UPSTREAM_CUSTOM,
+              onClick = { proxyMode = OPERA_UPSTREAM_CUSTOM },
+              label = { Text(stringResource(R.string.operaproxy_upstream_custom)) },
             )
           }
-          Switch(checked = useByedpi, onCheckedChange = { useByedpi = it })
+          FilterChip(selected = proxyMode == OPERA_UPSTREAM_AUTO, onClick = {
+            proxyMode = OPERA_UPSTREAM_AUTO
+            if (customProxies.isEmpty()) {
+              runCatching { ProxyCatalogStore(context).read().map { it.url } }
+                .onSuccess { customProxies = it }.onFailure { proxyMessage = "Не удалось прочитать каталог" }
+            }
+          }, label = { Text("Авто · весь список") })
+          if (proxyMode == OPERA_UPSTREAM_AUTO) Text("Серверов: ${customProxies.size}. Последний рабочий — первым, при отказе перебираются остальные. Обнови список кнопкой ниже.", style = MaterialTheme.typography.bodySmall)
+          if (proxyMessage.isNotBlank()) Text(proxyMessage, color = MaterialTheme.colorScheme.error)
+          OutlinedButton(onClick = {
+            pickProxy.launch(Intent(context, ProxyCatalogActivity::class.java).putExtra(ProxyCatalogActivity.EXTRA_PICK, true))
+          }, modifier = Modifier.fillMaxWidth()) { Text("Из списка прокси") }
+          if (proxyMode == OPERA_UPSTREAM_CUSTOM && isValidOperaCustomProxy(customProxy)) Text(maskOperaProxyForLog(customProxy), style = MaterialTheme.typography.bodySmall)
+          AnimatedVisibility(
+            visible = proxyMode == OPERA_UPSTREAM_CUSTOM,
+            enter = expandVertically(animationSpec = tween(200)) + fadeIn(tween(150)),
+            exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(tween(120)),
+          ) {
+            OutlinedTextField(
+              value = customProxy,
+              visualTransformation = PasswordVisualTransformation(),
+              onValueChange = { customProxy = it },
+              modifier = Modifier.fillMaxWidth(),
+              singleLine = true,
+              label = { Text(stringResource(R.string.operaproxy_custom_proxy_title)) },
+              placeholder = { Text(stringResource(R.string.operaproxy_custom_proxy_placeholder)) },
+              isError = customProxyError,
+              supportingText = {
+                Text(
+                  if (customProxyError) stringResource(R.string.operaproxy_custom_proxy_error)
+                  else stringResource(R.string.operaproxy_custom_proxy_desc)
+                )
+              },
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+          }
         }
 
         OutlinedTextField(
@@ -2960,23 +3093,31 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
     val trimmed = value.trim()
     if (trimmed.isEmpty()) return false
     val allowed = listOf("http://", "https://", "socks5://", "socks5h://")
-    return trimmed.split(',')
+    return trimmed.split(',', '\n')
       .map { it.trim() }
       .filter { it.isNotEmpty() }
       .any { token -> !token.startsWith("/") && allowed.none { prefix -> token.startsWith(prefix, ignoreCase = true) } }
   }
 
+  var argsValidationError by remember { mutableStateOf<String?>(null) }
   fun save() {
-    if (apiProxyHasInvalidEntries(apiProxy)) {
-      snack(context.getString(R.string.opera_args_api_proxy_invalid))
-      return
+    if (dlLimit.trim().toLongOrNull() == null || verbosity.trim().toIntOrNull() == null) {
+      argsValidationError = "Лимит загрузки и уровень логов должны быть целыми числами"; return
     }
     val obj = buildArgsJson()
     saving = true
-    actions.saveJsonData(apiPath, obj) { ok ->
-      saving = false
-      if (ok) lastSavedArgsJson = obj.toString()
-      snack(if (ok) context.getString(R.string.saved) else context.getString(R.string.save_failed))
+    scope.launch {
+      argsValidationError = try {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+          com.android.zdtd.service.modes.ModeClient.api(context).validateOperaInput("args", obj.toString())
+        }
+      } catch (_: Exception) { "Не удалось проверить настройки. Обнови модуль вместе с APK." }
+      if (argsValidationError != null) { saving = false; return@launch }
+      actions.saveJsonData(apiPath, obj) { ok ->
+        saving = false
+        if (ok) lastSavedArgsJson = obj.toString()
+        snack(if (ok) context.getString(R.string.saved) else context.getString(R.string.save_failed))
+      }
     }
   }
 
@@ -3007,6 +3148,7 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
   val dnsDirty = lastSavedDnsResolvers?.let { normalizeDnsResolvers(dnsResolvers) != it } == true
 
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    argsValidationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
     // ── Card: -api-proxy ── (highlighted as most important)
     val apiProxyInvalid = apiProxyHasInvalidEntries(apiProxy)
@@ -3033,9 +3175,10 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
           value = apiProxy,
           onValueChange = { apiProxy = it },
           modifier = Modifier.fillMaxWidth(),
-          singleLine = true,
-          label = { Text("-api-proxy") },
-          placeholder = { Text("socks5://host:port or /sdcard/proxies.txt") },
+          minLines = 3,
+          maxLines = 6,
+          label = { Text("Источники API proxy · по одному на строку") },
+          placeholder = { Text("socks5://host:port\nhttps://example.com/proxies.txt") },
           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
           isError = apiProxyInvalid,
           supportingText = {
@@ -3048,6 +3191,7 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
             )
           },
         )
+        Text("Используй один тип источников: адреса прокси, HTTPS-ссылки на списки или пути к TXT-файлам. При запуске ZDT-D списки загружаются заново и выбирается доступный прокси. Пустое поле — запросы к API напрямую.", style = MaterialTheme.typography.bodySmall)
       }
     }
 

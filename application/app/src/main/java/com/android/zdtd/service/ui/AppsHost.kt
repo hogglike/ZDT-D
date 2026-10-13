@@ -33,6 +33,7 @@ import com.android.zdtd.service.ui.vps.VpsProfileScreen
 import com.android.zdtd.service.ui.vps.VpsServerDetailsScreen
 import com.android.zdtd.service.ui.vps.VpsServersScreen
 import com.android.zdtd.service.ui.vps.VpsServiceScreen
+import com.android.zdtd.service.ui.vps.VpsTerminalScreen
 import com.android.zdtd.service.vps.VpsServiceKind
 import com.android.zdtd.service.vps.VpsViewModel
 import com.android.zdtd.service.vps.VpsViewModelFactory
@@ -50,6 +51,7 @@ fun AppsHost(
   onOpenOptionalTools: () -> Unit,
   onOpenVpsServers: () -> Unit,
   onOpenVpsServer: (String) -> Unit,
+  onOpenVpsTerminal: (String) -> Unit,
   onOpenVpsService: (String, String) -> Unit,
   onOpenVpsProfile: (String, String, String) -> Unit,
   onOpenConstructionStudio: () -> Unit,
@@ -59,6 +61,7 @@ fun AppsHost(
   actions: ZdtdActions,
   snackHost: SnackbarHostState,
   tproxyEnabled: Boolean = false,
+  landscapeControl: Boolean = false,
   topContentPadding: Dp = 0.dp,
   bottomContentPadding: Dp = 0.dp,
 ) {
@@ -90,6 +93,7 @@ fun AppsHost(
     AppsRoute.OptionalTools -> 1
     AppsRoute.VpsServers -> 1
     is AppsRoute.VpsServer -> 2
+    is AppsRoute.VpsTerminal -> 3
     is AppsRoute.VpsService -> 3
     is AppsRoute.VpsProfile -> 4
     AppsRoute.ConstructionStudio -> 2
@@ -103,21 +107,24 @@ fun AppsHost(
   AnimatedContent(
     targetState = route,
     transitionSpec = {
+      // Match the non-root navigation motion: a short directional slide with
+      // a soft cross-fade. It stays readable on phones and wide/TV layouts
+      // without the heavier card-stack scaling that used to make root feel
+      // visually busier than non-root.
       val forward = targetState.depth() > initialState.depth()
-
-      val enter = fadeIn(tween(160)) + slideInHorizontally(tween(220)) {
-        if (forward) it / 6 else -it / 6
+      val enter = fadeIn(tween(160)) + slideInHorizontally(tween(220)) { width ->
+        if (forward) width / 6 else -width / 6
       }
-      val exit = fadeOut(tween(160)) + slideOutHorizontally(tween(220)) {
-        if (forward) -it / 6 else it / 6
+      val exit = fadeOut(tween(160)) + slideOutHorizontally(tween(220)) { width ->
+        if (forward) -width / 6 else width / 6
       }
-
       (enter togetherWith exit).using(SizeTransform(clip = false))
     },
-    label = "appsRoute",
+    label = "appsRouteTransition",
   ) { r ->
     when (r) {
       AppsRoute.List -> AppsListScreen(
+        actions = actions,
         programs = programs,
         daemonOnline = daemonOnline,
         tgWsProxy = tgWsProxy,
@@ -140,6 +147,13 @@ fun AppsHost(
         serverId = r.serverId,
         viewModel = vpsViewModel,
         onOpenService = { onOpenVpsService(r.serverId, it.wireId) },
+        onOpenTerminal = { onOpenVpsTerminal(r.serverId) },
+        topContentPadding = topContentPadding,
+        bottomContentPadding = bottomContentPadding,
+      )
+      is AppsRoute.VpsTerminal -> VpsTerminalScreen(
+        serverId = r.serverId,
+        viewModel = vpsViewModel,
         topContentPadding = topContentPadding,
         bottomContentPadding = bottomContentPadding,
       )
@@ -212,6 +226,11 @@ fun AppsHost(
         bottomContentPadding = bottomContentPadding,
       )
       is AppsRoute.Program -> when (r.programId) {
+        "dnsprofiles" -> DnsProfilesScreen(
+          actions = actions,
+          topContentPadding = topContentPadding,
+          bottomContentPadding = bottomContentPadding,
+        )
         "tgwsproxy" -> TgWsProxySettingsScreen(
           programs = programs,
           actions = actions,

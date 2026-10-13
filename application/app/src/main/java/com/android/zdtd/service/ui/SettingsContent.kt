@@ -61,11 +61,103 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Close
 import com.android.zdtd.service.AppUpdateUiState
+import com.android.zdtd.service.NonRootAppRoutingMode
+import com.android.zdtd.service.NonRootVpnState
 import com.android.zdtd.service.R
 import kotlin.math.roundToInt
 
 // Settings UI content extracted from AppUpdateUi.kt for easier maintenance.
 // Same package (com.android.zdtd.service.ui) — no call-site import changes needed.
+
+@Composable
+fun NonRootSettingsContent(
+  languageMode: String,
+  onLanguageModeChange: (String) -> Unit,
+  themeMode: String,
+  onThemeModeChange: (String) -> Unit,
+  appRoutingMode: NonRootAppRoutingMode,
+  appRoutingPackages: Set<String>,
+  vpnState: NonRootVpnState,
+  onAppRoutingModeChange: (NonRootAppRoutingMode) -> Unit,
+  onAppRoutingPackagesChange: (Set<String>) -> Unit,
+  onRestartVpn: () -> Unit,
+  landscapeColumns: Boolean = false,
+) {
+  val compactWidth = rememberIsCompactWidth()
+  if (landscapeColumns) {
+    Row(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp),
+      horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+      Column(
+        modifier = Modifier
+          .weight(0.44f)
+          .fillMaxHeight()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+      ) {
+        SettingsLanguageSection(
+          languageMode = languageMode,
+          compactWidth = false,
+          onLanguageModeChange = onLanguageModeChange,
+        )
+        SettingsThemeSection(
+          themeMode = themeMode,
+          compactWidth = false,
+          onThemeModeChange = onThemeModeChange,
+        )
+      }
+      Column(
+        modifier = Modifier
+          .weight(0.56f)
+          .fillMaxHeight()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+      ) {
+        NonRootAppRoutingSection(
+          mode = appRoutingMode,
+          selectedPackages = appRoutingPackages,
+          vpnState = vpnState,
+          onModeChange = onAppRoutingModeChange,
+          onPackagesChange = onAppRoutingPackagesChange,
+          onRestartVpn = onRestartVpn,
+        )
+        Spacer(Modifier.height(8.dp))
+      }
+    }
+    return
+  }
+
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .verticalScroll(rememberScrollState())
+      .padding(16.dp),
+    verticalArrangement = Arrangement.spacedBy(18.dp),
+  ) {
+    SettingsLanguageSection(
+      languageMode = languageMode,
+      compactWidth = compactWidth,
+      onLanguageModeChange = onLanguageModeChange,
+    )
+    SettingsThemeSection(
+      themeMode = themeMode,
+      compactWidth = compactWidth,
+      onThemeModeChange = onThemeModeChange,
+    )
+    NonRootAppRoutingSection(
+      mode = appRoutingMode,
+      selectedPackages = appRoutingPackages,
+      vpnState = vpnState,
+      onModeChange = onAppRoutingModeChange,
+      onPackagesChange = onAppRoutingPackagesChange,
+      onRestartVpn = onRestartVpn,
+    )
+    Spacer(Modifier.height(8.dp))
+  }
+}
 
 @Composable
 fun AppUpdateSettings(

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="12dp" android:background="#EEF0F4">
+    <TextView android:id="@+id/mode_settings" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="ZDT-D · режимы · настройки ⚙" android:textColor="#151515" android:textStyle="bold" android:textSize="14sp" android:paddingBottom="8dp" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <TextView android:id="@+id/mode_white" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1" android:text="Белый" android:textColor="#000000" android:textSize="12sp" android:gravity="center" android:background="#FFFFFF" android:padding="2dp" />
+        <TextView android:id="@+id/mode_normal" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1" android:layout_marginHorizontal="4dp" android:text="Обычный" android:textColor="#000000" android:textSize="12sp" android:gravity="center" android:background="#FFFFFF" android:padding="2dp" />
+        <TextView android:id="@+id/mode_browser" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1" android:text="Браузер" android:textColor="#000000" android:textSize="12sp" android:gravity="center" android:background="#FFFFFF" android:padding="2dp" />
+    </LinearLayout>
+    <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <TextView android:id="@+id/pick_white" android:layout_width="0dp" android:layout_height="30dp" android:layout_weight="1" android:text="Сервер ▾" android:textColor="#151515" android:textSize="11sp" android:gravity="center" android:contentDescription="Выбрать сервер режима white" />
+        <TextView android:id="@+id/pick_normal" android:layout_width="0dp" android:layout_height="30dp" android:layout_weight="1" android:text="Сервер ▾" android:textColor="#151515" android:textSize="11sp" android:gravity="center" android:contentDescription="Выбрать сервер режима normal" />
+        <TextView android:id="@+id/pick_browser" android:layout_width="0dp" android:layout_height="30dp" android:layout_weight="1" android:text="Сервер ▾" android:textColor="#151515" android:textSize="11sp" android:gravity="center" android:contentDescription="Выбрать сервер режима browser" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingTop="6dp">
+        <TextView android:id="@+id/mode_refresh" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="2" android:text="Обновить серверы" android:textColor="#151515" android:textSize="12sp" android:gravity="center" android:background="#FFFFFF" />
+        <TextView android:id="@+id/mode_stop" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="VPN выкл." android:textColor="#151515" android:textSize="12sp" android:gravity="center" android:layout_marginStart="4dp" android:background="#FFFFFF" />
+    </LinearLayout>
+    <TextView android:id="@+id/mode_maintenance" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#555555" android:textSize="11sp" android:maxLines="2" />
+    <TextView android:id="@+id/mode_message" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#151515" android:textSize="12sp" android:paddingTop="8dp" android:maxLines="3" />
+</LinearLayout>

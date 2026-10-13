@@ -147,6 +147,7 @@ private fun SetupAlertDialog(
   bodyText: String,
   confirmButtonText: String,
   onConfirm: () -> Unit,
+  confirmEnabled: Boolean = true,
   dismissButtonText: String? = null,
   onDismiss: (() -> Unit)? = null,
 ) {
@@ -155,7 +156,7 @@ private fun SetupAlertDialog(
     title = { Text(titleText) },
     text = { Text(bodyText) },
     confirmButton = {
-      TextButton(onClick = onConfirm) { Text(confirmButtonText) }
+      TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmButtonText) }
     },
     dismissButton = {
       if (dismissButtonText != null && onDismiss != null) {
@@ -166,8 +167,14 @@ private fun SetupAlertDialog(
 }
 
 @Composable
-fun WelcomeScreen(onAccept: () -> Unit) {
-  val arm64Ok = remember { isArm64OnlySupported() }
+fun WelcomeScreen(
+  onAccept: () -> Unit,
+  welcomeBodyRes: Int = R.string.setup_welcome_body,
+  featuresBodyRes: Int = R.string.setup_features_body,
+  notesBodyRes: Int = R.string.setup_notes_body,
+  requireArm64: Boolean = true,
+) {
+  val architectureOk = remember(requireArm64) { !requireArm64 || isArm64OnlySupported() }
   val compact = rememberIsCompactWidth()
   val tablet = rememberIsTabletLayout()
   val shortSetupHeight = rememberIsShortHeight()
@@ -209,7 +216,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
         ) {
           ModernSetupHeroCard(
             title = stringResource(R.string.setup_welcome_title),
-            body = stringResource(R.string.setup_welcome_body),
+            body = stringResource(welcomeBodyRes),
             accent = MaterialTheme.colorScheme.primary,
             pose = SetupMascotPose.WELCOME,
             compact = false,
@@ -231,17 +238,17 @@ fun WelcomeScreen(onAccept: () -> Unit) {
             ) {
               ModernSetupInfoCard(
                 title = stringResource(R.string.app_name),
-                body = stringResource(R.string.setup_features_body),
+                body = stringResource(featuresBodyRes),
                 accent = MaterialTheme.colorScheme.primary,
                 dense = true,
               )
               ModernSetupInfoCard(
                 title = stringResource(R.string.setup_notes_title),
-                body = stringResource(R.string.setup_notes_body),
+                body = stringResource(notesBodyRes),
                 accent = MaterialTheme.colorScheme.secondary,
                 dense = true,
               )
-              if (!arm64Ok) {
+              if (!architectureOk) {
                 InstallerNoticeCard(
                   text = stringResource(
                     R.string.setup_arch_unsupported_fmt,
@@ -254,7 +261,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
             }
             SetupPrimaryButton(
               onClick = onAccept,
-              enabled = arm64Ok,
+              enabled = architectureOk,
               modifier = Modifier.fillMaxWidth(),
               text = stringResource(R.string.common_continue),
             )
@@ -272,7 +279,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
         ) {
           ModernSetupHeroCard(
             title = stringResource(R.string.setup_welcome_title),
-            body = stringResource(R.string.setup_welcome_body),
+            body = stringResource(welcomeBodyRes),
             accent = MaterialTheme.colorScheme.primary,
             pose = SetupMascotPose.WELCOME,
             compact = compact,
@@ -286,16 +293,16 @@ fun WelcomeScreen(onAccept: () -> Unit) {
           )
           ModernSetupInfoCard(
             title = stringResource(R.string.app_name),
-            body = stringResource(R.string.setup_features_body),
+            body = stringResource(featuresBodyRes),
             accent = MaterialTheme.colorScheme.primary,
           )
           ModernSetupInfoCard(
             title = stringResource(R.string.setup_notes_title),
-            body = stringResource(R.string.setup_notes_body),
+            body = stringResource(notesBodyRes),
             accent = MaterialTheme.colorScheme.secondary,
           )
 
-          if (!arm64Ok) {
+          if (!architectureOk) {
             InstallerNoticeCard(
               text = stringResource(
                 R.string.setup_arch_unsupported_fmt,
@@ -307,7 +314,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
 
           SetupPrimaryButton(
             onClick = onAccept,
-            enabled = arm64Ok,
+            enabled = architectureOk,
             modifier = Modifier.fillMaxWidth(),
             text = stringResource(R.string.common_continue),
           )
@@ -540,7 +547,8 @@ private fun ModernSetupHeroCard(
   val heroModifier = if (fillAvailableHeight) {
     modifier.fillMaxWidth().fillMaxHeight()
   } else {
-    modifier.fillMaxWidth().height(if (compact) 224.dp else 244.dp)
+    // Narrow screens wrap the copy more, so give the hero a little more vertical room.
+    modifier.fillMaxWidth().height(244.dp)
   }
   Surface(
     modifier = heroModifier,
@@ -550,7 +558,7 @@ private fun ModernSetupHeroCard(
     tonalElevation = 0.dp,
     shadowElevation = if (setupIsLightTheme()) 1.dp else 2.dp,
   ) {
-    Box(
+    BoxWithConstraints(
       modifier = Modifier
         .fillMaxSize()
         .background(
@@ -563,16 +571,17 @@ private fun ModernSetupHeroCard(
           ),
         ),
     ) {
+      val narrowHero = maxWidth < 480.dp
+      val textWidthFraction = when {
+        fillAvailableHeight -> 0.57f
+        narrowHero -> 0.62f
+        compact -> 0.61f
+        else -> 0.62f
+      }
       Column(
         modifier = Modifier
           .align(Alignment.CenterStart)
-          .fillMaxWidth(
-            when {
-              fillAvailableHeight -> 0.57f
-              compact -> 0.61f
-              else -> 0.62f
-            },
-          )
+          .fillMaxWidth(textWidthFraction)
           .padding(start = 18.dp, top = 18.dp, bottom = 18.dp, end = 8.dp),
         verticalArrangement = Arrangement.Center,
       ) {
@@ -615,8 +624,11 @@ private fun ModernSetupHeroCard(
         modifier = Modifier
           .align(Alignment.CenterEnd)
           .then(
-            if (fillAvailableHeight) Modifier.fillMaxWidth(0.47f)
-            else Modifier.width(if (compact) 146.dp else 180.dp),
+            when {
+              fillAvailableHeight -> Modifier.fillMaxWidth(0.47f)
+              narrowHero -> Modifier.fillMaxWidth(0.38f)
+              else -> Modifier.width(if (compact) 146.dp else 180.dp)
+            },
           )
           .fillMaxHeight(),
       )
@@ -813,6 +825,8 @@ fun InstallModuleScreen(
   onDismissZygiskInstallRecovery: () -> Unit,
   onDismissMetamoduleInstallBlocked: () -> Unit,
   onRetryInstallWithoutZygisk: () -> Unit,
+  onDownloadFullRootApk: () -> Unit,
+  onDismissOnlineModuleVersionMismatch: () -> Unit,
 ) {
   val arm64Ok = remember { isArm64OnlySupported() }
   val compact = rememberIsCompactWidth()
@@ -867,6 +881,27 @@ fun InstallModuleScreen(
       onConfirm = onManualConfirm,
       dismissButtonText = stringResource(R.string.common_cancel),
       onDismiss = onManualDismiss,
+    )
+  }
+
+  if (setup.showOnlineModuleVersionMismatchDialog) {
+    val downloadStatus = when {
+      setup.onlineModuleFullApkDownloading -> "\n\n" + stringResource(
+        R.string.prog_update_status_downloading_pct_fmt,
+        setup.onlineModuleFullApkDownloadPercent,
+      )
+      !setup.onlineModuleFullApkError.isNullOrBlank() -> "\n\n" + setup.onlineModuleFullApkError
+      else -> ""
+    }
+    SetupAlertDialog(
+      onDismissRequest = onDismissOnlineModuleVersionMismatch,
+      titleText = stringResource(R.string.setup_online_module_version_mismatch_title),
+      bodyText = setup.onlineModuleVersionMismatchText + downloadStatus,
+      confirmButtonText = stringResource(R.string.setup_online_module_download_full_apk),
+      onConfirm = onDownloadFullRootApk,
+      confirmEnabled = !setup.onlineModuleFullApkDownloading,
+      dismissButtonText = stringResource(R.string.common_cancel),
+      onDismiss = onDismissOnlineModuleVersionMismatch,
     )
   }
 
@@ -1484,7 +1519,8 @@ private fun InstallerHeroCard(
   val heroModifier = if (fillAvailableHeight) {
     modifier.fillMaxWidth().fillMaxHeight()
   } else {
-    modifier.fillMaxWidth().height(if (compact) 214.dp else 230.dp)
+    // Installation copy can contain version/update details and needs extra room on narrow screens.
+    modifier.fillMaxWidth().height(if (compact) 236.dp else 230.dp)
   }
 
   Surface(
@@ -1495,7 +1531,7 @@ private fun InstallerHeroCard(
     tonalElevation = 0.dp,
     shadowElevation = if (setupIsLightTheme()) 0.dp else 2.dp,
   ) {
-    Box(
+    BoxWithConstraints(
       modifier = Modifier
         .fillMaxSize()
         .background(
@@ -1508,16 +1544,17 @@ private fun InstallerHeroCard(
           ),
         ),
     ) {
+      val narrowHero = maxWidth < 460.dp
+      val textWidthFraction = when {
+        fillAvailableHeight -> 0.57f
+        narrowHero -> 0.62f
+        compact -> 0.60f
+        else -> 0.62f
+      }
       Column(
         modifier = Modifier
           .align(Alignment.CenterStart)
-          .fillMaxWidth(
-            when {
-              fillAvailableHeight -> 0.57f
-              compact -> 0.60f
-              else -> 0.62f
-            },
-          )
+          .fillMaxWidth(textWidthFraction)
           .padding(start = 18.dp, top = 18.dp, bottom = 18.dp, end = 8.dp),
         verticalArrangement = Arrangement.Center,
       ) {
@@ -1580,8 +1617,11 @@ private fun InstallerHeroCard(
         modifier = Modifier
           .align(Alignment.CenterEnd)
           .then(
-            if (fillAvailableHeight) Modifier.fillMaxWidth(0.47f)
-            else Modifier.width(if (compact) 142.dp else 174.dp),
+            when {
+              fillAvailableHeight -> Modifier.fillMaxWidth(0.47f)
+              narrowHero -> Modifier.fillMaxWidth(0.38f)
+              else -> Modifier.width(if (compact) 142.dp else 174.dp)
+            },
           )
           .fillMaxHeight(),
       )
@@ -2497,4 +2537,3 @@ private fun InstallConflictCard(
     }
   }
 }
-

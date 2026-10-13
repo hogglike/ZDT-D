@@ -103,6 +103,7 @@ pub fn run(_cfg: &Config) -> Result<()> {
         stop_in_progress: false,
         start: start.clone(),
     }));
+    crate::programs::connection_modes::start_worker(state.clone());
     api_status::write_off();
     energy_saver::unfreeze_all_best_effort();
 

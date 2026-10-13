@@ -1,0 +1,55 @@
+{
+  "log": {
+    "level": "warn"
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "server": "1.1.1.1",
+        "tag": "bootstrap"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "mode-tproxy",
+      "listen": "127.0.0.1",
+      "listen_port": 19972
+    },
+    {
+      "type": "mixed",
+      "tag": "mode-test",
+      "listen": "127.0.0.1",
+      "listen_port": 19974
+    }
+  ],
+  "outbounds": [],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": {
+      "server": "bootstrap",
+      "strategy": "ipv4_only"
+    },
+    "rules": [
+      {
+        "inbound": [
+          "mode-test"
+        ],
+        "action": "route",
+        "outbound": "TEST"
+      }
+    ],
+    "final": "MODE"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:19973",
+      "secret": ""
+    }
+  },
+  "certificate": {
+    "store": "mozilla"
+  }
+}

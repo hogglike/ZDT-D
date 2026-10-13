@@ -5,6 +5,8 @@ pub mod nfqws2;
 pub mod byedpi;
 pub mod dpitunnel;
 pub mod dnscrypt;
+pub mod dnsprofiles;
+mod dns_port_redirect;
 pub mod operaproxy;
 pub mod singbox;
 pub mod hysteria2;
@@ -22,3 +24,7 @@ pub mod mihomo;
 pub mod mihomo_subscription;
 pub mod mieru;
 pub mod tgwsproxy;
+
+pub mod connection_modes;
+pub mod mode_bootstrap;
+pub(crate) mod mode_policy;

@@ -5613,6 +5613,69 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        // Per-app DNS profiles. Saving is side-effect free; runtime applies on next ZDT-D restart.
+        ("GET", ["api", "programs", "dnsprofiles", "config"]) => {
+            let res = crate::programs::dnsprofiles::load(Path::new(crate::programs::dnsprofiles::CONFIG_PATH));
+            match res {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data})),
+                Err(e) => write_err(stream, e),
+            }
+        }
+        ("PUT", ["api", "programs", "dnsprofiles", "config"]) => {
+            let res = (|| -> Result<crate::programs::dnsprofiles::ProfileDocument> {
+                use crate::programs::dnsprofiles as dns;
+                if body.len() > dns::MAX_BYTES { anyhow::bail!("dns_profile_store_too_large"); }
+                let document: dns::ProfileDocument = serde_json::from_slice(body)?;
+                dns::validate(&document)?;
+                let uids = crate::android::pkg_uid::resolve_uid_map(
+                    crate::android::pkg_uid::Mode::Default, &dns::packages(&document))?;
+                dns::validate_uids(&document, &uids)?;
+                dns::save(Path::new(dns::CONFIG_PATH), document)
+            })();
+            match res {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data, "runtime_available": true, "restart_required": true})),
+                Err(e) => write_err(stream, e),
+            }
+        }
+        ("POST", ["api", "programs", "dnsprofiles", "validate"]) => {
+            let res = (|| -> Result<serde_json::Value> {
+                use crate::programs::dnsprofiles as dns;
+                if body.len() > dns::MAX_BYTES { anyhow::bail!("dns_profile_store_too_large"); }
+                let document: dns::ProfileDocument = serde_json::from_slice(body)?;
+                dns::validate(&document)?;
+                let uids = crate::android::pkg_uid::resolve_uid_map(
+                    crate::android::pkg_uid::Mode::Default, &dns::packages(&document))?;
+                dns::validate_uids(&document, &uids)?;
+                let preview = dns::preview(&document)?;
+                Ok(json!({
+                    "uid_by_package": uids,
+                    "status": "runtime_ready_after_restart",
+                    "runtime": preview
+                }))
+            })();
+            // A validation failure is a normal result that the UI must display,
+            // not an empty success or a detail visible only in daemon logs.
+            match res {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "valid": true, "data": data})),
+                Err(e) => write_json(stream, 200, json!({"ok": true, "valid": false, "error": format!("{e:#}")})),
+            }
+        }
+
+
+        ("GET", ["api", "programs", "dnsprofiles", "status"]) => {
+            write_json(
+                stream,
+                200,
+                json!({"ok": true, "data": crate::programs::dnsprofiles::runtime_status()}),
+            )
+        }
+        ("POST", ["api", "programs", "dnsprofiles", "diagnose"]) => {
+            match crate::programs::dnsprofiles::runtime_diagnostics() {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data})),
+                Err(e) => write_err(stream, e),
+            }
+        }
+
         // --- dnscrypt enabled/config
         ("GET", ["api", "programs", "dnscrypt", "enabled"]) => {
             let p = active_json_path("dnscrypt");
@@ -6396,6 +6459,51 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        ("POST", ["api", "programs", "operaproxy", "validate"]) => {
+            let res=(||->Result<()> {
+                let v:serde_json::Value=serde_json::from_slice(body)?;
+                let content=v.get("content").and_then(|v|v.as_str()).unwrap_or("");
+                match v.get("kind").and_then(|v|v.as_str()).unwrap_or("") {
+                    "byedpi"=>crate::programs::operaproxy::validate_byedpi_args(content),
+                    "sni"=>crate::programs::operaproxy::validate_sni_content(content),
+                    "args"=>crate::programs::operaproxy::validate_opera_args(&serde_json::from_str(content)?),
+                    _=>anyhow::bail!("Неизвестный тип проверки"),
+                }
+            })();
+            match res { Ok(_)=>write_json(stream,200,json!({"ok":true,"data":{"valid":true}})),
+                Err(e)=>write_json(stream,200,json!({"ok":true,"data":{"valid":false,"message":e.to_string()}})), }
+        }
+        ("GET", ["api", "programs", "operaproxy", "diagnostics"]) => {
+            write_json(stream, 200, json!({"ok":true,"data":crate::programs::operaproxy::diagnostic_status()}))
+        }
+        ("POST", ["api", "programs", "operaproxy", "diagnostics"]) => {
+            match crate::programs::operaproxy::start_diagnostics() {
+                Ok(_) => write_ok(stream), Err(e) => write_err(stream,e),
+            }
+        }
+        ("GET", ["api", "programs", "operaproxy", "upstreams"]) => {
+            let root = program_root("operaproxy");
+            let mut statuses = Vec::new();
+            if let Ok(raw) = fs::read_to_string(root.join("config/sni.json")) {
+                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) {
+                    for (index, entry) in entries.iter().enumerate() {
+                        if entry.get("proxy_mode").and_then(|v| v.as_str()) != Some("auto") { continue; }
+                        let path = root.join(format!("log/zdt_upstream_state_{}.json", index));
+                        let mut status = fs::read_to_string(&path).ok()
+                            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                            .unwrap_or_else(|| json!({"state":"waiting"}));
+                        let pid = status.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
+                        if pid <= 0 || pid > i32::MAX as i64 || unsafe { libc::kill(pid as i32, 0) } != 0 {
+                            status["state"] = json!("stopped");
+                        }
+                        status["sni"] = entry.get("sni").cloned().unwrap_or_else(|| json!(""));
+                        statuses.push(status);
+                    }
+                }
+            }
+            write_json(stream, 200, json!({"ok":true,"statuses":statuses}))
+        }
+
         // --- operaproxy sni.json
         ("GET", ["api", "programs", "operaproxy", "sni"]) => {
             let p = program_root("operaproxy").join("config/sni.json");
@@ -6409,6 +6517,7 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             let res = (|| -> Result<()> {
                 let req: ContentReq = serde_json::from_slice(body)
                     .map_err(|e| anyhow::anyhow!("bad JSON body: {e}"))?;
+                crate::programs::operaproxy::validate_sni_content(&req.content)?;
                 let p = program_root("operaproxy").join("config/sni.json");
                 write_text_atomic(&p, &req.content)?;
                 Ok(())
@@ -6480,6 +6589,7 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             let res = (|| -> Result<()> {
                 let req: ContentReq = serde_json::from_slice(body)
                     .map_err(|e| anyhow::anyhow!("bad JSON body: {e}"))?;
+                crate::programs::operaproxy::validate_byedpi_args(&req.content)?;
                 let p = program_root("operaproxy").join("byedpi/config/start.txt");
                 write_text_atomic(&p, &req.content)?;
                 Ok(())
@@ -6501,6 +6611,7 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             let res = (|| -> Result<()> {
                 let req: ContentReq = serde_json::from_slice(body)
                     .map_err(|e| anyhow::anyhow!("bad JSON body: {e}"))?;
+                crate::programs::operaproxy::validate_byedpi_args(&req.content)?;
                 let p = program_root("operaproxy").join("byedpi/config/restart.txt");
                 write_text_atomic(&p, &req.content)?;
                 Ok(())
@@ -7078,6 +7189,44 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
     if !is_authorized(&headers, &token) {
         // Hide API from unauthenticated clients: empty 404.
         return write_empty_404(stream);
+    }
+
+    if path.starts_with("/api/connection-modes") {
+        let result = (|| -> Result<serde_json::Value> {
+            use crate::programs::connection_modes as modes;
+            match (method.as_str(), path.as_str()) {
+                ("GET", "/api/connection-modes") => modes::snapshot(),
+                ("GET", "/api/connection-modes/status") => Ok(json!({"ok":true,"status":modes::status()})),
+                ("GET", "/api/connection-modes/diagnostics") => modes::diagnostics(),
+                ("POST", "/api/connection-modes/refresh-servers") => {
+                    if !services_running || start_in_progress || stop_in_progress {anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска");}
+                    modes::request_maintenance(true)?;
+                    Ok(json!({"ok":true}))
+                },
+                ("POST", "/api/connection-modes/select-server") => {
+                    let input:serde_json::Value=serde_json::from_slice(&body)?;
+                    modes::choose_server(input["mode"].as_str().unwrap_or(""),input["key"].as_str().unwrap_or(""))?;
+                    Ok(json!({"ok":true}))
+                },
+                ("PUT", "/api/connection-modes") => {
+                    let config: modes::Config = serde_json::from_slice(&body)?;
+                    Ok(json!({"ok":true,"config":modes::save(config)?}))
+                },
+                ("POST", "/api/connection-modes/activate") | ("POST", "/api/connection-modes/ping") => {
+                    let input: serde_json::Value=serde_json::from_slice(&body)?;
+                    let mode=input["mode"].as_str().unwrap_or("");
+                    let ping=path.ends_with("/ping");
+                    if !ping && mode.is_empty() { modes::stop_for_service(); }
+                    else {
+                        if !services_running || start_in_progress || stop_in_progress { anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска"); }
+                        modes::request(mode,ping)?;
+                    }
+                    Ok(json!({"ok":true}))
+                },
+                _ => anyhow::bail!("Unknown connection mode API route"),
+            }
+        })();
+        return match result { Ok(v)=>write_json(stream,200,v),Err(e)=>write_err(stream,e) };
     }
 
     // Global subscription library API. Keep this dispatch before `/api/programs/*`:

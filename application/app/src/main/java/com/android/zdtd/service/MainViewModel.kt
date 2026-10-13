@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.BatteryManager
 import android.util.Base64
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
@@ -56,13 +57,16 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.RandomAccessFile
 import java.util.zip.GZIPInputStream
+import java.util.zip.ZipFile
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.Properties
 import java.net.URLEncoder
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.io.IOException
 import java.security.MessageDigest
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.max
@@ -77,6 +81,14 @@ private const val LSPOSED_HIDE_PREF_ENABLED = "enabled"
 private const val LSPOSED_HIDE_PREF_PACKAGES = "packages"
 private const val LSPOSED_HIDE_PREF_UIDS = "uids"
 private const val LSPOSED_HIDE_PREF_UPDATED_AT = "updated_at"
+private const val APP_DISTRIBUTION_META_DATA = "com.android.zdtd.service.DISTRIBUTION"
+private const val ONLINE_MODULE_VERSION_MISMATCH_MARKER = "ZDTD_ONLINE_MODULE_VERSION_MISMATCH"
+private const val ONLINE_MODULE_DOWNLOAD_FAILED_MARKER = "ZDTD_ONLINE_MODULE_DOWNLOAD_FAILED"
+private const val ONLINE_MODULE_URL = "https://github.com/GAME-OVER-op/ZDT-D/releases/download/Technical_Assets/zdt_module.zip"
+private const val FULL_ROOT_APK_ASSET_NAME = "app-release.apk"
+private const val SERVICE_FULL_ROOT_APK_ASSET_NAME = "ZDT-D-service-build.apk"
+private const val MAX_FULL_ROOT_APK_BYTES = 1024L * 1024L * 1024L
+private const val MAX_ONLINE_MODULE_BYTES = 1024L * 1024L * 1024L
 
 enum class RootState {
   CHECKING,
@@ -113,6 +125,11 @@ data class SetupUiState(
   val manualZipPath: String = "",
   val showManualDialog: Boolean = false,
   val manualDialogText: String = "",
+  val showOnlineModuleVersionMismatchDialog: Boolean = false,
+  val onlineModuleVersionMismatchText: String = "",
+  val onlineModuleFullApkDownloading: Boolean = false,
+  val onlineModuleFullApkDownloadPercent: Int = 0,
+  val onlineModuleFullApkError: String? = null,
 
   // Update / integrity prompts
   val showUpdatePrompt: Boolean = false,
@@ -212,14 +229,6 @@ data class UiState(
   val daemonLogDetailedTail: String = "",
   val tgWsProxy: TgWsProxyComponentState = TgWsProxyComponentState(),
 )
-
-private data class StartupTimingPlan(
-  val totalMs: Long,
-  val connectingEndMs: Long,
-  val completeMs: Long,
-) {
-  val loadingDurationMs: Long get() = (totalMs - completeMs - connectingEndMs).coerceAtLeast(0L)
-}
 
 private data class StatsDeviceCpuSnapshot(
   val totalTicks: Long,
@@ -474,7 +483,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
 
   private var appUpdateCheckedThisSession: Boolean = false
   private var appUpdateDownloadJob: Job? = null
+  private var fullRootFallbackDownloadJob: Job? = null
+  private var pendingFullRootFallbackApkPath: String? = null
+  private var pendingOnlineModuleMismatch: ModuleBuildInfo? = null
   private var appReleaseBuildPollJob: Job? = null
+  private var lastReleaseBuildApiFallbackAtMs: Long = 0L
+  private var lastReleaseReadyApiCheckAtMs: Long = 0L
+  private var lastReleaseReadyRunId: Long? = null
 
   private var pendingEnableDaemonNotification: Boolean = false
 
@@ -493,10 +508,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
   private val proxyInfoApplyDelayMs: Long = 1_200L
   private var appVisible: Boolean = false
   private var startupCompleted: Boolean = false
-  private val startupMinVisibleMsRange: LongRange = 2_000L..4_500L
-  private val startupMinCompleteMs: Long = 900L
-  private val startupMinConnectingMsFloor: Long = 700L
-  private val startupMinLoadingMsFloor: Long = 400L
 
   private val statusFreshMs: Long = 1_800L
   private val programsFreshMs: Long = 1_200L
@@ -565,13 +576,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     }
   }
 
-  fun onAppStart(fromLauncher: Boolean) {
+  fun openRootSetup() {
+    startupJob?.cancel()
+    startupCompleted = false
+    _rootState.value = RootState.DENIED
+    _setup.update { state ->
+      state.copy(
+        step = SetupStep.ROOT,
+        installing = false,
+        installLog = "",
+        installProgressPercent = 0,
+        installProgressLabel = "",
+      )
+    }
+  }
+
+  fun onAppStart(fromLauncher: Boolean, forceRootSetup: Boolean = false) {
     if (didInit) return
     didInit = true
     startedFromLauncher = fromLauncher
 
     // Restore cached app-update banner state (persists across restarts).
     restoreCachedAppUpdateState()
+
+    if (forceRootSetup) {
+      openRootSetup()
+      return
+    }
 
     // If the user has already accepted the welcome screen (or completed setup earlier),
     // kick off a root check automatically on app start.
@@ -624,6 +655,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     val buildType: String?,
     val buildNumber: Long?,
   )
+
+  private class OnlineModuleVersionMismatchException(
+    val moduleBuild: ModuleBuildInfo,
+  ) : Exception(ONLINE_MODULE_VERSION_MISMATCH_MARKER)
 
   private fun parseModuleBuildInfo(modulePropText: String): ModuleBuildInfo = ModuleBuildInfo(
     versionName = parseVersion(modulePropText),
@@ -696,9 +731,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
   }
 
   private fun releaseApkUrl(tag: String): String {
-    // Asset name is stable by design.
-    return "https" + "://github.com/GAME-OVER-op/ZDT-D/releases/download/${tag}/app-release.apk"
+    return "https" + "://github.com/GAME-OVER-op/ZDT-D/releases/download/${tag}/${releaseApkAssetName()}"
   }
+
+  private fun releaseDistribution(): String {
+    val distribution = moduleDistributionSnapshot()
+    return when {
+      distribution.usesOnlineModule -> "online"
+      distribution.buildMode == "bundled" || distribution.manifestMode == "bundled" -> "bundled"
+      else -> error(
+        "App updates are unavailable for build=${distribution.buildMode} manifest=${distribution.manifestMode}",
+      )
+    }
+  }
+
+  private fun releaseApkAssetName(): String = when (releaseDistribution()) {
+    "online" -> "app-release-online.apk"
+    else -> "app-release.apk"
+  }
+
+  private fun isExpectedReleaseApkUrl(url: String): Boolean = runCatching {
+    val uri = Uri.parse(url)
+    uri.scheme.equals("https", ignoreCase = true) &&
+      uri.host.equals("github.com", ignoreCase = true) &&
+      uri.lastPathSegment == releaseApkAssetName()
+  }.getOrDefault(false)
 
   private suspend fun httpGetMaybeCached(
     url: String,
@@ -777,7 +834,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     val assets = js?.optJSONArray("assets") ?: return true
     for (i in 0 until assets.length()) {
       val asset = assets.optJSONObject(i) ?: continue
-      if (asset.optString("name") == "app-release.apk") return true
+      if (asset.optString("name") == releaseApkAssetName()) return true
     }
     return false
   }
@@ -822,13 +879,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     AppReleaseBuildStageUi("ready", R.string.app_update_stage_ready, AppReleaseStageStatus.WAITING),
   )
 
-  private suspend fun fetchModulePropCommitSha(): String? {
-    val body = httpGetText("https://api.github.com/repos/GAME-OVER-op/ZDT-D/commits?path=module.prop&sha=main&per_page=1") ?: return null
-    val arr = runCatching { JSONArray(body) }.getOrNull() ?: return null
-    return arr.optJSONObject(0)?.optString("sha")?.takeIf { it.isNotBlank() }
+  private data class PublishedBuildStatus(
+    val overall: String,
+    val headSha: String?,
+    val versionCode: Int?,
+    val updatedAtMs: Long?,
+    val ui: AppReleaseBuildUi,
+  )
+
+  private fun parsePublishedStageStatus(value: String?): AppReleaseStageStatus = when (value?.lowercase(Locale.ROOT)) {
+    "running" -> AppReleaseStageStatus.RUNNING
+    "done" -> AppReleaseStageStatus.DONE
+    "failed" -> AppReleaseStageStatus.FAILED
+    else -> AppReleaseStageStatus.WAITING
   }
 
-  private suspend fun fetchRelevantBuildRun(expectedSha: String?, publishedSha: String?): WorkflowRunInfo? {
+  private suspend fun fetchPublishedBuildStatus(expectedVersionCode: Int?): PublishedBuildStatus? {
+    val cacheBust = System.currentTimeMillis()
+    val url = "https://github.com/GAME-OVER-op/ZDT-D/releases/download/Technical_Assets/zdt-build-status.json?ts=$cacheBust"
+    val body = httpGetText(url) ?: return null
+    val js = runCatching { JSONObject(body) }.getOrNull() ?: return null
+    if (js.optInt("schema", 0) != 1 || js.optString("workflow") != "build.yml") return null
+
+    val versionCode = js.optInt("versionCode", 0).takeIf { it > 0 }
+    if (expectedVersionCode != null && versionCode != expectedVersionCode) return null
+
+    val stagesJson = js.optJSONObject("stages") ?: return null
+    val stages = listOf(
+      AppReleaseBuildStageUi("binaries", R.string.app_update_stage_binaries, parsePublishedStageStatus(stagesJson.optString("binaries"))),
+      AppReleaseBuildStageUi("archives", R.string.app_update_stage_archives, parsePublishedStageStatus(stagesJson.optString("archives"))),
+      AppReleaseBuildStageUi("apk", R.string.app_update_stage_apk, parsePublishedStageStatus(stagesJson.optString("apk"))),
+      AppReleaseBuildStageUi("release", R.string.app_update_stage_release, parsePublishedStageStatus(stagesJson.optString("release"))),
+      AppReleaseBuildStageUi("ready", R.string.app_update_stage_ready, parsePublishedStageStatus(stagesJson.optString("ready"))),
+    )
+    val overall = js.optString("status").lowercase(Locale.ROOT)
+    if (overall !in setOf("preparing", "ready", "failed")) return null
+    val failed = overall == "failed" || stages.any { it.status == AppReleaseStageStatus.FAILED }
+    val runId = js.optLong("runId", 0L).takeIf { it > 0L }
+    val runUrl = js.optString("runUrl").takeIf { it.isNotBlank() }
+
+    return PublishedBuildStatus(
+      overall = overall,
+      headSha = js.optString("headSha").takeIf { it.isNotBlank() },
+      versionCode = versionCode,
+      updatedAtMs = js.optString("updatedAt").takeIf { it.isNotBlank() }?.let { raw ->
+        runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+      },
+      ui = AppReleaseBuildUi(
+        // "ready" in the workflow asset is only a signal to re-check stable release metadata.
+        // The update button is enabled only after the APK asset itself is confirmed.
+        status = if (failed) AppReleaseBuildStatus.FAILED else AppReleaseBuildStatus.PREPARING,
+        runId = runId,
+        runUrl = runUrl,
+        messageRes = if (failed) R.string.app_update_release_failed_body else R.string.app_update_release_preparing_body,
+        stages = stages,
+      ),
+    )
+  }
+
+  private suspend fun fetchRelevantBuildRun(publishedSha: String?): WorkflowRunInfo? {
     val body = httpGetText("https://api.github.com/repos/GAME-OVER-op/ZDT-D/actions/workflows/build.yml/runs?branch=main&per_page=10") ?: return null
     val arr = runCatching { JSONObject(body).optJSONArray("workflow_runs") }.getOrNull() ?: return null
     val runs = buildList {
@@ -843,13 +952,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
         ))
       }
     }.filter { it.id > 0L }
-    return runs.firstOrNull { expectedSha != null && it.headSha.equals(expectedSha, ignoreCase = true) }
-      ?: runs.firstOrNull { publishedSha == null || !it.headSha.equals(publishedSha, ignoreCase = true) }
+
+    // Prefer the newest active run on main. Release rebuilds often do not touch module.prop,
+    // so the live workflow must not be tied to the commit that last changed module.prop.
+    return runs.firstOrNull {
+      it.status in setOf("queued", "in_progress", "waiting", "requested", "pending") &&
+        (publishedSha == null || !it.headSha.equals(publishedSha, ignoreCase = true))
+    } ?: runs.firstOrNull { publishedSha == null || !it.headSha.equals(publishedSha, ignoreCase = true) }
       ?: runs.firstOrNull()
   }
 
   private suspend fun fetchWorkflowJobs(runId: Long): List<WorkflowJobInfo> {
-    val body = httpGetText("https" + "://api.github.com/repos/GAME-OVER-op/ZDT-D/actions/runs/${runId}/jobs?per_page=100") ?: return emptyList()
+    val body = httpGetText("https://api.github.com/repos/GAME-OVER-op/ZDT-D/actions/runs/${runId}/jobs?per_page=100") ?: return emptyList()
     val arr = runCatching { JSONObject(body).optJSONArray("jobs") }.getOrNull() ?: return emptyList()
     return buildList {
       for (i in 0 until arr.length()) {
@@ -875,14 +989,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     return AppReleaseStageStatus.WAITING
   }
 
-  private suspend fun fetchReleaseBuildUi(expectedSha: String?, publishedSha: String?): AppReleaseBuildUi {
-    val run = fetchRelevantBuildRun(expectedSha, publishedSha)
-      ?: return AppReleaseBuildUi(
-        status = AppReleaseBuildStatus.PREPARING,
-        messageRes = R.string.app_update_release_preparing_body,
-        stages = defaultReleaseBuildStages(AppReleaseStageStatus.RUNNING),
-      )
+  private suspend fun fetchReleaseBuildUi(publishedSha: String?): AppReleaseBuildUi? {
+    val run = fetchRelevantBuildRun(publishedSha) ?: return null
     val jobs = fetchWorkflowJobs(run.id)
+    // If the jobs endpoint is temporarily unavailable/rate-limited, preserve the last UI state.
+    if (jobs.isEmpty() && run.status != "queued") return null
 
     fun named(predicate: (String) -> Boolean): List<WorkflowJobInfo> = jobs.filter { predicate(it.name.lowercase(Locale.ROOT)) }
 
@@ -900,12 +1011,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     val apk = named { it.contains("build apk") }
     val release = named { it.contains("publish service") }
 
-    fun stageStatus(jobsForStage: List<WorkflowJobInfo>): AppReleaseStageStatus = stageStatusForJobs(jobsForStage)
-
-    var binariesStatus = stageStatus(binaries)
-    var archivesStatus = stageStatus(archives)
-    var apkStatus = stageStatus(apk)
-    var releaseStatus = stageStatus(release)
+    var binariesStatus = stageStatusForJobs(binaries)
+    var archivesStatus = stageStatusForJobs(archives)
+    var apkStatus = stageStatusForJobs(apk)
+    var releaseStatus = stageStatusForJobs(release)
     val readyStatus = AppReleaseStageStatus.WAITING
 
     fun promotePreviousStages() {
@@ -923,9 +1032,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
       }
     }
 
-    if (run.status == "queued" && binariesStatus == AppReleaseStageStatus.WAITING) {
-      binariesStatus = AppReleaseStageStatus.RUNNING
-    }
+    if (run.status == "queued" && binariesStatus == AppReleaseStageStatus.WAITING) binariesStatus = AppReleaseStageStatus.RUNNING
     promotePreviousStages()
     if (run.status in setOf("queued", "in_progress") &&
       listOf(binariesStatus, archivesStatus, apkStatus, releaseStatus).none { it == AppReleaseStageStatus.RUNNING || it == AppReleaseStageStatus.FAILED }
@@ -971,12 +1078,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     )
   }
 
+  private suspend fun refreshReleaseBuildStatus() {
+    val current = _appUpdate.value
+    val published = fetchPublishedBuildStatus(current.remoteVersionCode)
+    val now = System.currentTimeMillis()
+
+    if (published != null) {
+      _appUpdate.update { state ->
+        if (!state.bannerVisible || state.downloadUrl != null) state else state.copy(releaseBuild = published.ui)
+      }
+
+      if (published.overall == "ready") {
+        val shouldConfirmRelease = lastReleaseReadyRunId != published.ui.runId ||
+          now - lastReleaseReadyApiCheckAtMs >= 90_000L
+        if (shouldConfirmRelease) {
+          lastReleaseReadyRunId = published.ui.runId
+          lastReleaseReadyApiCheckAtMs = now
+          checkAppUpdateInternal(force = true, silent = true)
+        }
+      }
+
+      val ageMs = published.updatedAtMs?.let { now - it }
+      if (ageMs == null || ageMs in 0..180_000L) return
+      // A milestone can legitimately take several minutes. Once the published document
+      // becomes stale, use REST only as a slow fallback so a missed status upload cannot
+      // leave the UI stuck forever.
+    }
+
+    // REST is only a fallback. Unauthenticated GitHub REST requests have a low per-IP
+    // quota, so never poll workflow runs/jobs every few seconds.
+    if (now - lastReleaseBuildApiFallbackAtMs < 90_000L) return
+    lastReleaseBuildApiFallbackAtMs = now
+    val fallback = fetchReleaseBuildUi(publishedSha = null) ?: return
+    _appUpdate.update { state ->
+      if (!state.bannerVisible || state.downloadUrl != null) state else state.copy(releaseBuild = fallback)
+    }
+  }
+
   private fun startReleaseBuildPolling() {
     appReleaseBuildPollJob?.cancel()
     appReleaseBuildPollJob = viewModelScope.launch(Dispatchers.IO + ceh) {
       while (isActive && _appUpdate.value.bannerVisible && _appUpdate.value.releaseBuild.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED)) {
-        delay(15_000L)
-        checkAppUpdateInternal(force = true, silent = true)
+        delay(20_000L)
+        refreshReleaseBuildStatus()
       }
     }
   }
@@ -1148,8 +1292,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app), ZdtdActions {
     root.setCachedAppUpdateFoundTs(now)
 
     if (!releaseReady) {
-      val expectedSha = fetchModulePropCommitSha()
-      val buildUi = fetchReleaseBuildUi(expectedSha = expectedSha, publishedSha = releaseMeta?.commit)
+      val publishedStatus = fetchPublishedBuildStatus(rc)
+      val buildUi = publishedStatus?.ui
+        ?: fetchReleaseBuildUi(publishedSha = releaseMeta?.commit)
+        ?: _appUpdate.value.releaseBuild.takeIf { it.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED) }
+        ?: AppReleaseBuildUi(
+          status = AppReleaseBuildStatus.PREPARING,
+          messageRes = R.string.app_update_release_preparing_body,
+          stages = defaultReleaseBuildStages(AppReleaseStageStatus.RUNNING),
+        )
       root.setCachedAppUpdateDownloadUrl(null)
       _appUpdate.update { it.copy(
         enabled = root.isAppUpdateCheckEnabled(),
@@ -1219,7 +1370,19 @@ private fun restoreCachedAppUpdateState() {
   val remoteVer = root.getCachedAppUpdateRemoteVersion()
   val tag = root.getCachedAppUpdateReleaseTag()
   val htmlUrl = root.getCachedAppUpdateReleaseHtmlUrl()
-  val downloadUrl = root.getCachedAppUpdateDownloadUrl()
+  val cachedDownloadUrl = root.getCachedAppUpdateDownloadUrl()
+  // Full-root and online builds share the same package/preferences. Rebuild a
+  // persisted URL from the release tag so installing one flavor over the other
+  // can never reuse the previous flavor's APK URL.
+  val downloadUrl = when {
+    cachedDownloadUrl.isNullOrBlank() -> null
+    !tag.isNullOrBlank() -> releaseApkUrl(tag)
+    isExpectedReleaseApkUrl(cachedDownloadUrl) -> cachedDownloadUrl
+    else -> null
+  }
+  if (downloadUrl != cachedDownloadUrl) {
+    root.setCachedAppUpdateDownloadUrl(downloadUrl)
+  }
   val urgent = root.getCachedAppUpdateUrgent()
 
   // Local comparison is based on bundled module.prop in the APK.
@@ -1279,14 +1442,39 @@ private fun restoreCachedAppUpdateState() {
 fun onAppResumed() {
   // Re-sync banner state first so cached preparing states immediately enter live polling.
   restoreCachedAppUpdateState()
-  // Re-check in background on resume if cooldown is over, or force when a release build is visible.
-  maybeCheckAppUpdate(force = _appUpdate.value.bannerVisible && _appUpdate.value.releaseBuild.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED))
+  val liveBuildVisible = _appUpdate.value.bannerVisible &&
+    _appUpdate.value.releaseBuild.status in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED)
+  if (liveBuildVisible) {
+    // Refresh the workflow-published HTTPS status immediately without spending REST API quota.
+    launchIO { refreshReleaseBuildStatus() }
+  } else {
+    maybeCheckAppUpdate(force = false)
+  }
+}
+
+fun onApkInstallerReturned(filePath: String?) {
+  if (filePath.isNullOrBlank()) return
+  AppStorageMaintenance.deleteCacheArtifact(ctx, filePath)
+  if (_appUpdate.value.downloadedPath == filePath) {
+    _appUpdate.update {
+      it.copy(
+        downloadedPath = null,
+        needsUnknownSourcesPermission = false,
+        downloading = false,
+        downloadPercent = 0,
+        downloadSpeedBytesPerSec = 0,
+      )
+    }
+  }
+  if (pendingFullRootFallbackApkPath == filePath) {
+    pendingFullRootFallbackApkPath = null
+  }
 }
 
 private fun clearDownloadedUpdateApk() {
     val p = _appUpdate.value.downloadedPath
     if (!p.isNullOrBlank()) {
-      runCatching { File(p).delete() }
+      AppStorageMaintenance.deleteCacheArtifact(ctx, p)
     }
     _appUpdate.update { it.copy(downloadedPath = null, needsUnknownSourcesPermission = false) }
   }
@@ -1324,6 +1512,9 @@ private fun clearDownloadedUpdateApk() {
   }
 
   private suspend fun downloadLatestApk(url: String): String? {
+    check(isExpectedReleaseApkUrl(url)) {
+      "Unexpected update APK URL for ${releaseDistribution()} distribution"
+    }
     val dest = File(ctx.cacheDir, "zdt_app_update.apk")
     runCatching { dest.delete() }
 
@@ -1373,7 +1564,24 @@ private fun clearDownloadedUpdateApk() {
         }
       }
     }
+    validateDownloadedAppUpdateApk(dest)
     return dest.absolutePath
+  }
+
+  @Suppress("DEPRECATION")
+  private fun validateDownloadedAppUpdateApk(apk: File) {
+    check(apk.isFile && apk.length() > 0L) { "Downloaded update APK is empty" }
+    val info = ctx.packageManager.getPackageArchiveInfo(
+      apk.absolutePath,
+      PackageManager.GET_META_DATA,
+    ) ?: error("Unable to inspect downloaded update APK")
+    check(info.packageName == BuildConfig.APPLICATION_ID) { "Update APK package mismatch" }
+    val distribution = info.applicationInfo?.metaData
+      ?.getString(APP_DISTRIBUTION_META_DATA)
+      .orEmpty()
+    check(distribution == releaseDistribution()) {
+      "Update APK distribution mismatch: expected=${releaseDistribution()} actual=$distribution"
+    }
   }
 
   private suspend fun readBootIdRoot(): String {
@@ -1723,33 +1931,7 @@ private fun clearDownloadedUpdateApk() {
     }
   }
 
-  private suspend fun waitForStartupElapsed(startedAt: Long, minElapsedMs: Long) {
-    val remaining = minElapsedMs - (System.currentTimeMillis() - startedAt)
-    if (remaining > 0L) delay(remaining)
-  }
-
-  private fun createStartupTimingPlan(): StartupTimingPlan {
-    val totalMs = Random.nextLong(startupMinVisibleMsRange.first, startupMinVisibleMsRange.last + 1L)
-    val remainingBeforeComplete = (totalMs - startupMinCompleteMs).coerceAtLeast(
-      startupMinConnectingMsFloor + startupMinLoadingMsFloor
-    )
-    val maxConnecting = minOf(
-      3_200L,
-      (remainingBeforeComplete - startupMinLoadingMsFloor).coerceAtLeast(startupMinConnectingMsFloor)
-    )
-    val connectingEndMs = if (maxConnecting <= startupMinConnectingMsFloor) {
-      startupMinConnectingMsFloor
-    } else {
-      Random.nextLong(startupMinConnectingMsFloor, maxConnecting + 1L)
-    }
-    return StartupTimingPlan(
-      totalMs = totalMs,
-      connectingEndMs = connectingEndMs,
-      completeMs = startupMinCompleteMs,
-    )
-  }
-
-  private fun beginStartupHandshake(plan: StartupTimingPlan) {
+  private fun beginStartupHandshake() {
     _uiState.update { st ->
       st.copy(
         startup = StartupUiState(
@@ -1758,9 +1940,9 @@ private fun clearDownloadedUpdateApk() {
           errorText = "",
           moduleFound = false,
           moduleStructureOk = true,
-          connectingDurationMs = plan.connectingEndMs.toInt(),
-          loadingDurationMs = plan.loadingDurationMs.toInt(),
-          completeDurationMs = plan.completeMs.toInt(),
+          connectingDurationMs = 700,
+          loadingDurationMs = 100,
+          completeDurationMs = 0,
         )
       )
     }
@@ -1771,11 +1953,7 @@ private fun clearDownloadedUpdateApk() {
     startupJob = null
     _uiState.update { st ->
       st.copy(
-        startup = st.startup.copy(
-          visible = true,
-          stage = StartupStage.COMPLETE,
-          errorText = "",
-        ),
+        startup = StartupUiState.hidden(),
         daemonUnavailableVisible = false,
       )
     }
@@ -1784,10 +1962,6 @@ private fun clearDownloadedUpdateApk() {
     startDaemonLogPolling()
     refreshPrograms()
     refreshDaemonSettings()
-    launchIO {
-      delay(startupMinCompleteMs)
-      _uiState.update { it.copy(startup = StartupUiState.hidden(), daemonUnavailableVisible = false) }
-    }
   }
 
 
@@ -1860,23 +2034,18 @@ private fun clearDownloadedUpdateApk() {
   startupJob = launchIO {
     startupCompleted = false
     val startupStartedAt = System.currentTimeMillis()
-    val timingPlan = createStartupTimingPlan()
-    val loadingStageStartAt = timingPlan.connectingEndMs + timingPlan.loadingDurationMs
-
-    beginStartupHandshake(timingPlan)
+    beginStartupHandshake()
     val deadline = startupStartedAt + 10_000L
     while (isActive && System.currentTimeMillis() < deadline) {
       try {
         val rep = api.getStatus()
         _uiState.update { it.copy(status = rep, daemonOnline = true, daemonUnavailableVisible = false) }
         root.setCachedServiceOn(ApiModels.isServiceOn(rep))
-        waitForStartupElapsed(startupStartedAt, timingPlan.connectingEndMs)
-        if (!isActive) return@launchIO
-        setStartupStage(StartupStage.LOADING_STATUS)
-        waitForStartupElapsed(startupStartedAt, loadingStageStartAt)
         if (!isActive) return@launchIO
         finishStartupHandshake()
         return@launchIO
+      } catch (e: CancellationException) {
+        throw e
       } catch (_: Throwable) {
       }
       delay(700)
@@ -2034,20 +2203,41 @@ private fun clearDownloadedUpdateApk() {
       val showZygiskWarning = installer == RootConfigManager.ModuleInstaller.KSU || installer == RootConfigManager.ModuleInstaller.APATCH
       val zygiskRequestedAtStart = readZygiskInstallMarker()
 
-      // If we can't detect an installer, ask the user and export the zip to /sdcard.
+      // The bundled build can export its embedded module when no root-manager installer is detected.
+      // The online build intentionally has no local module archive, so never offer a ZIP export there.
       if (installer == RootConfigManager.ModuleInstaller.UNKNOWN) {
-        _setup.update {
-          it.copy(
-            installing = false,
-            installerLabel = label,
-            showKsuApatchZygiskWarning = showZygiskWarning,
-            manualZipSaved = false,
-            manualZipPath = "",
-            showManualDialog = true,
-            oldVersionDetected = oldVer,
-            manualDialogText = str(R.string.mv_auto_015) +
-              str(R.string.mv_auto_016),
-          )
+        if (isOnlineModuleDistribution()) {
+          _setup.update {
+            it.copy(
+              installing = false,
+              installError = str(R.string.setup_online_module_installer_missing),
+              installOk = false,
+              installLog = moduleDistributionDiagnosticLine(),
+              installProgressPercent = 100,
+              installProgressLabel = str(R.string.setup_install_progress_failed),
+              installerLabel = label,
+              showKsuApatchZygiskWarning = showZygiskWarning,
+              manualZipSaved = false,
+              manualZipPath = "",
+              showManualDialog = false,
+              manualDialogText = "",
+              oldVersionDetected = oldVer,
+            )
+          }
+        } else {
+          _setup.update {
+            it.copy(
+              installing = false,
+              installerLabel = label,
+              showKsuApatchZygiskWarning = showZygiskWarning,
+              manualZipSaved = false,
+              manualZipPath = "",
+              showManualDialog = true,
+              oldVersionDetected = oldVer,
+              manualDialogText = str(R.string.mv_auto_015) +
+                str(R.string.mv_auto_016),
+            )
+          }
         }
         return@launchIO
       }
@@ -2077,7 +2267,14 @@ private fun clearDownloadedUpdateApk() {
         else -> RootConfigManager.PendingModuleAction.INSTALL
       }
 
-      updateInstallProgress(18, str(R.string.setup_install_progress_copying))
+      updateInstallProgress(
+        18,
+        if (isOnlineModuleDistribution()) {
+          str(R.string.prog_update_status_downloading_pct_fmt, 0)
+        } else {
+          str(R.string.setup_install_progress_copying)
+        },
+      )
 
       val (ok, out) = when (installer) {
         RootConfigManager.ModuleInstaller.MAGISK -> installViaMagisk()
@@ -2087,6 +2284,7 @@ private fun clearDownloadedUpdateApk() {
       }
 
       if (ok) {
+        cleanupTemporaryModuleArtifacts()
         // Mark setup as completed so we don't show the installer again after reboot.
         root.setSetupDone(true)
         rememberPendingModuleAction(pendingAction)
@@ -2101,8 +2299,12 @@ private fun clearDownloadedUpdateApk() {
           )
         }
       } else {
+        cleanupTemporaryModuleArtifacts()
+        if (showOnlineModuleVersionMismatch(out)) return@launchIO
+        if (showOnlineModuleDownloadFailure(out)) return@launchIO
         val metamoduleInstallBlocked = hasMetamoduleInstallBlockedMarker(out)
         val zygiskInstallError = !metamoduleInstallBlocked && zygiskRequestedAtStart && hasZygiskInstallErrorMarker(out)
+        val manualExportAllowed = !isOnlineModuleDistribution() && !metamoduleInstallBlocked && !zygiskInstallError
         _setup.update {
           it.copy(
             installing = false,
@@ -2110,14 +2312,16 @@ private fun clearDownloadedUpdateApk() {
             installLog = out,
             installProgressPercent = 100,
             installProgressLabel = str(R.string.setup_install_progress_failed),
-            showManualDialog = !metamoduleInstallBlocked && !zygiskInstallError,
+            showManualDialog = manualExportAllowed,
             showZygiskInstallRecoveryDialog = zygiskInstallError,
             showMetamoduleInstallBlockedDialog = metamoduleInstallBlocked,
             manualZipSaved = false,
             manualZipPath = "",
-            manualDialogText = if (metamoduleInstallBlocked || zygiskInstallError) "" else str(R.string.mv_auto_018) +
-              str(R.string.mv_auto_019) +
-              str(R.string.mv_auto_020),
+            manualDialogText = if (manualExportAllowed) {
+              str(R.string.mv_auto_018) + str(R.string.mv_auto_019) + str(R.string.mv_auto_020)
+            } else {
+              ""
+            },
           )
         }
       }
@@ -2135,6 +2339,319 @@ private fun clearDownloadedUpdateApk() {
   override fun dismissMetamoduleInstallBlockedDialog() {
     _setup.update { it.copy(showMetamoduleInstallBlockedDialog = false) }
   }
+
+  private fun showOnlineModuleDownloadFailure(error: String): Boolean {
+    if (!error.startsWith(ONLINE_MODULE_DOWNLOAD_FAILED_MARKER)) return false
+    val technical = error.removePrefix(ONLINE_MODULE_DOWNLOAD_FAILED_MARKER).trimStart('\n', '\r', ' ', '\t')
+    _setup.update {
+      it.copy(
+        installing = false,
+        installError = str(R.string.setup_online_module_download_failed),
+        installLog = technical.ifBlank { moduleDistributionDiagnosticLine() },
+        installProgressPercent = 100,
+        installProgressLabel = str(R.string.setup_install_progress_failed),
+        showManualDialog = false,
+        manualDialogText = "",
+        showOnlineModuleVersionMismatchDialog = false,
+        onlineModuleVersionMismatchText = "",
+        manualZipSaved = false,
+        manualZipPath = "",
+      )
+    }
+    return true
+  }
+
+  private fun showOnlineModuleVersionMismatch(error: String): Boolean {
+    if (error.trim() != ONLINE_MODULE_VERSION_MISMATCH_MARKER) return false
+    val module = pendingOnlineModuleMismatch ?: return false
+    val moduleVersion = formatModuleBuildVersion(module)
+    val moduleVersionCode = module.versionCode?.toString() ?: "?"
+    val appBuild = readBundledModuleBuildInfo()
+    val appVersion = appBuild?.let(::formatModuleBuildVersion) ?: BuildConfig.VERSION_NAME
+    _setup.update {
+      it.copy(
+        installing = false,
+        installError = str(R.string.setup_online_module_version_mismatch_title),
+        installLog = "",
+        installProgressPercent = 100,
+        installProgressLabel = str(R.string.setup_install_progress_failed),
+        showManualDialog = false,
+        showOnlineModuleVersionMismatchDialog = true,
+        onlineModuleVersionMismatchText = str(
+          R.string.setup_online_module_version_mismatch_body,
+          moduleVersion,
+          moduleVersionCode,
+          appVersion,
+          BuildConfig.VERSION_CODE,
+        ),
+        onlineModuleFullApkDownloading = false,
+        onlineModuleFullApkDownloadPercent = 0,
+        onlineModuleFullApkError = null,
+      )
+    }
+    return true
+  }
+
+  private fun formatModuleBuildVersion(build: ModuleBuildInfo): String {
+    val version = build.versionName?.takeIf { it.isNotBlank() } ?: "?"
+    val buildNumber = build.buildNumber
+    return if (buildNumber != null) "$version #$buildNumber" else version
+  }
+
+  private fun moduleBuildsMatch(first: ModuleBuildInfo, second: ModuleBuildInfo): Boolean =
+    normalizeTagToVersion(first.versionName.orEmpty()) == normalizeTagToVersion(second.versionName.orEmpty()) &&
+      first.versionCode == second.versionCode &&
+      first.buildType?.lowercase(Locale.US) == second.buildType?.lowercase(Locale.US) &&
+      first.buildNumber == second.buildNumber
+
+  override fun dismissOnlineModuleVersionMismatchDialog() {
+    if (_setup.value.onlineModuleFullApkDownloading) return
+    pendingOnlineModuleMismatch = null
+    _setup.update {
+      it.copy(
+        showOnlineModuleVersionMismatchDialog = false,
+        onlineModuleVersionMismatchText = "",
+        onlineModuleFullApkError = null,
+      )
+    }
+  }
+
+  override fun downloadFullRootApkForMismatchedModule() {
+    if (!isOnlineModuleDistribution() || _setup.value.onlineModuleFullApkDownloading) return
+    val target = pendingOnlineModuleMismatch ?: return
+    val targetVersion = target.versionName?.trim().orEmpty()
+    if (targetVersion.isBlank() || target.versionCode == null || target.buildType.isNullOrBlank() || target.buildNumber == null) return
+
+    fullRootFallbackDownloadJob?.cancel()
+    fullRootFallbackDownloadJob = viewModelScope.launch(Dispatchers.IO + ceh) {
+      _setup.update {
+        it.copy(
+          onlineModuleFullApkDownloading = true,
+          onlineModuleFullApkDownloadPercent = 0,
+          onlineModuleFullApkError = null,
+        )
+      }
+      try {
+        val releaseAsset = findBundledRootApkForBuild(target)
+        val apk = downloadFullRootFallbackApk(releaseAsset.downloadUrl, releaseAsset.assetName)
+        validateFullRootFallbackApk(apk, target)
+        pendingFullRootFallbackApkPath = apk.absolutePath
+        _setup.update {
+          it.copy(
+            onlineModuleFullApkDownloading = false,
+            onlineModuleFullApkDownloadPercent = 100,
+            showOnlineModuleVersionMismatchDialog = false,
+            onlineModuleFullApkError = null,
+          )
+        }
+        if (canRequestPackageInstalls()) {
+          pendingFullRootFallbackApkPath = null
+          _appUpdateEvents.tryEmit(AppUpdateEvent.InstallApk(apk.absolutePath))
+        } else {
+          _appUpdateEvents.tryEmit(AppUpdateEvent.OpenUnknownSourcesSettings)
+        }
+      } catch (_: CancellationException) {
+        fullRootFallbackApkFile().delete()
+        _setup.update {
+          it.copy(
+            onlineModuleFullApkDownloading = false,
+            onlineModuleFullApkDownloadPercent = 0,
+          )
+        }
+      } catch (error: Throwable) {
+        pendingFullRootFallbackApkPath = null
+        fullRootFallbackApkFile().delete()
+        _setup.update {
+          it.copy(
+            onlineModuleFullApkDownloading = false,
+            onlineModuleFullApkDownloadPercent = 0,
+            onlineModuleFullApkError = str(
+              R.string.setup_online_full_apk_download_failed,
+              error.message ?: error.javaClass.simpleName,
+            ),
+          )
+        }
+      } finally {
+        fullRootFallbackDownloadJob = null
+      }
+    }
+  }
+
+  private data class FullRootReleaseAsset(
+    val assetName: String,
+    val downloadUrl: String,
+  )
+
+  private fun findBundledRootApkForBuild(target: ModuleBuildInfo): FullRootReleaseAsset {
+    val versionName = target.versionName?.trim().orEmpty()
+    val serviceBuild = target.buildType.equals("service", ignoreCase = true)
+    val expectedTag = if (serviceBuild) "service-build" else "V${normalizeTagToVersion(versionName)}"
+    val expectedAssetName = if (serviceBuild) SERVICE_FULL_ROOT_APK_ASSET_NAME else FULL_ROOT_APK_ASSET_NAME
+    val request = Request.Builder()
+      .url("https://api.github.com/repos/GAME-OVER-op/ZDT-D/releases?per_page=100")
+      .header("User-Agent", "ZDT-D-Android")
+      .header("Accept", "application/vnd.github+json")
+      .build()
+    githubHttp.newCall(request).execute().use { response ->
+      check(response.isSuccessful) { "GitHub releases HTTP ${response.code}" }
+      val releases = JSONArray(response.body.string())
+      for (releaseIndex in 0 until releases.length()) {
+        val release = releases.optJSONObject(releaseIndex) ?: continue
+        if (release.optBoolean("draft", false)) continue
+        if (!release.optString("tag_name").equals(expectedTag, ignoreCase = true)) continue
+        val assets = release.optJSONArray("assets") ?: continue
+        for (assetIndex in 0 until assets.length()) {
+          val asset = assets.optJSONObject(assetIndex) ?: continue
+          if (asset.optString("name") != expectedAssetName) continue
+          val url = asset.optString("browser_download_url").trim()
+          check(isExpectedBundledRootApkUrl(url, expectedAssetName)) { "Unexpected full root APK download URL" }
+          return FullRootReleaseAsset(expectedAssetName, url)
+        }
+      }
+      error("$expectedAssetName for build ${formatModuleBuildVersion(target)} was not found")
+    }
+  }
+
+  private fun isExpectedBundledRootApkUrl(url: String, assetName: String): Boolean = runCatching {
+    val uri = Uri.parse(url)
+    uri.scheme.equals("https", ignoreCase = true) &&
+      uri.host.equals("github.com", ignoreCase = true) &&
+      uri.path.orEmpty().startsWith("/GAME-OVER-op/ZDT-D/releases/download/") &&
+      uri.lastPathSegment == assetName
+  }.getOrDefault(false)
+
+  private suspend fun downloadFullRootFallbackApk(url: String, assetName: String): File {
+    check(isExpectedBundledRootApkUrl(url, assetName)) { "Unexpected full root APK download URL" }
+    val destination = fullRootFallbackApkFile().apply {
+      parentFile?.mkdirs()
+      delete()
+    }
+    val request = Request.Builder()
+      .url(url)
+      .header("User-Agent", "ZDT-D-Android")
+      .build()
+    githubHttp.newCall(request).execute().use { response ->
+      check(response.isSuccessful) { "Full root APK download HTTP ${response.code}" }
+      val body = response.body
+      val total = body.contentLength()
+      check(total != 0L && total <= MAX_FULL_ROOT_APK_BYTES) { "Invalid full root APK size: $total" }
+      body.byteStream().use { input ->
+        destination.outputStream().buffered().use { output ->
+          val buffer = ByteArray(64 * 1024)
+          var copied = 0L
+          while (true) {
+            currentCoroutineContext().ensureActive()
+            val read = input.read(buffer)
+            if (read < 0) break
+            output.write(buffer, 0, read)
+            copied += read
+            check(copied <= MAX_FULL_ROOT_APK_BYTES) { "Full root APK exceeds the size limit" }
+            val percent = if (total > 0L) {
+              ((copied * 100L) / total).toInt().coerceIn(0, 99)
+            } else {
+              0
+            }
+            _setup.update { it.copy(onlineModuleFullApkDownloadPercent = percent) }
+          }
+        }
+      }
+      check(destination.isFile && destination.length() > 0L) { "Downloaded full root APK is empty" }
+      if (total > 0L) check(destination.length() == total) { "Downloaded full root APK is incomplete" }
+    }
+    return destination
+  }
+
+  private fun validateFullRootFallbackApk(
+    apk: File,
+    expectedBuild: ModuleBuildInfo,
+  ) {
+    val expectedVersionName = expectedBuild.versionName.orEmpty()
+    val expectedVersionCode = expectedBuild.versionCode ?: error("Expected module versionCode is missing")
+    val packageManager = ctx.packageManager
+    val archive = packageManager.getPackageArchiveInfo(apk.absolutePath, apkPackageInfoFlags())
+      ?: error("Unable to inspect downloaded full root APK")
+    check(archive.packageName == BuildConfig.APPLICATION_ID) { "Full root APK package mismatch" }
+    check(archive.longVersionCodeCompat() == expectedVersionCode.toLong()) {
+      "Full root APK versionCode mismatch"
+    }
+    check(normalizeTagToVersion(archive.versionName.orEmpty()) == normalizeTagToVersion(expectedVersionName)) {
+      "Full root APK version name mismatch"
+    }
+    val distribution = archive.applicationInfo?.metaData
+      ?.getString(APP_DISTRIBUTION_META_DATA)
+      .orEmpty()
+    check(distribution == "bundled") { "Downloaded APK is not the bundled root distribution" }
+
+    val installed = packageManager.getPackageInfo(ctx.packageName, apkPackageInfoFlags())
+    val installedSigners = apkSignerDigests(installed).toSet()
+    val archiveSigners = apkSignerDigests(archive).toSet()
+    check(installedSigners.isNotEmpty() && archiveSigners.isNotEmpty()) {
+      "Unable to read APK signing certificate"
+    }
+    check(installedSigners.intersect(archiveSigners).isNotEmpty()) {
+      "Full root APK signature does not match ZDT-D"
+    }
+    val embeddedBuild = readModuleBuildInfoFromApk(apk)
+    check(moduleBuildsMatch(embeddedBuild, expectedBuild)) {
+      "Full root APK internal module build does not match ${formatModuleBuildVersion(expectedBuild)}"
+    }
+  }
+
+  private fun readModuleBuildInfoFromApk(apk: File): ModuleBuildInfo =
+    readModuleBuildInfoFromZip(apk, "assets/module.prop", "Full root APK")
+
+  private fun readModuleBuildInfoFromZip(
+    zipFile: File,
+    entryName: String,
+    sourceLabel: String,
+  ): ModuleBuildInfo = ZipFile(zipFile).use { zip ->
+    val entry = zip.getEntry(entryName)
+      ?: error("$sourceLabel has no $entryName")
+    check(!entry.isDirectory) { "$sourceLabel $entryName is a directory" }
+    check(entry.size in 1..(128L * 1024L)) { "$sourceLabel $entryName has an invalid size" }
+    val text = zip.getInputStream(entry).bufferedReader().use { it.readText() }
+    val build = parseModuleBuildInfo(text)
+    check(
+      !build.versionName.isNullOrBlank() &&
+        build.versionCode != null &&
+        !build.buildType.isNullOrBlank() &&
+        build.buildNumber != null
+    ) { "$sourceLabel $entryName is invalid" }
+    build
+  }
+
+  private fun apkPackageInfoFlags(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_META_DATA
+  } else {
+    @Suppress("DEPRECATION")
+    PackageManager.GET_SIGNATURES or PackageManager.GET_META_DATA
+  }
+
+  private fun apkSignerDigests(info: PackageInfo): List<String> {
+    val certificates = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      val signingInfo = info.signingInfo ?: return emptyList()
+      if (signingInfo.hasMultipleSigners()) signingInfo.apkContentsSigners.toList()
+      else signingInfo.signingCertificateHistory.toList()
+    } else {
+      @Suppress("DEPRECATION")
+      info.signatures?.toList().orEmpty()
+    }
+    return certificates.map { certificate ->
+      MessageDigest.getInstance("SHA-256")
+        .digest(certificate.toByteArray())
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+  }
+
+  private fun PackageInfo.longVersionCodeCompat(): Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    longVersionCode
+  } else {
+    @Suppress("DEPRECATION")
+    versionCode.toLong()
+  }
+
+  private fun fullRootFallbackApkFile(): File =
+    File(ctx.cacheDir, "online-module-full-fallback/$FULL_ROOT_APK_ASSET_NAME")
 
   override fun retryInstallWithoutZygisk() {
     if (_rootState.value != RootState.GRANTED || _setup.value.installing) return
@@ -2251,6 +2768,23 @@ private fun clearDownloadedUpdateApk() {
       log("ERR", "root required")
       return
     }
+    if (isOnlineModuleDistribution()) {
+      _setup.update {
+        it.copy(
+          installing = false,
+          installError = str(R.string.setup_online_module_installer_missing),
+          installOk = false,
+          installLog = moduleDistributionDiagnosticLine(),
+          installProgressPercent = 100,
+          installProgressLabel = str(R.string.setup_install_progress_failed),
+          showManualDialog = false,
+          manualDialogText = "",
+          manualZipSaved = false,
+          manualZipPath = "",
+        )
+      }
+      return
+    }
     if (_setup.value.installing) return
     launchIO {
       val oldVer = runCatching { root.hasOldModuleVersionWebroot() }.getOrDefault(false)
@@ -2285,6 +2819,7 @@ private fun clearDownloadedUpdateApk() {
           )
         }
       } else {
+        if (showOnlineModuleVersionMismatch(out)) return@launchIO
         _setup.update {
           it.copy(
             installing = false,
@@ -2932,9 +3467,11 @@ if (mf.isNotBlank()) {
         toast(str(R.string.mv_auto_051))
         return@launchIO
       }
+      AppStorageMaintenance.deleteBackupShareCopies(ctx)
       val outFile = File(ctx.cacheDir, "zdtb_share_${System.currentTimeMillis()}.zdtb")
       val r = root.execRootSh("cp -f ${shQuote(src)} ${shQuote(outFile.absolutePath)} 2>/dev/null || cat ${shQuote(src)} > ${shQuote(outFile.absolutePath)}; chmod 0644 ${shQuote(outFile.absolutePath)} 2>/dev/null || true")
       if (!r.isSuccess) {
+        runCatching { outFile.delete() }
         toast(str(R.string.mv_auto_052))
         return@launchIO
       }
@@ -3549,6 +4086,7 @@ if (mf.isNotBlank()) {
 
     val zipFile = File(ctx.cacheDir, "zapret_target.zip")
     val extracted = File(ctx.cacheDir, "zapret_nfqws_${System.currentTimeMillis()}")
+    AppStorageMaintenance.deleteCacheEntriesWithPrefix(ctx, "zapret_nfqws_")
     runCatching { zipFile.delete() }
     runCatching { extracted.delete() }
 
@@ -3560,6 +4098,8 @@ if (mf.isNotBlank()) {
     }
     if (!okDl) {
       _programUpdates.update { st -> st.copy(zapret = st.zapret.copy(updating = false, errorText = str(R.string.prog_update_error_download_failed), statusText = "")) }
+      runCatching { zipFile.delete() }
+      runCatching { extracted.delete() }
       return
     }
 
@@ -3568,6 +4108,7 @@ if (mf.isNotBlank()) {
     if (!okExtract) {
       _programUpdates.update { st -> st.copy(zapret = st.zapret.copy(updating = false, errorText = str(R.string.prog_update_error_archive_changed), statusText = "")) }
       runCatching { zipFile.delete() }
+      runCatching { extracted.delete() }
       return
     }
 
@@ -3621,6 +4162,7 @@ if (mf.isNotBlank()) {
 
     val zipFile = File(ctx.cacheDir, "zapret2_target.zip")
     val extractDir = File(ctx.cacheDir, "zapret2_extract_${System.currentTimeMillis()}")
+    AppStorageMaintenance.deleteCacheEntriesWithPrefix(ctx, "zapret2_extract_")
     runCatching { zipFile.delete() }
     runCatching { extractDir.deleteRecursively() }
     extractDir.mkdirs()
@@ -3633,6 +4175,8 @@ if (mf.isNotBlank()) {
     }
     if (!okDl) {
       _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = str(R.string.prog_update_error_download_failed), statusText = "")) }
+      runCatching { zipFile.delete() }
+      runCatching { extractDir.deleteRecursively() }
       return
     }
 
@@ -3641,7 +4185,10 @@ if (mf.isNotBlank()) {
     val luaOut = File(extractDir, "lua")
     val okExtractBin = extractZipSingle(zipFile, { name -> name.endsWith("/binaries/android-arm64/nfqws2") }, binOut)
     val okExtractLua = extractZipTree(zipFile, subDirSuffix = "/lua/", outDir = luaOut)
-    if (!okExtractBin || !okExtractLua) {
+    val requiredLuaOk = listOf("zapret-lib.lua", "zapret-antidpi.lua").all { name ->
+      File(luaOut, name).let { it.isFile && it.length() > 0L }
+    }
+    if (!okExtractBin || !okExtractLua || !requiredLuaOk) {
       _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = str(R.string.prog_update_error_archive_changed), statusText = "")) }
       runCatching { zipFile.delete() }
       runCatching { extractDir.deleteRecursively() }
@@ -3649,13 +4196,21 @@ if (mf.isNotBlank()) {
     }
 
     _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(statusText = str(R.string.mv_auto_058), progressPercent = 100)) }
-    val okInstall = installZapret2(binOut, luaOut)
-    runCatching { zipFile.delete() }
-    runCatching { extractDir.deleteRecursively() }
-    if (!okInstall) {
-      _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = str(R.string.prog_update_error_install_failed), statusText = "")) }
+    val installResult = installZapret2(binOut, luaOut)
+    if (!installResult.success) {
+      val detail = installResult.detail.trim().take(1200)
+      val message = if (detail.isBlank()) {
+        str(R.string.prog_update_error_install_failed)
+      } else {
+        str(R.string.prog_update_error_install_failed) + "\n" + detail
+      }
+      _programUpdates.update { st -> st.copy(zapret2 = st.zapret2.copy(updating = false, errorText = message, statusText = "")) }
+      runCatching { zipFile.delete() }
+      runCatching { extractDir.deleteRecursively() }
       return
     }
+    runCatching { zipFile.delete() }
+    runCatching { extractDir.deleteRecursively() }
 
     val installed = runCatching {
       readInstalledVersionAny(
@@ -3697,6 +4252,7 @@ if (mf.isNotBlank()) {
 
     val gzFile = File(ctx.cacheDir, "mihomo_target.gz")
     val extracted = File(ctx.cacheDir, "mihomo_${System.currentTimeMillis()}")
+    AppStorageMaintenance.deleteCacheEntriesWithPrefix(ctx, "mihomo_")
     runCatching { gzFile.delete() }
     runCatching { extracted.delete() }
 
@@ -3708,6 +4264,8 @@ if (mf.isNotBlank()) {
     }
     if (!okDl) {
       _programUpdates.update { st -> st.copy(mihomo = st.mihomo.copy(updating = false, errorText = str(R.string.prog_update_error_download_failed), statusText = "")) }
+      runCatching { gzFile.delete() }
+      runCatching { extracted.delete() }
       return
     }
 
@@ -3716,6 +4274,7 @@ if (mf.isNotBlank()) {
     if (!okExtract) {
       _programUpdates.update { st -> st.copy(mihomo = st.mihomo.copy(updating = false, errorText = str(R.string.prog_update_error_archive_changed), statusText = "")) }
       runCatching { gzFile.delete() }
+      runCatching { extracted.delete() }
       return
     }
 
@@ -3769,6 +4328,7 @@ if (mf.isNotBlank()) {
 
     val tarGzFile = File(ctx.cacheDir, "mieru_target.tar.gz")
     val extracted = File(ctx.cacheDir, "mieru_${System.currentTimeMillis()}")
+    AppStorageMaintenance.deleteCacheEntriesWithPrefix(ctx, "mieru_")
     runCatching { tarGzFile.delete() }
     runCatching { extracted.delete() }
 
@@ -3780,6 +4340,8 @@ if (mf.isNotBlank()) {
     }
     if (!okDl) {
       _programUpdates.update { st -> st.copy(mieru = st.mieru.copy(updating = false, errorText = str(R.string.prog_update_error_download_failed), statusText = "")) }
+      runCatching { tarGzFile.delete() }
+      runCatching { extracted.delete() }
       return
     }
 
@@ -3788,6 +4350,7 @@ if (mf.isNotBlank()) {
     if (!okExtract) {
       _programUpdates.update { st -> st.copy(mieru = st.mieru.copy(updating = false, errorText = str(R.string.prog_update_error_archive_changed), statusText = "")) }
       runCatching { tarGzFile.delete() }
+      runCatching { extracted.delete() }
       return
     }
 
@@ -3840,6 +4403,7 @@ if (mf.isNotBlank()) {
     }
 
     val binFile = File(ctx.cacheDir, "opera_proxy_${System.currentTimeMillis()}")
+    AppStorageMaintenance.deleteCacheEntriesWithPrefix(ctx, "opera_proxy_")
     runCatching { binFile.delete() }
 
     val okDl = downloadToFileWithProgress(url, binFile) { pct ->
@@ -4496,70 +5060,152 @@ if (mf.isNotBlank()) {
   private suspend fun installOperaProxyBinary(src: File): Boolean =
     installBinaryAtomically(src, "/data/adb/modules/ZDT-D/bin/opera-proxy")
 
-  private suspend fun installZapret2(binSrc: File, luaSrcDir: File): Boolean {
-    val moduleRoot = "/data/adb/modules/ZDT-D"
+  private data class Zapret2InstallResult(
+    val success: Boolean,
+    val detail: String = "",
+  )
+
+  private suspend fun installZapret2(binSrc: File, luaSrcDir: File): Zapret2InstallResult {
+    val moduleRoot = when {
+      rootPathExists("/data/adb/modules/ZDT-D") -> "/data/adb/modules/ZDT-D"
+      rootPathExists("/data/adb/modules_update/ZDT-D") -> "/data/adb/modules_update/ZDT-D"
+      else -> return Zapret2InstallResult(false, "ZDT-D module directory was not found")
+    }
     val dstBin = "${moduleRoot}/bin/nfqws2"
     val luaParent = "${moduleRoot}/strategic"
     val dstLua = "${luaParent}/lua"
-    if (!rootPathExists(moduleRoot)) return false
     val nonce = System.nanoTime()
-    val newBin = "${dstBin}.zdt-new.${nonce}"
-    val oldBin = "${dstBin}.zdt-old.${nonce}"
-    val newLua = "${luaParent}/.lua.zdt-new.${nonce}"
-    val oldLua = "${luaParent}/.lua.zdt-old.${nonce}"
+    val stagedBin = "${dstBin}.zdt-new.${nonce}"
+    val backupBin = "${dstBin}.zdt-old.${nonce}"
+    val stagedLua = "${luaParent}/.lua.zdt-new.${nonce}"
+    val backupLua = "${luaParent}/.lua.zdt-old.${nonce}"
+    val customLuaFiles = listOf("zapret-sni.lua", "zapret-wgobfs.lua")
+
+    if (!binSrc.isFile || binSrc.length() <= 0L) {
+      return Zapret2InstallResult(false, "Extracted nfqws2 binary is empty")
+    }
+    if (!File(luaSrcDir, "zapret-lib.lua").isFile || !File(luaSrcDir, "zapret-antidpi.lua").isFile) {
+      return Zapret2InstallResult(false, "Required zapret2 Lua files are missing")
+    }
+
+    val preserveCustomLua = customLuaFiles.joinToString("\n") { name ->
+      val src = "${dstLua}/${name}"
+      val dst = "${stagedLua}/${name}"
+      "if test -f ${shQuote(src)}; then cp -f ${shQuote(src)} ${shQuote(dst)} || { echo ${shQuote("Failed to preserve $name")} >&2; exit 1; }; fi"
+    }
+
     val script = """
       set -e
-      mkdir -p ${shQuote(moduleRoot + "/bin")} ${shQuote(luaParent)} 2>/dev/null || true
-      new_bin=${shQuote(newBin)}
-      old_bin=${shQuote(oldBin)}
-      new_lua=${shQuote(newLua)}
-      old_lua=${shQuote(oldLua)}
-      cleanup() {
-        rm -f "${'$'}new_bin" 2>/dev/null || true
-        rm -rf "${'$'}new_lua" 2>/dev/null || true
-      }
-      trap cleanup EXIT HUP INT TERM
-
-      cp -f ${shQuote(binSrc.absolutePath)} "${'$'}new_bin" 2>/dev/null || cat ${shQuote(binSrc.absolutePath)} > "${'$'}new_bin"
-      test -s "${'$'}new_bin"
-      chmod 0755 "${'$'}new_bin" 2>/dev/null || true
-
-      rm -rf "${'$'}new_lua" "${'$'}old_lua" 2>/dev/null || true
-      mkdir -p "${'$'}new_lua"
-      if test -d ${shQuote(luaSrcDir.absolutePath)}; then
-        cp -r ${shQuote(luaSrcDir.absolutePath)}/. "${'$'}new_lua"/
-      fi
-      find "${'$'}new_lua" -type f -exec chmod 0755 {} \; 2>/dev/null || true
-      find "${'$'}new_lua" -type d -exec chmod 0755 {} \; 2>/dev/null || true
-
+      dst_bin=${shQuote(dstBin)}
+      dst_lua=${shQuote(dstLua)}
+      staged_bin=${shQuote(stagedBin)}
+      backup_bin=${shQuote(backupBin)}
+      staged_lua=${shQuote(stagedLua)}
+      backup_lua=${shQuote(backupLua)}
       had_bin=0
       had_lua=0
-      if test -e ${shQuote(dstBin)}; then
-        mv ${shQuote(dstBin)} "${'$'}old_bin"
+      mutated=0
+
+      cleanup_stage() {
+        rm -f "${'$'}staged_bin" "${'$'}backup_bin" 2>/dev/null || true
+        rm -rf "${'$'}staged_lua" "${'$'}backup_lua" 2>/dev/null || true
+      }
+
+      rollback() {
+        if test "${'$'}mutated" != 1; then return; fi
+        echo "nfqws2 update: rolling back previous files" >&2
+        rm -f "${'$'}dst_bin" 2>/dev/null || true
+        rm -rf "${'$'}dst_lua" 2>/dev/null || true
+        if test "${'$'}had_bin" = 1 && test -s "${'$'}backup_bin"; then
+          cp -f "${'$'}backup_bin" "${'$'}dst_bin" 2>/dev/null || cat "${'$'}backup_bin" > "${'$'}dst_bin"
+          chmod 0755 "${'$'}dst_bin" 2>/dev/null || true
+        fi
+        if test "${'$'}had_lua" = 1 && test -d "${'$'}backup_lua"; then
+          mkdir -p "${'$'}dst_lua"
+          cp -r "${'$'}backup_lua"/. "${'$'}dst_lua"/ 2>/dev/null || true
+          find "${'$'}dst_lua" -type f -name '*.lua' -exec chmod 0644 {} \; 2>/dev/null || true
+        fi
+      }
+
+      fail_install() {
+        echo "nfqws2 update failed: ${'$'}1" >&2
+        rollback
+        cleanup_stage
+        exit 1
+      }
+
+      mkdir -p ${shQuote(moduleRoot + "/bin")} ${shQuote(luaParent)}
+      cleanup_stage
+
+      echo "nfqws2 update: staging binary"
+      if ! cp -f ${shQuote(binSrc.absolutePath)} "${'$'}staged_bin" 2>/dev/null; then
+        cat ${shQuote(binSrc.absolutePath)} > "${'$'}staged_bin" || fail_install "unable to stage nfqws2 binary"
+      fi
+      test -s "${'$'}staged_bin" || fail_install "staged nfqws2 binary is empty"
+      chmod 0755 "${'$'}staged_bin" || fail_install "unable to mark nfqws2 executable"
+
+      echo "nfqws2 update: staging upstream Lua files"
+      mkdir -p "${'$'}staged_lua" || fail_install "unable to create Lua staging directory"
+      cp -r ${shQuote(luaSrcDir.absolutePath)}/. "${'$'}staged_lua"/ || fail_install "unable to stage zapret2 Lua files"
+      $preserveCustomLua
+      test -s "${'$'}staged_lua/zapret-lib.lua" || fail_install "zapret-lib.lua is missing after staging"
+      test -s "${'$'}staged_lua/zapret-antidpi.lua" || fail_install "zapret-antidpi.lua is missing after staging"
+      find "${'$'}staged_lua" -type f -name '*.lua' -exec chmod 0644 {} \; 2>/dev/null || true
+      find "${'$'}staged_lua" -type d -exec chmod 0755 {} \; 2>/dev/null || true
+
+      echo "nfqws2 update: creating rollback copy"
+      if test -e "${'$'}dst_bin"; then
+        cp -f "${'$'}dst_bin" "${'$'}backup_bin" 2>/dev/null || cat "${'$'}dst_bin" > "${'$'}backup_bin" || fail_install "unable to back up current nfqws2 binary"
+        test -s "${'$'}backup_bin" || fail_install "nfqws2 binary backup is empty"
         had_bin=1
       fi
-      if test -d ${shQuote(dstLua)}; then
-        if ! mv ${shQuote(dstLua)} "${'$'}old_lua"; then
-          if test "${'$'}had_bin" = 1 && test -e "${'$'}old_bin"; then mv "${'$'}old_bin" ${shQuote(dstBin)}; fi
-          exit 1
-        fi
+      if test -d "${'$'}dst_lua"; then
+        mkdir -p "${'$'}backup_lua" || fail_install "unable to create Lua backup directory"
+        cp -r "${'$'}dst_lua"/. "${'$'}backup_lua"/ || fail_install "unable to back up current Lua files"
         had_lua=1
       fi
 
-      if mv "${'$'}new_bin" ${shQuote(dstBin)} && mv "${'$'}new_lua" ${shQuote(dstLua)}; then
-        rm -f "${'$'}old_bin" 2>/dev/null || true
-        rm -rf "${'$'}old_lua" 2>/dev/null || true
-        trap - EXIT HUP INT TERM
-        exit 0
-      fi
+      mutated=1
+      echo "nfqws2 update: installing binary"
+      mv -f "${'$'}staged_bin" "${'$'}dst_bin" || fail_install "unable to replace nfqws2 binary"
+      chmod 0755 "${'$'}dst_bin" || fail_install "unable to set nfqws2 permissions"
+      test -x "${'$'}dst_bin" || fail_install "installed nfqws2 is not executable"
+      test -s "${'$'}dst_bin" || fail_install "installed nfqws2 is empty"
 
-      rm -f ${shQuote(dstBin)} 2>/dev/null || true
-      rm -rf ${shQuote(dstLua)} 2>/dev/null || true
-      if test "${'$'}had_bin" = 1 && test -e "${'$'}old_bin"; then mv "${'$'}old_bin" ${shQuote(dstBin)}; fi
-      if test "${'$'}had_lua" = 1 && test -d "${'$'}old_lua"; then mv "${'$'}old_lua" ${shQuote(dstLua)}; fi
-      exit 1
+      echo "nfqws2 update: installing Lua files"
+      rm -rf "${'$'}dst_lua" || fail_install "unable to replace Lua directory"
+      mkdir -p "${'$'}dst_lua" || fail_install "unable to create Lua directory"
+      cp -r "${'$'}staged_lua"/. "${'$'}dst_lua"/ || fail_install "unable to install zapret2 Lua files"
+      find "${'$'}dst_lua" -type f -name '*.lua' -exec chmod 0644 {} \; 2>/dev/null || true
+      find "${'$'}dst_lua" -type d -exec chmod 0755 {} \; 2>/dev/null || true
+      test -s "${'$'}dst_lua/zapret-lib.lua" || fail_install "installed zapret-lib.lua is missing"
+      test -s "${'$'}dst_lua/zapret-antidpi.lua" || fail_install "installed zapret-antidpi.lua is missing"
+
+      for custom_lua in zapret-sni.lua zapret-wgobfs.lua; do
+        if test -f "${'$'}backup_lua/${'$'}custom_lua" && ! test -s "${'$'}dst_lua/${'$'}custom_lua"; then
+          fail_install "custom ${'$'}custom_lua was not preserved"
+        fi
+      done
+
+      mutated=0
+      cleanup_stage
+      echo "nfqws2 update: installation completed"
     """.trimIndent()
-    return root.execRootSh(script).isSuccess
+
+    val result = root.execRootSh(script)
+    val detail = (result.err + result.out)
+      .map { it.trim() }
+      .filter { it.isNotBlank() }
+      .takeLast(12)
+      .joinToString("\n")
+      .take(1200)
+    if (!result.isSuccess) {
+      android.util.Log.e(
+        "ZDTD-Updates",
+        "nfqws2 install failed (code=${result.code}, root=$moduleRoot): ${detail.ifBlank { "no shell output" }}",
+      )
+    }
+    return Zapret2InstallResult(result.isSuccess, detail)
   }
 
 
@@ -4771,11 +5417,14 @@ if (mf.isNotBlank()) {
   }
 
   private suspend fun exportModuleZipToSdcard(): Triple<Boolean, String, String> {
-    val (cacheZip, copyError) = copyBundledModuleZipToCache()
-    if (copyError != null || cacheZip == null) {
-      return Triple(false, copyError ?: "asset zdt_module.zip missing", "")
+    if (isOnlineModuleDistribution()) {
+      return Triple(false, "manual module export is disabled for the online distribution\n${moduleDistributionDiagnosticLine()}", "")
     }
-    val verify = verifyBundledModuleZip(cacheZip)
+    val (cacheZip, copyError) = acquireModuleZipToCache()
+    if (copyError != null || cacheZip == null) {
+      return Triple(false, copyError ?: "module archive acquisition failed without details", "")
+    }
+    val verify = verifyModuleZip(cacheZip)
     if (!verify.ok) return Triple(false, verify.message, "")
 
     val normalizeLog = runCatching { clearFakeEncryptedCentralDirectoryFlagsInPlace(cacheZip) }.getOrElse {
@@ -4798,14 +5447,21 @@ if (mf.isNotBlank()) {
   private suspend fun stageModuleZipToTmp(
     normalizeForStrictZipInstaller: Boolean = false,
   ): Pair<Boolean, String> {
-    updateInstallProgress(22, str(R.string.setup_install_progress_copying))
+    updateInstallProgress(
+      22,
+      if (isOnlineModuleDistribution()) {
+        str(R.string.prog_update_status_downloading_pct_fmt, 0)
+      } else {
+        str(R.string.setup_install_progress_copying)
+      },
+    )
     // Copy assets/zdt_module.zip to cache, verify the protected archive,
     // optionally normalize the same temporary copy for strict ZIP parsers,
     // then stage it for the selected root manager.
-    val (cacheZip, copyError) = copyBundledModuleZipToCache()
-    if (copyError != null || cacheZip == null) return false to (copyError ?: "asset zdt_module.zip missing")
+    val (cacheZip, copyError) = acquireModuleZipToCache()
+    if (copyError != null || cacheZip == null) return false to (copyError ?: "module archive acquisition failed without details")
 
-    val verify = verifyBundledModuleZip(cacheZip)
+    val verify = verifyModuleZip(cacheZip)
     if (!verify.ok) return false to verify.message
 
     val normalizeLog = if (normalizeForStrictZipInstaller) {
@@ -4816,14 +5472,11 @@ if (mf.isNotBlank()) {
       str(R.string.module_zip_patch_protection_kept_magisk)
     }
 
-    val (busyBoxOk, busyBoxLog) = stageBundledBusyBoxToTmp()
-    if (!busyBoxOk) return false to busyBoxLog
-
     val src = cacheZip.absolutePath
     updateInstallProgress(42, str(R.string.setup_install_progress_copying))
     val copyRes = root.execRoot("sh -c 'cp ${shQuote(src)} /data/local/tmp/zdt_module.zip && chmod 644 /data/local/tmp/zdt_module.zip'")
     val out1 = (copyRes.out + copyRes.err).joinToString("\n")
-    val log = listOf(verify.message, normalizeLog, busyBoxLog, out1.trim()).filter { it.isNotBlank() }.joinToString("\n")
+    val log = listOf(verify.message, normalizeLog, out1.trim()).filter { it.isNotBlank() }.joinToString("\n")
     return copyRes.isSuccess to log
   }
 
@@ -4832,9 +5485,9 @@ if (mf.isNotBlank()) {
     runCatching { unpackDir.deleteRecursively() }
     unpackDir.mkdirs()
 
-    val (cacheZip, copyError) = copyBundledModuleZipToCache()
-    if (copyError != null || cacheZip == null) return false to (copyError ?: "asset zdt_module.zip missing")
-    val verify = verifyBundledModuleZip(cacheZip)
+    val (cacheZip, copyError) = acquireModuleZipToCache()
+    if (copyError != null || cacheZip == null) return false to (copyError ?: "module archive acquisition failed without details")
+    val verify = verifyModuleZip(cacheZip)
     if (!verify.ok) return false to verify.message
 
     val extractLog = StringBuilder()
@@ -5295,21 +5948,292 @@ private fun shQuote(s: String): String {
 
   private data class ModuleZipVerification(val ok: Boolean, val message: String)
 
-  private fun copyBundledModuleZipToCache(): Pair<File?, String?> {
+  private data class ModuleDistributionSnapshot(
+    val buildMode: String,
+    val manifestMode: String,
+    val buildUsesOnlineModule: Boolean,
+  ) {
+    val usesOnlineModule: Boolean
+      get() = buildUsesOnlineModule || buildMode == "online" || manifestMode == "online"
+  }
+
+  @Suppress("DEPRECATION")
+  private fun moduleDistributionSnapshot(): ModuleDistributionSnapshot {
+    val buildMode = BuildConfig.DISTRIBUTION_MODE.trim().lowercase(Locale.US)
+    val manifestMode = runCatching {
+      ctx.packageManager
+        .getApplicationInfo(ctx.packageName, PackageManager.GET_META_DATA)
+        .metaData
+        ?.getString(APP_DISTRIBUTION_META_DATA)
+        .orEmpty()
+        .trim()
+        .lowercase(Locale.US)
+    }.getOrDefault("")
+    return ModuleDistributionSnapshot(
+      buildMode = buildMode,
+      manifestMode = manifestMode,
+      buildUsesOnlineModule = BuildConfig.USES_ONLINE_MODULE,
+    )
+  }
+
+  private fun isOnlineModuleDistribution(): Boolean {
+    val snapshot = moduleDistributionSnapshot()
+    if (snapshot.manifestMode.isNotBlank() && snapshot.manifestMode != snapshot.buildMode) {
+      log(
+        "WARN",
+        "APK distribution mismatch: build=${snapshot.buildMode} manifest=${snapshot.manifestMode} " +
+          "usesOnline=${snapshot.buildUsesOnlineModule}",
+      )
+    }
+    if (snapshot.buildUsesOnlineModule != (snapshot.buildMode == "online")) {
+      log(
+        "WARN",
+        "BuildConfig online-module mismatch: distribution=${snapshot.buildMode} " +
+          "usesOnline=${snapshot.buildUsesOnlineModule}",
+      )
+    }
+    return snapshot.usesOnlineModule
+  }
+
+  private fun moduleDistributionDiagnosticLine(snapshot: ModuleDistributionSnapshot = moduleDistributionSnapshot()): String =
+    "distribution build=${snapshot.buildMode.ifBlank { "?" }} " +
+      "manifest=${snapshot.manifestMode.ifBlank { "?" }} " +
+      "usesOnline=${snapshot.buildUsesOnlineModule} effectiveOnline=${snapshot.usesOnlineModule}"
+
+  private fun onlineModuleFailure(
+    detail: String,
+    snapshot: ModuleDistributionSnapshot = moduleDistributionSnapshot(),
+  ): Pair<File?, String?> {
+    val technical = buildString {
+      append(ONLINE_MODULE_DOWNLOAD_FAILED_MARKER)
+      append('\n')
+      append("Online module acquisition failed: ")
+      append(detail.ifBlank { "unknown error" })
+      append('\n')
+      append(moduleDistributionDiagnosticLine(snapshot))
+      append('\n')
+      append("source=")
+      append(ONLINE_MODULE_URL)
+    }
+    return null to technical
+  }
+
+  private suspend fun acquireModuleZipToCache(): Pair<File?, String?> {
     val cacheZip = File(ctx.cacheDir, "zdt_module.zip")
-    runCatching {
-      ctx.assets.open("zdt_module.zip").use { input ->
-        cacheZip.outputStream().use { out -> input.copyTo(out) }
+    val distribution = moduleDistributionSnapshot()
+    if (!distribution.usesOnlineModule) {
+      runCatching { cacheZip.delete() }
+      val input = runCatching { ctx.assets.open("zdt_module.zip") }.getOrElse { error ->
+        return null to buildString {
+          append("bundled module asset zdt_module.zip is unavailable: ")
+          append(error.message ?: error.toString())
+          append('\n')
+          append(moduleDistributionDiagnosticLine(distribution))
+        }
       }
-    }.getOrElse {
-      return null to "asset zdt_module.zip missing: ${it.message ?: it}"
+      val copyError = runCatching {
+        input.use { source ->
+          cacheZip.outputStream().buffered().use { output -> source.copyTo(output) }
+        }
+        check(cacheZip.isFile && cacheZip.length() > 0L) { "cached bundled module archive is empty" }
+      }.exceptionOrNull()
+      if (copyError != null) {
+        runCatching { cacheZip.delete() }
+        return null to buildString {
+          append("unable to copy bundled module archive to app cache: ")
+          append(copyError.message ?: copyError.toString())
+          append('\n')
+          append(moduleDistributionDiagnosticLine(distribution))
+        }
+      }
+      return cacheZip to null
+    }
+
+    if (distribution.buildMode != "online" || distribution.manifestMode != "online" || !distribution.buildUsesOnlineModule) {
+      log("WARN", "Online module fallback selected because distribution markers disagree: ${moduleDistributionDiagnosticLine(distribution)}")
+    }
+    pendingOnlineModuleMismatch = null
+
+    val (metadata, metadataError) = readOnlineModuleMetadata()
+    if (metadata == null) {
+      return onlineModuleFailure(
+        "online module metadata is missing or invalid: ${metadataError ?: "unknown metadata error"}",
+        distribution,
+      )
+    }
+
+    runCatching { cacheZip.delete() }
+    val part = File(ctx.cacheDir, "zdt_module.zip.part")
+    runCatching { part.delete() }
+    updateInstallProgress(22, str(R.string.prog_update_status_downloading_pct_fmt, 0))
+
+    // Technical_Assets keeps a stable asset name across builds. Add a cache buster so an
+    // intermediate CDN/proxy cannot hand an older zdt_module.zip to a newer online APK.
+    val downloadUrl = "${metadata.url}?ts=${System.currentTimeMillis()}"
+    val request = Request.Builder()
+      .url(downloadUrl)
+      .header("User-Agent", "ZDT-D-Android")
+      .header("Accept", "application/octet-stream")
+      .header("Cache-Control", "no-cache, no-store")
+      .header("Pragma", "no-cache")
+      .build()
+
+    val downloadError = runCatching {
+      githubHttp.newCall(request).execute().use { response ->
+        check(response.isSuccessful) { "module download HTTP ${response.code}" }
+        val body = response.body
+        val reportedSize = body.contentLength()
+        check(reportedSize <= 0L || reportedSize <= MAX_ONLINE_MODULE_BYTES) {
+          "online module archive exceeds the size limit: $reportedSize"
+        }
+        body.byteStream().use { inputStream ->
+          part.outputStream().buffered().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            var copied = 0L
+            while (true) {
+              currentCoroutineContext().ensureActive()
+              val read = inputStream.read(buffer)
+              if (read < 0) break
+              output.write(buffer, 0, read)
+              copied += read
+              check(copied <= MAX_ONLINE_MODULE_BYTES) { "online module archive exceeds the size limit" }
+              val percent = if (reportedSize > 0L) {
+                ((copied * 100L) / reportedSize).toInt().coerceIn(0, 100)
+              } else {
+                0
+              }
+              updateInstallProgress(
+                percent = 22 + ((percent * 20) / 100),
+                label = str(R.string.prog_update_status_downloading_pct_fmt, percent),
+              )
+            }
+          }
+        }
+      }
+      check(part.isFile && part.length() > 0L) { "downloaded online module archive is empty" }
+      val (moduleBuild, inspectError) = readModuleBuildInfoFromNormalizedModuleCopy(part)
+      check(moduleBuild != null) { inspectError ?: "module.prop is missing from the downloaded module archive" }
+      val appBuild = readBundledModuleBuildInfo()
+        ?: error("online installer internal module.prop is missing or invalid")
+      if (!moduleBuildsMatch(moduleBuild, appBuild)) {
+        throw OnlineModuleVersionMismatchException(moduleBuild)
+      }
+      check(moduleBuild.versionName == metadata.moduleVersion && moduleBuild.versionCode == metadata.moduleVersionCode) {
+        "downloaded module version does not match online installer metadata"
+      }
+      check(part.length() == metadata.size) {
+        "module size mismatch: expected=${metadata.size} actual=${part.length()}"
+      }
+      val actualSha = sha256Hex(part)
+      check(actualSha.equals(metadata.sha256, ignoreCase = true)) {
+        "module SHA-256 mismatch: expected=${metadata.sha256} actual=$actualSha"
+      }
+      pendingOnlineModuleMismatch = null
+      if (cacheZip.exists()) check(cacheZip.delete()) { "unable to replace cached module archive" }
+      check(part.renameTo(cacheZip)) { "unable to finalize downloaded module archive" }
+    }.exceptionOrNull()
+
+    if (downloadError != null) {
+      runCatching { part.delete() }
+      if (downloadError is CancellationException) throw downloadError
+      if (downloadError is OnlineModuleVersionMismatchException) {
+        pendingOnlineModuleMismatch = downloadError.moduleBuild
+        return null to ONLINE_MODULE_VERSION_MISMATCH_MARKER
+      }
+      return onlineModuleFailure(downloadError.message ?: downloadError.toString(), distribution)
     }
     return cacheZip to null
   }
 
-  private fun verifyBundledModuleZip(zipFile: File): ModuleZipVerification {
-    val expected = readSha256Asset("busybox/zdt_module.sha256")
-      ?: return ModuleZipVerification(false, "asset busybox/zdt_module.sha256 missing or invalid")
+  private data class OnlineModuleMetadata(
+    val url: String,
+    val sha256: String,
+    val size: Long,
+    val moduleVersion: String,
+    val moduleVersionCode: Int,
+  )
+
+  private fun readOnlineModuleMetadata(): Pair<OnlineModuleMetadata?, String?> = runCatching {
+    val props = Properties()
+    ctx.assets.open("metadata/zdt_module.cache").use { input -> props.load(input) }
+    val url = props.getProperty("onlineUrl")?.trim().orEmpty()
+    val sha = props.getProperty("sha256")?.trim()?.lowercase(Locale.US).orEmpty()
+    val size = props.getProperty("size")?.trim()?.toLongOrNull() ?: 0L
+    val moduleVersion = props.getProperty("moduleVersion")?.trim().orEmpty()
+    val moduleVersionCode = props.getProperty("moduleVersionCode")?.trim()?.toIntOrNull() ?: 0
+    check(url == ONLINE_MODULE_URL) {
+      "unexpected or missing onlineUrl"
+    }
+    check(sha.matches(Regex("[0-9a-f]{64}"))) { "invalid or missing sha256" }
+    check(size > 0L) { "invalid or missing size" }
+    check(moduleVersion.isNotBlank()) { "moduleVersion is missing" }
+    check(moduleVersionCode > 0) { "moduleVersionCode is missing or invalid" }
+    OnlineModuleMetadata(url, sha, size, moduleVersion, moduleVersionCode)
+  }.fold(
+    onSuccess = { it to null },
+    onFailure = { null to (it.message ?: it.toString()) },
+  )
+
+  /**
+   * The module ZIP intentionally has a fake encrypted flag in its central directory.
+   * Keep the downloaded archive byte-identical for its SHA-256 check and installation.
+   * Clear only the fake flag in a disposable copy, then inspect module.prop with
+   * the platform ZIP implementation. The downloaded archive remains byte-identical
+   * for its SHA-256 verification and for Magisk installation.
+   */
+  private fun readModuleBuildInfoFromNormalizedModuleCopy(
+    zipFile: File,
+  ): Pair<ModuleBuildInfo?, String?> {
+    val inspectionZip = File(ctx.cacheDir, "zdt_module_version_check.zip")
+    runCatching { inspectionZip.delete() }
+    return try {
+      runCatching {
+        zipFile.copyTo(inspectionZip, overwrite = true)
+        clearFakeEncryptedCentralDirectoryFlagsInPlace(inspectionZip)
+      }.getOrElse {
+        return null to "Unable to prepare the protected module archive for version inspection: ${it.message ?: it}"
+      }
+      runCatching {
+        readModuleBuildInfoFromZip(inspectionZip, "module.prop", "Downloaded module archive")
+      }.fold(
+        onSuccess = { it to null },
+        onFailure = { null to (it.message ?: it.toString()) },
+      )
+    } finally {
+      runCatching { inspectionZip.delete() }
+    }
+  }
+
+  private fun cleanupTemporaryModuleArtifacts() {
+    listOf(
+      File(ctx.cacheDir, "zdt_module.zip"),
+      File(ctx.cacheDir, "zdt_module.zip.part"),
+      File(ctx.cacheDir, "zdt_module_version_check.zip"),
+      File(ctx.cacheDir, "module_unpack"),
+    ).forEach { file ->
+      val deleted = if (file.isDirectory) {
+        runCatching { file.deleteRecursively() }.getOrDefault(false)
+      } else {
+        runCatching { file.delete() }.getOrDefault(false)
+      }
+      if (file.exists() && !deleted) {
+        log("WARN", "Unable to delete temporary module artifact: ${file.absolutePath}")
+      }
+    }
+
+    val cleanup = runCatching {
+      root.execRootSh(
+        "rm -f /data/local/tmp/zdt_module.zip /data/local/tmp/zdt_module_version_check.zip /data/local/tmp/zdt_busybox 2>/dev/null || true"
+      )
+    }
+    if (cleanup.isFailure || cleanup.getOrNull()?.isSuccess != true) {
+      log("WARN", "Unable to delete staged module archive after module installation attempt")
+    }
+  }
+
+  private fun verifyModuleZip(zipFile: File): ModuleZipVerification {
+    val expected = readSha256Asset("metadata/zdt_module.sha256")
+      ?: return ModuleZipVerification(false, "asset metadata/zdt_module.sha256 missing or invalid")
     val actual = runCatching { sha256Hex(zipFile) }.getOrElse {
       return ModuleZipVerification(false, "module zip SHA-256 failed: ${it.message ?: it}")
     }
@@ -5503,38 +6427,6 @@ private fun shQuote(s: String): String {
     require(offset >= 0 && offset + 2 <= data.size) { "ZIP write out of bounds at offset $offset" }
     data[offset] = (value and 0xff).toByte()
     data[offset + 1] = ((value shr 8) and 0xff).toByte()
-  }
-
-  private fun preferredNativeAssetAbi(): String = when {
-    Build.SUPPORTED_ABIS.any { it == "arm64-v8a" } -> "arm64"
-    Build.SUPPORTED_ABIS.any { it == "armeabi-v7a" } -> "arm32"
-    else -> "arm64"
-  }
-
-  private suspend fun stageBundledBusyBoxToTmp(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-    val busyBoxAbi = preferredNativeAssetAbi()
-    val busyBoxAssetName = if (busyBoxAbi == "arm32") "busybox-arm32" else "busybox-arm64"
-    val expected = readSha256Asset("busybox/${busyBoxAssetName}.sha256")
-      ?: return@withContext (false to "asset busybox/${busyBoxAssetName}.sha256 missing or invalid")
-    val cacheBusyBox = File(ctx.cacheDir, busyBoxAssetName)
-    runCatching {
-      ctx.assets.open("busybox/${busyBoxAssetName}").use { input ->
-        cacheBusyBox.outputStream().use { out -> input.copyTo(out) }
-      }
-    }.getOrElse {
-      return@withContext (false to "asset busybox/${busyBoxAssetName} missing: ${it.message ?: it}")
-    }
-    val actual = runCatching { sha256Hex(cacheBusyBox) }.getOrElse {
-      return@withContext (false to "busybox SHA-256 failed: ${it.message ?: it}")
-    }
-    if (!actual.equals(expected, ignoreCase = true)) {
-      return@withContext (false to "busybox SHA-256 mismatch: expected=$expected actual=$actual")
-    }
-    val src = cacheBusyBox.absolutePath
-    val r = root.execRoot("sh -c 'cp ${shQuote(src)} /data/local/tmp/zdt_busybox && chmod 755 /data/local/tmp/zdt_busybox'")
-    val out = (r.out + r.err).joinToString("\n").trim()
-    if (!r.isSuccess) return@withContext (false to out)
-    true to listOf("busybox SHA-256 verified: $actual", out).filter { it.isNotBlank() }.joinToString("\n")
   }
 
   private fun readSha256Asset(assetName: String): String? = runCatching {
@@ -7646,8 +8538,20 @@ override fun applyStrategicVariant(programId: String, profile: String, file: Str
   }
 
   override fun startAppUpdateDownload() {
-    val url = _appUpdate.value.downloadUrl
-    val releaseUrl = _appUpdate.value.releaseHtmlUrl ?: "https://github.com/GAME-OVER-op/ZDT-D/releases"
+    val state = _appUpdate.value
+    val cachedUrl = state.downloadUrl
+    val releaseTag = state.releaseTag
+    val url = when {
+      cachedUrl.isNullOrBlank() -> null
+      !releaseTag.isNullOrBlank() -> releaseApkUrl(releaseTag)
+      isExpectedReleaseApkUrl(cachedUrl) -> cachedUrl
+      else -> null
+    }
+    if (url != cachedUrl) {
+      root.setCachedAppUpdateDownloadUrl(url)
+      _appUpdate.update { it.copy(downloadUrl = url) }
+    }
+    val releaseUrl = state.releaseHtmlUrl ?: "https://github.com/GAME-OVER-op/ZDT-D/releases"
     if (url.isNullOrBlank()) {
       if (_appUpdate.value.releaseBuild.status !in setOf(AppReleaseBuildStatus.PREPARING, AppReleaseBuildStatus.FAILED)) {
         _appUpdateEvents.tryEmit(AppUpdateEvent.OpenUrl(releaseUrl))
@@ -7664,6 +8568,7 @@ override fun applyStrategicVariant(programId: String, profile: String, file: Str
         val path = downloadLatestApk(url)
         if (!currentCoroutineContext().isActive) return@launch
         if (path.isNullOrBlank()) {
+          runCatching { File(ctx.cacheDir, "zdt_app_update.apk").delete() }
           updateDownloadUi(downloading = false, percent = 0, speedBps = 0, path = null, err = str(R.string.mv_auto_075))
           return@launch
         }
@@ -7675,9 +8580,10 @@ override fun applyStrategicVariant(programId: String, profile: String, file: Str
           _appUpdate.update { it.copy(needsUnknownSourcesPermission = true) }
         }
       } catch (_: CancellationException) {
-        // cancelled
+        runCatching { File(ctx.cacheDir, "zdt_app_update.apk").delete() }
         updateDownloadUi(downloading = false, percent = 0, speedBps = 0, path = null, err = null)
       } catch (e: Throwable) {
+        runCatching { File(ctx.cacheDir, "zdt_app_update.apk").delete() }
         updateDownloadUi(downloading = false, percent = 0, speedBps = 0, path = null, err = str(R.string.mv_error_with_detail, (e.message ?: e.toString())))
       }
     }
@@ -7703,6 +8609,26 @@ override fun applyStrategicVariant(programId: String, profile: String, file: Str
   }
 
   override fun onUnknownSourcesPermissionResult(granted: Boolean) {
+    val fullRootFallbackPath = pendingFullRootFallbackApkPath
+    if (!fullRootFallbackPath.isNullOrBlank()) {
+      pendingFullRootFallbackApkPath = null
+      val apk = File(fullRootFallbackPath)
+      if (granted && apk.isFile && apk.length() > 0L) {
+        _appUpdateEvents.tryEmit(AppUpdateEvent.InstallApk(fullRootFallbackPath))
+      } else {
+        apk.delete()
+        _setup.update {
+          it.copy(
+            showOnlineModuleVersionMismatchDialog = true,
+            onlineModuleFullApkDownloading = false,
+            onlineModuleFullApkDownloadPercent = 0,
+            onlineModuleFullApkError = str(R.string.permission_required_body),
+          )
+        }
+      }
+      return
+    }
+
     val releaseUrl = _appUpdate.value.releaseHtmlUrl ?: "https://github.com/GAME-OVER-op/ZDT-D/releases"
     val path = _appUpdate.value.downloadedPath
     _appUpdate.update { it.copy(needsUnknownSourcesPermission = false) }
