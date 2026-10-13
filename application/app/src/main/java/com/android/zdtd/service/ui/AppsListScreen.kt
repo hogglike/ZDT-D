@@ -1,5 +1,8 @@
 package com.android.zdtd.service.ui
 
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
+import com.android.zdtd.service.proxy.ProxyCatalogActivity
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -86,6 +89,7 @@ fun AppsListScreen(
   bottomContentPadding: Dp = 0.dp,
 ) {
 
+  val context = LocalContext.current
   val isCompactWidth = rememberIsCompactWidth()
   val isShortHeight = rememberIsShortHeight()
   val landscapeControl = rememberUseLandscapeControlLayout()
@@ -212,6 +216,24 @@ fun AppsListScreen(
         compact = compactCards,
         onClick = onOpenSubscriptions,
       )
+    }
+
+    item(key = "proxy_catalog_entry") {
+      Card(
+        onClick = { context.startActivity(Intent(context, ProxyCatalogActivity::class.java)) },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = if (compactCards) 8.dp else 12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)),
+      ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+          Icon(Icons.Outlined.Storage, contentDescription = null)
+          Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text("Прокси", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text("Список Webshare и других HTTP/SOCKS5-прокси · импорт TXT", style = MaterialTheme.typography.bodySmall)
+          }
+          Icon(Icons.Outlined.ChevronRight, contentDescription = null)
+        }
+      }
     }
 
     if (all.isEmpty()) {

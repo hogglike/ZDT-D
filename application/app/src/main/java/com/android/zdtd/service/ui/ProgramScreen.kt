@@ -1,5 +1,10 @@
 package com.android.zdtd.service.ui
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.android.zdtd.service.proxy.ProxyCatalogActivity
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -2643,6 +2648,14 @@ private fun OperaSniServerDialog(
   var sni by remember(initial) { mutableStateOf(initial.sni) }
   var proxyMode by remember(initial) { mutableStateOf(initial.proxyMode) }
   var customProxy by remember(initial) { mutableStateOf(initial.customProxy) }
+  val context = LocalContext.current
+  val pickProxy = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    val selected = result.data?.getStringExtra(ProxyCatalogActivity.EXTRA_URL)
+    if (result.resultCode == Activity.RESULT_OK && selected != null && isValidOperaCustomProxy(selected)) {
+      customProxy = selected
+      proxyMode = OPERA_UPSTREAM_CUSTOM
+    }
+  }
   var address by remember(initial) { mutableStateOf(initial.overrideProxyAddress) }
   var attemptedSave by remember { mutableStateOf(false) }
   val shortHeight = rememberIsShortHeight()
@@ -2791,6 +2804,9 @@ private fun OperaSniServerDialog(
               label = { Text(stringResource(R.string.operaproxy_upstream_custom)) },
             )
           }
+          OutlinedButton(onClick = {
+            pickProxy.launch(Intent(context, ProxyCatalogActivity::class.java).putExtra(ProxyCatalogActivity.EXTRA_PICK, true))
+          }, modifier = Modifier.fillMaxWidth()) { Text("Из списка прокси") }
           AnimatedVisibility(
             visible = proxyMode == OPERA_UPSTREAM_CUSTOM,
             enter = expandVertically(animationSpec = tween(200)) + fadeIn(tween(150)),
@@ -2798,6 +2814,7 @@ private fun OperaSniServerDialog(
           ) {
             OutlinedTextField(
               value = customProxy,
+              visualTransformation = PasswordVisualTransformation(),
               onValueChange = { customProxy = it },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,

@@ -176,6 +176,16 @@ class ConnectionModesActivity : ComponentActivity() {
           ModeClient.modes.forEach { mode -> FilterChip(selected = editMode == mode, onClick = { editMode = mode }, label = { Text(ModeState.title(mode)) }) }
         }
         if (settings != null) {
+          val blacklist = settings.optString("app_policy") == "blacklist"
+          Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), shape = MaterialTheme.shapes.medium) {
+            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+              Text(if (blacklist) "Исключены из VPN · ${selectedApps.size}" else "Приложения VPN · ${selectedApps.size}", style = MaterialTheme.typography.titleSmall)
+              if (selectedApps.isEmpty()) Text("Приложения не выбраны", style = MaterialTheme.typography.bodySmall)
+              apps.filter { it.packageName in selectedApps }.take(6).forEach { Text(it.label, style = MaterialTheme.typography.bodySmall) }
+              if (selectedApps.size > 6) Text("Ещё ${selectedApps.size - 6} · открой список", style = MaterialTheme.typography.bodySmall)
+              OutlinedButton(onClick = { appDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("Изменить приложения") }
+            }
+          }
           if (editMode != "white") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
               Text("Несколько серверов · автоперебор", Modifier.weight(1f).padding(top = 10.dp))
@@ -209,7 +219,6 @@ class ConnectionModesActivity : ComponentActivity() {
             }
           }
           Text(if (settings.optString("app_policy") == "blacklist") "Отмеченные приложения исключены из VPN-режима." else "Через VPN работают только отмеченные приложения.", style = MaterialTheme.typography.bodySmall)
-          OutlinedButton(onClick = { appDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("Выбрать приложения · ${selectedApps.size}") }
           if (editMode == "browser") OutlinedButton(onClick = {
             @Suppress("DEPRECATION")
             val browsers = packageManager.queryIntentActivities(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).addCategory(Intent.CATEGORY_BROWSABLE), PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }.distinct()
@@ -335,7 +344,9 @@ class ConnectionModesActivity : ComponentActivity() {
           OutlinedTextField(search, { search = it }, label = { Text("Поиск") })
           Row { TextButton(onClick = { picked = apps.map { it.packageName }.toSet() }) { Text("Все") }; TextButton(onClick = { picked = apps.filter { it.uid !in apps.filter { a -> a.packageName in snapshot.optJSONArray("dns_apps").strings() }.map { a -> a.uid }.toSet() }.map { it.packageName }.toSet() }) { Text("Кроме DNS") }; TextButton(onClick = { picked = emptySet() }) { Text("Снять") } }
           LazyColumn(Modifier.height(340.dp)) {
-            items(apps.filter { it.label.contains(search, true) || it.packageName.contains(search, true) }, key = { it.packageName }) { app ->
+            val filtered = apps.filter { it.label.contains(search, true) || it.packageName.contains(search, true) }
+            item { Text(if (settings.optString("app_policy") == "blacklist") "Исключённые приложения — сверху" else "Выбранные приложения — сверху", style = MaterialTheme.typography.bodySmall) }
+            items(filtered.sortedBy { it.packageName !in picked }, key = { it.packageName }) { app ->
               Row(Modifier.fillMaxWidth().clickable { picked = if (app.packageName in picked) picked - app.packageName else picked + app.packageName }) {
                 Checkbox(app.packageName in picked, onCheckedChange = { checked -> picked = if (checked) picked + app.packageName else picked - app.packageName })
                 Column(Modifier.padding(top = 6.dp)) { Text(app.label); Text(app.packageName, style = MaterialTheme.typography.bodySmall) }
