@@ -2487,8 +2487,8 @@ APatch：10700+</string>
     <string name="non_root_service_state_stopping">服务：正在停止</string>
     <string name="non_root_service_state_stopped">服务：已停止</string>
     <string name="non_root_service_state_error">服务：错误</string>
-    <string name="non_root_switch_root_title">切换到 Root 模式？</string>
-    <string name="non_root_switch_root_body">是否切换到 Root 模式？现有设置向导将从请求 Root 权限的步骤打开。</string>
+    <string name="non_root_switch_root_title">安装完整 Root 版本？</string>
+    <string name="non_root_switch_root_body">ZDT-D 将从最新稳定版下载 app-release.apk，验证软件包和签名，然后打开 Android 安装程序。当前设置将保留。</string>
     <string name="non_root_log_preparing_runtime">正在准备免 Root 运行环境…</string>
     <string name="non_root_log_start_mode">正在启动 %1$s 模式…</string>
     <string name="non_root_log_start_component">正在启动 %1$s…</string>
@@ -2571,4 +2571,38 @@ APatch：10700+</string>
     <string name="non_root_tgws_plugin_install_permission_required">请允许 ZDT-D 安装未知应用，以继续安装 TGWS 插件。</string>
     <string name="non_root_tgws_plugin_installed_fmt">已安装插件：%1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">可用插件：%1$s</string>
+    <string name="setup_online_module_version_mismatch_title">模块版本不匹配</string>
+    <string name="setup_online_module_version_mismatch_body">下载的模块版本为 %1$s（versionCode %2$s），但此在线安装器版本为 %3$s（versionCode %4$d）。此安装器无法安装该模块。你可以改为下载版本 %1$s 的完整 root APK。</string>
+    <string name="setup_online_module_download_full_apk">下载完整 APK</string>
+    <string name="setup_online_module_download_failed">无法下载 ZDT-D 模块。GitHub 可能暂时无法访问，或网络连接存在问题。请稍后重试，或下载已内置模块的 ZDT-D 完整版。</string>
+    <string name="setup_online_module_installer_missing">未检测到 Magisk、KernelSU 或 APatch。在线版不包含模块压缩包，因此无法保存该压缩包进行手动安装。请使用受支持的 root 管理器，或下载 ZDT-D 完整版。</string>
+    <string name="setup_online_full_apk_download_failed">无法下载完整 APK：%1$s</string>
+
+    <string name="vps_open_terminal">打开终端</string>
+    <string name="vps_terminal_title">终端</string>
+    <string name="vps_terminal_paste">粘贴</string>
+    <string name="vps_terminal_preparing">正在准备终端</string>
+    <string name="vps_terminal_retry">重试</string>
+    <string name="vps_terminal_check_tmux">正在检查 tmux</string>
+    <string name="vps_terminal_install_tmux">正在安装 tmux</string>
+    <string name="vps_terminal_check_session">正在检查 zdt-d_console</string>
+    <string name="vps_terminal_create_session">正在创建 zdt-d_console</string>
+    <string name="vps_terminal_connect">正在连接终端</string>
+    <string name="vps_terminal_error_tmux">无法安装 tmux</string>
+    <string name="vps_terminal_error_session">无法准备 zdt-d_console</string>
+    <string name="vps_terminal_error_connect">无法连接到终端</string>
+    <string name="vps_terminal_error_disconnected">终端连接已关闭</string>
+    <string name="non_root_log_cascade_backend_skipped">级联：%1$s 因启动错误被跳过：%2$s</string>
+    <string name="non_root_profile_failure_open_log">打开启动错误日志</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">上游代理</string>
+    <string name="operaproxy_upstream_desc">选择 Opera Proxy 连接网络的方式。默认选择 ByeDPI。</string>
+    <string name="operaproxy_upstream_direct">不使用代理</string>
+    <string name="operaproxy_upstream_custom">自定义代理</string>
+    <string name="operaproxy_custom_proxy_title">自定义上游代理</string>
+    <string name="operaproxy_custom_proxy_desc">请输入完整的代理 URL。支持互联网远程服务器。格式：http://、https://、socks5://、socks5h://。用户名和密码也可以直接写在 URL 中。</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">请输入包含主机和端口的有效 HTTP、HTTPS、SOCKS5 或 SOCKS5H 代理 URL。</string>
+    <string name="non_root_log_opera_upstream">Opera 上游代理：%1$s</string>
 </resources>

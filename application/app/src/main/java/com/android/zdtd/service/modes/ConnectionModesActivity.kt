@@ -1,5 +1,6 @@
 package com.android.zdtd.service.modes
 
+import com.android.zdtd.service.BuildConfig
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -84,7 +85,7 @@ class ConnectionModesActivity : ComponentActivity() {
     suspend fun load(resetDraft: Boolean) {
       try {
         val value = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes") }
-        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; модуль и APK должны быть mod31.") }
+        check(value.has("config")) { value.optString("error", "Служба недоступна. Запусти ZDT-D; версии модуля и APK должны совпадать.") }
         snapshot = value
         if (resetDraft) { draft = JSONObject(value.getJSONObject("config").toString()); dirty = value.optInt("selection_cleanup_count") > 0 }
         status = value.getJSONObject("status")
@@ -126,7 +127,7 @@ class ConnectionModesActivity : ComponentActivity() {
       }
     }) { contentPadding ->
       Column(Modifier.padding(contentPadding).safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Режимы подключения · mod31", style = MaterialTheme.typography.headlineSmall)
+        Text("Режимы подключения · ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.headlineSmall)
         Text("Нажми режим для подключения. Выбор сервера доступен удержанием кнопки.", style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           ModeClient.modes.forEach { mode ->
@@ -154,7 +155,7 @@ class ConnectionModesActivity : ComponentActivity() {
               val report = withContext(Dispatchers.IO) { ModeClient.api(this@ConnectionModesActivity).getJsonData("/api/connection-modes/diagnostics") }
               check(report.optBoolean("ok")) { "Не удалось прочитать диагностику" }
               val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D mod31", report.toString(2)))
+              clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ZDT-D ${BuildConfig.VERSION_NAME}", report.toString(2)))
               message = "Диагностика скопирована; ссылка подписки и ключи серверов не включены"
             } catch (e: Exception) { message = "Не удалось скопировать: ${e.message}" }
           }

@@ -147,6 +147,7 @@ private fun SetupAlertDialog(
   bodyText: String,
   confirmButtonText: String,
   onConfirm: () -> Unit,
+  confirmEnabled: Boolean = true,
   dismissButtonText: String? = null,
   onDismiss: (() -> Unit)? = null,
 ) {
@@ -155,7 +156,7 @@ private fun SetupAlertDialog(
     title = { Text(titleText) },
     text = { Text(bodyText) },
     confirmButton = {
-      TextButton(onClick = onConfirm) { Text(confirmButtonText) }
+      TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmButtonText) }
     },
     dismissButton = {
       if (dismissButtonText != null && onDismiss != null) {
@@ -166,8 +167,14 @@ private fun SetupAlertDialog(
 }
 
 @Composable
-fun WelcomeScreen(onAccept: () -> Unit) {
-  val arm64Ok = remember { isArm64OnlySupported() }
+fun WelcomeScreen(
+  onAccept: () -> Unit,
+  welcomeBodyRes: Int = R.string.setup_welcome_body,
+  featuresBodyRes: Int = R.string.setup_features_body,
+  notesBodyRes: Int = R.string.setup_notes_body,
+  requireArm64: Boolean = true,
+) {
+  val architectureOk = remember(requireArm64) { !requireArm64 || isArm64OnlySupported() }
   val compact = rememberIsCompactWidth()
   val tablet = rememberIsTabletLayout()
   val shortSetupHeight = rememberIsShortHeight()
@@ -209,7 +216,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
         ) {
           ModernSetupHeroCard(
             title = stringResource(R.string.setup_welcome_title),
-            body = stringResource(R.string.setup_welcome_body),
+            body = stringResource(welcomeBodyRes),
             accent = MaterialTheme.colorScheme.primary,
             pose = SetupMascotPose.WELCOME,
             compact = false,
@@ -231,17 +238,17 @@ fun WelcomeScreen(onAccept: () -> Unit) {
             ) {
               ModernSetupInfoCard(
                 title = stringResource(R.string.app_name),
-                body = stringResource(R.string.setup_features_body),
+                body = stringResource(featuresBodyRes),
                 accent = MaterialTheme.colorScheme.primary,
                 dense = true,
               )
               ModernSetupInfoCard(
                 title = stringResource(R.string.setup_notes_title),
-                body = stringResource(R.string.setup_notes_body),
+                body = stringResource(notesBodyRes),
                 accent = MaterialTheme.colorScheme.secondary,
                 dense = true,
               )
-              if (!arm64Ok) {
+              if (!architectureOk) {
                 InstallerNoticeCard(
                   text = stringResource(
                     R.string.setup_arch_unsupported_fmt,
@@ -254,7 +261,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
             }
             SetupPrimaryButton(
               onClick = onAccept,
-              enabled = arm64Ok,
+              enabled = architectureOk,
               modifier = Modifier.fillMaxWidth(),
               text = stringResource(R.string.common_continue),
             )
@@ -272,7 +279,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
         ) {
           ModernSetupHeroCard(
             title = stringResource(R.string.setup_welcome_title),
-            body = stringResource(R.string.setup_welcome_body),
+            body = stringResource(welcomeBodyRes),
             accent = MaterialTheme.colorScheme.primary,
             pose = SetupMascotPose.WELCOME,
             compact = compact,
@@ -286,16 +293,16 @@ fun WelcomeScreen(onAccept: () -> Unit) {
           )
           ModernSetupInfoCard(
             title = stringResource(R.string.app_name),
-            body = stringResource(R.string.setup_features_body),
+            body = stringResource(featuresBodyRes),
             accent = MaterialTheme.colorScheme.primary,
           )
           ModernSetupInfoCard(
             title = stringResource(R.string.setup_notes_title),
-            body = stringResource(R.string.setup_notes_body),
+            body = stringResource(notesBodyRes),
             accent = MaterialTheme.colorScheme.secondary,
           )
 
-          if (!arm64Ok) {
+          if (!architectureOk) {
             InstallerNoticeCard(
               text = stringResource(
                 R.string.setup_arch_unsupported_fmt,
@@ -307,7 +314,7 @@ fun WelcomeScreen(onAccept: () -> Unit) {
 
           SetupPrimaryButton(
             onClick = onAccept,
-            enabled = arm64Ok,
+            enabled = architectureOk,
             modifier = Modifier.fillMaxWidth(),
             text = stringResource(R.string.common_continue),
           )
@@ -319,31 +326,15 @@ fun WelcomeScreen(onAccept: () -> Unit) {
 }
 
 @Composable
-fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: () -> Unit, onContinueWithoutRoot: () -> Unit) {
+fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: () -> Unit) {
   val arm64Ok = remember { isArm64OnlySupported() }
   val compact = rememberIsCompactWidth()
   val tablet = rememberIsTabletLayout()
   val shortSetupHeight = rememberIsShortHeight()
   val screenPadding = rememberAdaptiveScreenPadding()
-  var showNonRootWarning by rememberSaveable { mutableStateOf(false) }
   val rootDescription = stringResource(R.string.setup_root_body)
   val rootHeroBody = rootDescription.substringBefore("\n\n")
   val rootDetailsBody = rootDescription.substringAfter("\n\n", "")
-
-  if (showNonRootWarning) {
-    SetupAlertDialog(
-      onDismissRequest = { showNonRootWarning = false },
-      titleText = stringResource(R.string.setup_non_root_warning_title),
-      bodyText = stringResource(R.string.setup_non_root_warning_body),
-      confirmButtonText = stringResource(R.string.common_continue),
-      onConfirm = {
-        showNonRootWarning = false
-        onContinueWithoutRoot()
-      },
-      dismissButtonText = stringResource(R.string.action_cancel),
-      onDismiss = { showNonRootWarning = false },
-    )
-  }
 
   SetupScaffold { padding ->
     Box(
@@ -441,14 +432,6 @@ fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: (
                 modifier = Modifier.fillMaxWidth(),
                 text = stringResource(R.string.setup_request_root),
               )
-              OutlinedButton(
-                onClick = { showNonRootWarning = true },
-                enabled = arm64Ok,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-              ) {
-                Text(stringResource(R.string.setup_continue_without_root), fontWeight = FontWeight.SemiBold)
-              }
               if (REMOTE_SETUP_ENTRY_ENABLED) {
                 OutlinedButton(onClick = onRemoteSetup, modifier = Modifier.fillMaxWidth()) {
                   Text("Удалённая настройка")
@@ -524,15 +507,6 @@ fun RootInfoScreen(rootState: RootState, onRequest: () -> Unit, onRemoteSetup: (
                 modifier = Modifier.fillMaxWidth(),
                 text = stringResource(R.string.setup_request_root),
               )
-
-              OutlinedButton(
-                onClick = { showNonRootWarning = true },
-                enabled = arm64Ok,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-              ) {
-                Text(stringResource(R.string.setup_continue_without_root), fontWeight = FontWeight.SemiBold)
-              }
 
               if (REMOTE_SETUP_ENTRY_ENABLED) {
                 OutlinedButton(onClick = onRemoteSetup, modifier = Modifier.fillMaxWidth()) {
@@ -851,6 +825,8 @@ fun InstallModuleScreen(
   onDismissZygiskInstallRecovery: () -> Unit,
   onDismissMetamoduleInstallBlocked: () -> Unit,
   onRetryInstallWithoutZygisk: () -> Unit,
+  onDownloadFullRootApk: () -> Unit,
+  onDismissOnlineModuleVersionMismatch: () -> Unit,
 ) {
   val arm64Ok = remember { isArm64OnlySupported() }
   val compact = rememberIsCompactWidth()
@@ -905,6 +881,27 @@ fun InstallModuleScreen(
       onConfirm = onManualConfirm,
       dismissButtonText = stringResource(R.string.common_cancel),
       onDismiss = onManualDismiss,
+    )
+  }
+
+  if (setup.showOnlineModuleVersionMismatchDialog) {
+    val downloadStatus = when {
+      setup.onlineModuleFullApkDownloading -> "\n\n" + stringResource(
+        R.string.prog_update_status_downloading_pct_fmt,
+        setup.onlineModuleFullApkDownloadPercent,
+      )
+      !setup.onlineModuleFullApkError.isNullOrBlank() -> "\n\n" + setup.onlineModuleFullApkError
+      else -> ""
+    }
+    SetupAlertDialog(
+      onDismissRequest = onDismissOnlineModuleVersionMismatch,
+      titleText = stringResource(R.string.setup_online_module_version_mismatch_title),
+      bodyText = setup.onlineModuleVersionMismatchText + downloadStatus,
+      confirmButtonText = stringResource(R.string.setup_online_module_download_full_apk),
+      onConfirm = onDownloadFullRootApk,
+      confirmEnabled = !setup.onlineModuleFullApkDownloading,
+      dismissButtonText = stringResource(R.string.common_cancel),
+      onDismiss = onDismissOnlineModuleVersionMismatch,
     )
   }
 
@@ -2540,4 +2537,3 @@ private fun InstallConflictCard(
     }
   }
 }
-

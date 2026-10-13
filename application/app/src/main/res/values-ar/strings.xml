@@ -2492,8 +2492,8 @@ APatch: ‏10700+</string>
     <string name="non_root_service_state_stopping">الخدمة: قيد الإيقاف</string>
     <string name="non_root_service_state_stopped">الخدمة: متوقفة</string>
     <string name="non_root_service_state_error">الخدمة: خطأ</string>
-    <string name="non_root_switch_root_title">التبديل إلى وضع الروت؟</string>
-    <string name="non_root_switch_root_body">هل تريد التبديل إلى وضع الروت؟ سيفتح معالج الإعداد الحالي عند خطوة طلب صلاحية الروت.</string>
+    <string name="non_root_switch_root_title">تثبيت إصدار الروت الكامل؟</string>
+    <string name="non_root_switch_root_body">سيقوم ZDT-D بتنزيل app-release.apk من أحدث إصدار مستقر، والتحقق من الحزمة والتوقيع، ثم فتح مثبّت Android. سيتم الاحتفاظ بإعداداتك الحالية.</string>
     <string name="non_root_log_preparing_runtime">جارٍ تجهيز بيئة التشغيل دون root…</string>
     <string name="non_root_log_start_mode">جارٍ بدء وضع %1$s…</string>
     <string name="non_root_log_start_component">جارٍ بدء %1$s…</string>
@@ -2576,4 +2576,38 @@ APatch: ‏10700+</string>
     <string name="non_root_tgws_plugin_install_permission_required">اسمح لـ ZDT-D بتثبيت التطبيقات غير المعروفة لمتابعة تثبيت إضافة TGWS.</string>
     <string name="non_root_tgws_plugin_installed_fmt">الإضافة المثبتة: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">الإضافة المتاحة: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">إصدار الوحدة غير متطابق</string>
+    <string name="setup_online_module_version_mismatch_body">إصدار الوحدة التي تم تنزيلها هو %1$s ‏(versionCode %2$s)، بينما إصدار المثبت عبر الإنترنت هو %3$s ‏(versionCode %4$d). لا يمكن تثبيت هذه الوحدة بهذا المثبت. يمكنك بدلاً من ذلك تنزيل ملف APK الكامل بصلاحيات root للإصدار %1$s.</string>
+    <string name="setup_online_module_download_full_apk">تنزيل APK الكامل</string>
+    <string name="setup_online_module_download_failed">تعذر تنزيل وحدة ZDT-D. قد يكون GitHub غير متاح أو قد توجد مشكلة في اتصال الشبكة. حاول مرة أخرى لاحقًا أو نزّل الإصدار الكامل من ZDT-D الذي يتضمن الوحدة مسبقًا.</string>
+    <string name="setup_online_module_installer_missing">لم يتم اكتشاف Magisk أو KernelSU أو APatch. الإصدار عبر الإنترنت لا يتضمن أرشيف الوحدة ولا يمكنه حفظه للتثبيت اليدوي. استخدم مدير root مدعومًا أو نزّل الإصدار الكامل من ZDT-D.</string>
+    <string name="setup_online_full_apk_download_failed">تعذر تنزيل ملف APK الكامل: %1$s</string>
+
+    <string name="vps_open_terminal">فتح الطرفية</string>
+    <string name="vps_terminal_title">الطرفية</string>
+    <string name="vps_terminal_paste">لصق</string>
+    <string name="vps_terminal_preparing">جارٍ إعداد الطرفية</string>
+    <string name="vps_terminal_retry">إعادة المحاولة</string>
+    <string name="vps_terminal_check_tmux">جارٍ التحقق من tmux</string>
+    <string name="vps_terminal_install_tmux">جارٍ تثبيت tmux</string>
+    <string name="vps_terminal_check_session">جارٍ التحقق من zdt-d_console</string>
+    <string name="vps_terminal_create_session">جارٍ إنشاء zdt-d_console</string>
+    <string name="vps_terminal_connect">جارٍ الاتصال بالطرفية</string>
+    <string name="vps_terminal_error_tmux">تعذر تثبيت tmux</string>
+    <string name="vps_terminal_error_session">تعذر إعداد zdt-d_console</string>
+    <string name="vps_terminal_error_connect">تعذر الاتصال بالطرفية</string>
+    <string name="vps_terminal_error_disconnected">تم إغلاق اتصال الطرفية</string>
+    <string name="non_root_log_cascade_backend_skipped">التسلسل: تم تخطي %1$s بعد خطأ في التشغيل: %2$s</string>
+    <string name="non_root_profile_failure_open_log">فتح سجل خطأ التشغيل</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">الوكيل الخارجي</string>
+    <string name="operaproxy_upstream_desc">اختر طريقة اتصال Opera Proxy بالشبكة. يتم اختيار ByeDPI افتراضيًا.</string>
+    <string name="operaproxy_upstream_direct">بدون وكيل</string>
+    <string name="operaproxy_upstream_custom">وكيل مخصص</string>
+    <string name="operaproxy_custom_proxy_title">وكيل خارجي مخصص</string>
+    <string name="operaproxy_custom_proxy_desc">أدخل عنوان URL الكامل للوكيل. يمكن استخدام خوادم بعيدة عبر الإنترنت. الصيغ: http:// وhttps:// وsocks5:// وsocks5h://. يمكن تضمين اسم المستخدم وكلمة المرور في URL.</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">أدخل عنوان وكيل HTTP أو HTTPS أو SOCKS5 أو SOCKS5H صالحًا مع المضيف والمنفذ.</string>
+    <string name="non_root_log_opera_upstream">وكيل Opera الخارجي: %1$s</string>
 </resources>

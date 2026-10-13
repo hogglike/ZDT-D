@@ -535,7 +535,7 @@ fn safe_core_log(all:&[Node]) -> String {
 }
 pub fn diagnostics() -> Result<Value> {
     let bootstrap:Value=fs::read_to_string(root().join("bootstrap.json")).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!([]));
-    Ok(json!({"ok":true,"version":"4.2.0-mod31","status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
+    Ok(json!({"ok":true,"version":include_str!("../../../../module.prop").lines().find_map(|line|line.strip_prefix("version=")).unwrap_or("unknown"),"status":status(),"bootstrap":bootstrap,"network_identity":physical_network(),"dns_profiles":super::dnsprofiles::runtime_status(),"core_log":safe_core_log(&nodes()?)}))
 }
 pub fn choose_server(mode:&str,key:&str) -> Result<()> {
     if !MODES.contains(&mode) {bail!("Unknown mode");}

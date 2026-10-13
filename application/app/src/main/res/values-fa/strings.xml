@@ -2488,8 +2488,8 @@ APatch: 10700+</string>
     <string name="non_root_service_state_stopping">سرویس: در حال توقف</string>
     <string name="non_root_service_state_stopped">سرویس: متوقف</string>
     <string name="non_root_service_state_error">سرویس: خطا</string>
-    <string name="non_root_switch_root_title">به حالت روت تغییر کند؟</string>
-    <string name="non_root_switch_root_body">می‌خواهید به حالت روت تغییر دهید؟ راه‌انداز موجود در مرحله درخواست دسترسی روت باز می‌شود.</string>
+    <string name="non_root_switch_root_title">نسخه کامل روت نصب شود؟</string>
+    <string name="non_root_switch_root_body">ZDT-D فایل app-release.apk را از آخرین نسخه پایدار دانلود می‌کند، بسته و امضا را بررسی می‌کند و سپس نصب‌کننده Android را باز می‌کند. تنظیمات فعلی شما حفظ می‌شود.</string>
     <string name="non_root_log_preparing_runtime">در حال آماده‌سازی محیط بدون روت…</string>
     <string name="non_root_log_start_mode">در حال راه‌اندازی حالت %1$s…</string>
     <string name="non_root_log_start_component">در حال راه‌اندازی %1$s…</string>
@@ -2572,4 +2572,38 @@ APatch: 10700+</string>
     <string name="non_root_tgws_plugin_install_permission_required">برای ادامه نصب افزونه TGWS، به ZDT-D اجازه نصب برنامه‌های ناشناس را بدهید.</string>
     <string name="non_root_tgws_plugin_installed_fmt">افزونه نصب‌شده: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">افزونه موجود: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">نسخه ماژول مطابقت ندارد</string>
+    <string name="setup_online_module_version_mismatch_body">ماژول دانلودشده نسخه %1$s است (versionCode %2$s)، اما این نصب‌کننده آنلاین نسخه %3$s است (versionCode %4$d). نصب این ماژول با این نصب‌کننده ممکن نیست. می‌توانید به‌جای آن APK کامل root نسخه %1$s را دانلود کنید.</string>
+    <string name="setup_online_module_download_full_apk">دانلود APK کامل</string>
+    <string name="setup_online_module_download_failed">دانلود ماژول ZDT-D انجام نشد. ممکن است GitHub در دسترس نباشد یا اتصال شبکه مشکل داشته باشد. بعداً دوباره تلاش کنید یا نسخه کامل ZDT-D را دانلود کنید که ماژول از قبل در آن قرار دارد.</string>
+    <string name="setup_online_module_installer_missing">Magisk، KernelSU یا APatch شناسایی نشد. نسخه آنلاین آرشیو ماژول را در خود ندارد و نمی‌تواند آن را برای نصب دستی ذخیره کند. از یک مدیر روت پشتیبانی‌شده استفاده کنید یا نسخه کامل ZDT-D را دانلود کنید.</string>
+    <string name="setup_online_full_apk_download_failed">دانلود APK کامل انجام نشد: %1$s</string>
+
+    <string name="vps_open_terminal">باز کردن ترمینال</string>
+    <string name="vps_terminal_title">ترمینال</string>
+    <string name="vps_terminal_paste">چسباندن</string>
+    <string name="vps_terminal_preparing">در حال آماده‌سازی ترمینال</string>
+    <string name="vps_terminal_retry">تلاش دوباره</string>
+    <string name="vps_terminal_check_tmux">در حال بررسی tmux</string>
+    <string name="vps_terminal_install_tmux">در حال نصب tmux</string>
+    <string name="vps_terminal_check_session">در حال بررسی zdt-d_console</string>
+    <string name="vps_terminal_create_session">در حال ایجاد zdt-d_console</string>
+    <string name="vps_terminal_connect">در حال اتصال ترمینال</string>
+    <string name="vps_terminal_error_tmux">نصب tmux ممکن نشد</string>
+    <string name="vps_terminal_error_session">آماده‌سازی zdt-d_console ممکن نشد</string>
+    <string name="vps_terminal_error_connect">اتصال به ترمینال ممکن نشد</string>
+    <string name="vps_terminal_error_disconnected">اتصال ترمینال بسته شد</string>
+    <string name="non_root_log_cascade_backend_skipped">آبشاری: %1$s به‌دلیل خطای راه‌اندازی رد شد: %2$s</string>
+    <string name="non_root_profile_failure_open_log">باز کردن گزارش خطای راه‌اندازی</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">پراکسی بالادستی</string>
+    <string name="operaproxy_upstream_desc">روش اتصال Opera Proxy به شبکه را انتخاب کنید. به‌صورت پیش‌فرض ByeDPI انتخاب است.</string>
+    <string name="operaproxy_upstream_direct">بدون پراکسی</string>
+    <string name="operaproxy_upstream_custom">پراکسی دلخواه</string>
+    <string name="operaproxy_custom_proxy_title">پراکسی بالادستی دلخواه</string>
+    <string name="operaproxy_custom_proxy_desc">نشانی کامل پراکسی را وارد کنید. سرورهای راه‌دور اینترنتی پشتیبانی می‌شوند. قالب‌ها: http://، https://، socks5:// و socks5h://. نام کاربری و رمز عبور می‌توانند در URL باشند.</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">یک URL معتبر HTTP، HTTPS، SOCKS5 یا SOCKS5H همراه میزبان و پورت وارد کنید.</string>
+    <string name="non_root_log_opera_upstream">پراکسی بالادستی Opera: %1$s</string>
 </resources>

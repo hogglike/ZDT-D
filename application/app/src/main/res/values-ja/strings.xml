@@ -2487,8 +2487,8 @@ ZDT-D を正しくインストールするには、metamodule が正常に動作
     <string name="non_root_service_state_stopping">サービス: 停止中</string>
     <string name="non_root_service_state_stopped">サービス: 停止</string>
     <string name="non_root_service_state_error">サービス: エラー</string>
-    <string name="non_root_switch_root_title">root モードに切り替えますか？</string>
-    <string name="non_root_switch_root_body">root モードに切り替えますか？ 既存のセットアップウィザードが root アクセス要求の手順から開きます。</string>
+    <string name="non_root_switch_root_title">完全な root 版をインストールしますか？</string>
+    <string name="non_root_switch_root_body">ZDT-D は最新の安定版リリースから app-release.apk をダウンロードし、パッケージと署名を確認して Android インストーラーを開きます。現在の設定は保持されます。</string>
     <string name="non_root_log_preparing_runtime">非 root ランタイムを準備しています…</string>
     <string name="non_root_log_start_mode">%1$s モードを開始しています…</string>
     <string name="non_root_log_start_component">%1$s を開始しています…</string>
@@ -2571,4 +2571,38 @@ ZDT-D を正しくインストールするには、metamodule が正常に動作
     <string name="non_root_tgws_plugin_install_permission_required">TGWSプラグインのインストールを続行するには、ZDT-Dに不明なアプリのインストールを許可してください。</string>
     <string name="non_root_tgws_plugin_installed_fmt">インストール済みプラグイン: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">利用可能なプラグイン: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">モジュールのバージョンが一致しません</string>
+    <string name="setup_online_module_version_mismatch_body">ダウンロードしたモジュールはバージョン %1$s（versionCode %2$s）ですが、このオンラインインストーラーはバージョン %3$s（versionCode %4$d）です。このモジュールはこのインストーラーではインストールできません。代わりにバージョン %1$s の完全な root APK をダウンロードできます。</string>
+    <string name="setup_online_module_download_full_apk">完全版 APK をダウンロード</string>
+    <string name="setup_online_module_download_failed">ZDT-D モジュールをダウンロードできませんでした。GitHub にアクセスできないか、ネットワーク接続に問題がある可能性があります。後でもう一度試すか、モジュールが組み込まれている ZDT-D の完全版をダウンロードしてください。</string>
+    <string name="setup_online_module_installer_missing">Magisk、KernelSU、APatch を検出できませんでした。オンライン版にはモジュールアーカイブが含まれていないため、手動インストール用に保存できません。対応する root マネージャーを使用するか、ZDT-D の完全版をダウンロードしてください。</string>
+    <string name="setup_online_full_apk_download_failed">完全版 APK をダウンロードできませんでした: %1$s</string>
+
+    <string name="vps_open_terminal">ターミナルを開く</string>
+    <string name="vps_terminal_title">ターミナル</string>
+    <string name="vps_terminal_paste">貼り付け</string>
+    <string name="vps_terminal_preparing">ターミナルを準備しています</string>
+    <string name="vps_terminal_retry">再試行</string>
+    <string name="vps_terminal_check_tmux">tmux を確認しています</string>
+    <string name="vps_terminal_install_tmux">tmux をインストールしています</string>
+    <string name="vps_terminal_check_session">zdt-d_console を確認しています</string>
+    <string name="vps_terminal_create_session">zdt-d_console を作成しています</string>
+    <string name="vps_terminal_connect">ターミナルに接続しています</string>
+    <string name="vps_terminal_error_tmux">tmux をインストールできませんでした</string>
+    <string name="vps_terminal_error_session">zdt-d_console を準備できませんでした</string>
+    <string name="vps_terminal_error_connect">ターミナルに接続できませんでした</string>
+    <string name="vps_terminal_error_disconnected">ターミナル接続が閉じられました</string>
+    <string name="non_root_log_cascade_backend_skipped">カスケード: 起動エラーのため %1$s をスキップしました: %2$s</string>
+    <string name="non_root_profile_failure_open_log">起動エラーログを開く</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">アップストリームプロキシ</string>
+    <string name="operaproxy_upstream_desc">Opera Proxy の外向き接続方法を選択します。既定では ByeDPI が選択されています。</string>
+    <string name="operaproxy_upstream_direct">プロキシなし</string>
+    <string name="operaproxy_upstream_custom">カスタムプロキシ</string>
+    <string name="operaproxy_custom_proxy_title">カスタムアップストリームプロキシ</string>
+    <string name="operaproxy_custom_proxy_desc">完全なプロキシ URL を入力してください。インターネット上のリモートサーバーも使用できます。形式: http://、https://、socks5://、socks5h://。認証情報を URL に含めることもできます。</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">ホストとポートを含む有効な HTTP、HTTPS、SOCKS5、SOCKS5H プロキシ URL を入力してください。</string>
+    <string name="non_root_log_opera_upstream">Opera アップストリーム: %1$s</string>
 </resources>

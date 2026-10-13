@@ -2487,8 +2487,8 @@ Kalan neden muhtemelen daemon/API tarafındadır. Kesin yazma hatası için daem
     <string name="non_root_service_state_stopping">Hizmet: durduruluyor</string>
     <string name="non_root_service_state_stopped">Hizmet: durduruldu</string>
     <string name="non_root_service_state_error">Hizmet: hata</string>
-    <string name="non_root_switch_root_title">Root moduna geçilsin mi?</string>
-    <string name="non_root_switch_root_body">Root moduna geçmek istiyor musunuz? Mevcut kurulum sihirbazı root erişimi isteme adımında açılacaktır.</string>
+    <string name="non_root_switch_root_title">Tam root sürümü yüklensin mi?</string>
+    <string name="non_root_switch_root_body">ZDT-D, en son kararlı sürümden app-release.apk dosyasını indirecek, paketi ve imzayı doğrulayacak ve Android yükleyicisini açacaktır. Mevcut ayarlarınız korunacaktır.</string>
     <string name="non_root_log_preparing_runtime">Root olmadan çalışma ortamı hazırlanıyor…</string>
     <string name="non_root_log_start_mode">%1$s modu başlatılıyor…</string>
     <string name="non_root_log_start_component">%1$s başlatılıyor…</string>
@@ -2571,4 +2571,38 @@ Kalan neden muhtemelen daemon/API tarafındadır. Kesin yazma hatası için daem
     <string name="non_root_tgws_plugin_install_permission_required">TGWS eklentisinin kurulumuna devam etmek için ZDT-D’ye bilinmeyen uygulamaları yükleme izni verin.</string>
     <string name="non_root_tgws_plugin_installed_fmt">Yüklü eklenti: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">Kullanılabilir eklenti: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">Modül sürümü eşleşmiyor</string>
+    <string name="setup_online_module_version_mismatch_body">İndirilen modül %1$s sürümüdür (versionCode %2$s), ancak bu çevrimiçi yükleyici %3$s sürümüdür (versionCode %4$d). Bu modül bu yükleyiciyle kurulamaz. Bunun yerine %1$s sürümünün tam root APK dosyasını indirebilirsiniz.</string>
+    <string name="setup_online_module_download_full_apk">Tam APK dosyasını indir</string>
+    <string name="setup_online_module_download_failed">ZDT-D modülü indirilemedi. GitHub erişilemiyor olabilir veya ağ bağlantısında bir sorun olabilir. Daha sonra tekrar deneyin ya da modülün gömülü olduğu tam ZDT-D sürümünü indirin.</string>
+    <string name="setup_online_module_installer_missing">Magisk, KernelSU veya APatch algılanamadı. Çevrimiçi sürüm modül arşivini içermez ve elle kurulum için kaydedemez. Desteklenen bir root yöneticisi kullanın veya tam ZDT-D sürümünü indirin.</string>
+    <string name="setup_online_full_apk_download_failed">Tam APK indirilemedi: %1$s</string>
+
+    <string name="vps_open_terminal">Terminali aç</string>
+    <string name="vps_terminal_title">Terminal</string>
+    <string name="vps_terminal_paste">Yapıştır</string>
+    <string name="vps_terminal_preparing">Terminal hazırlanıyor</string>
+    <string name="vps_terminal_retry">Yeniden dene</string>
+    <string name="vps_terminal_check_tmux">tmux kontrol ediliyor</string>
+    <string name="vps_terminal_install_tmux">tmux kuruluyor</string>
+    <string name="vps_terminal_check_session">zdt-d_console kontrol ediliyor</string>
+    <string name="vps_terminal_create_session">zdt-d_console oluşturuluyor</string>
+    <string name="vps_terminal_connect">Terminale bağlanılıyor</string>
+    <string name="vps_terminal_error_tmux">tmux kurulamadı</string>
+    <string name="vps_terminal_error_session">zdt-d_console hazırlanamadı</string>
+    <string name="vps_terminal_error_connect">Terminale bağlanılamadı</string>
+    <string name="vps_terminal_error_disconnected">Terminal bağlantısı kapatıldı</string>
+    <string name="non_root_log_cascade_backend_skipped">Kaskad: %1$s başlatma hatası nedeniyle atlandı: %2$s</string>
+    <string name="non_root_profile_failure_open_log">Başlatma hatası günlüğünü aç</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">Üst proxy</string>
+    <string name="operaproxy_upstream_desc">Opera Proxy’nin ağa nasıl bağlanacağını seçin. Varsayılan olarak ByeDPI seçilidir.</string>
+    <string name="operaproxy_upstream_direct">Proxy yok</string>
+    <string name="operaproxy_upstream_custom">Özel proxy</string>
+    <string name="operaproxy_custom_proxy_title">Özel üst proxy</string>
+    <string name="operaproxy_custom_proxy_desc">Tam proxy URL’sini girin. İnternetteki uzak sunucular desteklenir. Biçimler: http://, https://, socks5:// ve socks5h://. Kullanıcı adı ve parola URL içinde belirtilebilir.</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">Ana bilgisayar ve bağlantı noktası içeren geçerli bir HTTP, HTTPS, SOCKS5 veya SOCKS5H proxy URL’si girin.</string>
+    <string name="non_root_log_opera_upstream">Opera üst proxy: %1$s</string>
 </resources>

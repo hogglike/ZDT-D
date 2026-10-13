@@ -43,10 +43,12 @@ class NonRootVpnService : VpnService() {
   private val processes = mutableListOf<ManagedProcess>()
   @Volatile private var hevStarted = false
   @Volatile private var stopRequested = false
+  @Volatile private var desiredRunning = false
 
   override fun onCreate() {
     super.onCreate()
     runtimeStore.ensureLayout()
+    AppStorageMaintenance.trimNonRootVpnLogs(applicationContext)
     ensureNotificationChannel()
   }
 
@@ -74,28 +76,39 @@ class NonRootVpnService : VpnService() {
   }
 
   private fun requestStart() {
+    desiredRunning = true
     val current = NonRootVpnRuntime.state.value
     if (current == NonRootVpnState.STARTING || current == NonRootVpnState.RUNNING) return
-    if (com.android.zdtd.service.watch.WatchDnsRuntime.active()) {
-      NonRootVpnRuntime.update(NonRootVpnState.ERROR, "Сначала выключи DNS часов")
+    if (current == NonRootVpnState.STOPPING) {
+      // Let the active cleanup finish. Its completion path will immediately
+      // honor the latest desired state and start a fresh runtime.
       return
     }
+    launchStartRuntime()
+  }
+
+  private fun launchStartRuntime() {
+    if (!desiredRunning) return
     stopRequested = false
     startForegroundCompat(buildNotification())
     runtimeJob?.cancel()
-    NonRootVpnRuntime.update(NonRootVpnState.STARTING)
     runtimeJob = serviceScope.launch {
       NonRootVpnRuntime.clearLogs()
+      NonRootVpnRuntime.clearProfileFailures()
       NonRootVpnRuntime.update(NonRootVpnState.STARTING)
       NonRootVpnRuntime.log(getString(R.string.non_root_log_preparing_runtime))
       try {
         startNativeRuntime()
-        if (!stopRequested) {
+        if (desiredRunning && !stopRequested) {
           NonRootVpnRuntime.update(NonRootVpnState.RUNNING)
           NonRootVpnRuntime.log(getString(R.string.non_root_log_vpn_running))
+        } else {
+          stopNativeRuntime(reportProgress = true)
+          NonRootVpnRuntime.update(NonRootVpnState.STOPPED)
+          NonRootVpnRuntime.log(getString(R.string.non_root_log_vpn_stopped))
         }
       } catch (_: CancellationException) {
-        if (!stopRequested) throw CancellationException()
+        // A STARTING -> STOP request cancels this job. The stop job owns cleanup.
       } catch (t: Throwable) {
         stopNativeRuntime()
         val message = t.message ?: t.javaClass.simpleName
@@ -104,6 +117,7 @@ class NonRootVpnService : VpnService() {
           NonRootRuntimeLogLevel.ERROR,
         )
         NonRootVpnRuntime.update(NonRootVpnState.ERROR, message)
+        desiredRunning = false
         stopForegroundCompat()
         stopSelf()
       }
@@ -111,17 +125,32 @@ class NonRootVpnService : VpnService() {
   }
 
   private fun requestStop() {
-    if (stopRequested) return
+    desiredRunning = false
+    val current = NonRootVpnRuntime.state.value
+    if (current == NonRootVpnState.STOPPED) {
+      stopForegroundCompat()
+      stopSelf()
+      return
+    }
+    if (current == NonRootVpnState.STOPPING) return
     stopRequested = true
     NonRootVpnRuntime.update(NonRootVpnState.STOPPING)
     NonRootVpnRuntime.log(getString(R.string.non_root_log_stop_requested))
     runtimeJob?.cancel()
     runtimeJob = serviceScope.launch {
       stopNativeRuntime(reportProgress = true)
-      NonRootVpnRuntime.update(NonRootVpnState.STOPPED)
-      NonRootVpnRuntime.log(getString(R.string.non_root_log_vpn_stopped))
-      stopForegroundCompat()
-      stopSelf()
+      if (desiredRunning) {
+        // STOPPING -> START: cleanup completes first, then the newest user
+        // intent wins without racing old and new native processes. Clear the
+        // field first so launchStartRuntime() cannot cancel this cleanup job.
+        runtimeJob = null
+        launchStartRuntime()
+      } else {
+        NonRootVpnRuntime.update(NonRootVpnState.STOPPED)
+        NonRootVpnRuntime.log(getString(R.string.non_root_log_vpn_stopped))
+        stopForegroundCompat()
+        stopSelf()
+      }
     }
   }
 
@@ -193,33 +222,57 @@ class NonRootVpnService : VpnService() {
     val orderedProfiles = state.route.mapNotNull { item ->
       if (item.type == NonRootCascadeRouteItemType.PROFILE) enabled[item.profileId] else null
     }
-    val hasBackend = orderedProfiles.any { cascadePorts(it).isNotEmpty() }
-    if (!hasBackend && state.route.none { it.type == NonRootCascadeRouteItemType.DIRECT_START }) {
+    val hasConfiguredBackend = orderedProfiles.any { cascadePorts(it).isNotEmpty() }
+    val hasDirectFallback = state.route.any { it.type == NonRootCascadeRouteItemType.DIRECT_START }
+    if (!hasConfiguredBackend && !hasDirectFallback) {
       error("Cascade has no enabled proxy server")
     }
 
+    // Cascade is intentionally best-effort: one broken backend must not tear
+    // down healthy routes. Only ports that actually reached READY are passed
+    // to T2S below. Direct mode remains strict in startDirect().
+    val healthyPorts = linkedMapOf<String, MutableList<Int>>()
     for (profile in orderedProfiles) {
       when (profile.toolId) {
-        NonRootCascadeProfile.TOOL_OPERA_PROXY -> startOperaProfile(
-          label = "cascade-${safeFileName(profile.id)}",
-          displayName = profile.name,
-          port = profile.port,
-          byedpiPort = profile.byedpiPort,
-          config = profile.operaConfig,
-        )
+        NonRootCascadeProfile.TOOL_OPERA_PROXY -> {
+          val label = "cascade-${safeFileName(profile.id)}"
+          try {
+            startOperaProfile(
+              label = label,
+              displayName = profile.name,
+              port = profile.port,
+              byedpiPort = profile.byedpiPort,
+              config = profile.operaConfig,
+            )
+            healthyPorts.getOrPut(profile.id) { mutableListOf() } += profile.port
+          } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            stopProcess("opera-$label")
+            stopProcess("byedpi-$label")
+            reportCascadeFailure(profile, null, t)
+          }
+        }
         else -> profile.servers.filter { it.enabled }.forEachIndexed { index, server ->
-          startBackendServer(
-            profile = profile,
-            server = server,
-            label = "cascade-${safeFileName(profile.id)}-${index + 1}-${safeFileName(server.id)}",
-          )
+          val label = "cascade-${safeFileName(profile.id)}-${index + 1}-${safeFileName(server.id)}"
+          try {
+            startBackendServer(profile = profile, server = server, label = label)
+            healthyPorts.getOrPut(profile.id) { mutableListOf() } += server.port
+          } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            stopProcess(label)
+            reportCascadeFailure(profile, server, t)
+          }
         }
       }
     }
 
+    if (healthyPorts.values.none { it.isNotEmpty() } && !hasDirectFallback) {
+      error("Cascade has no working proxy server")
+    }
+
     val listenPort = portRegistry.getOrAllocate(NonRootPortRegistry.T2S_LISTEN_KEY)
     val apiPort = portRegistry.getOrAllocate(NonRootPortRegistry.T2S_API_KEY)
-    val args = buildT2sArgs(state, enabled, listenPort, apiPort)
+    val args = buildT2sArgs(state, healthyPorts, listenPort, apiPort)
     NonRootVpnRuntime.log(getString(R.string.non_root_log_start_component, "T2S"))
     startProcess(
       name = "t2s",
@@ -233,6 +286,29 @@ class NonRootVpnService : VpnService() {
     val token = runtimeStore.ensureApiToken().readText().trim()
     check(token.isNotEmpty()) { "Non-root API token is empty" }
     return SocksTarget(port = listenPort, username = "zdtd", password = token, udpMode = "udp")
+  }
+
+  private fun reportCascadeFailure(
+    profile: NonRootCascadeProfile,
+    server: NonRootBackendServer?,
+    throwable: Throwable,
+  ) {
+    val message = throwable.message ?: throwable.javaClass.simpleName
+    val target = if (server == null) profile.name else "${profile.name} / ${server.name}"
+    NonRootVpnRuntime.log(
+      getString(R.string.non_root_log_cascade_backend_skipped, target, message),
+      NonRootRuntimeLogLevel.ERROR,
+    )
+    NonRootVpnRuntime.reportProfileFailure(
+      NonRootProfileFailure(
+        profileId = profile.id,
+        toolId = profile.toolId,
+        profileName = profile.name,
+        serverId = server?.id,
+        serverName = server?.name,
+        message = message,
+      )
+    )
   }
 
   private suspend fun startBackendServer(
@@ -354,7 +430,12 @@ class NonRootVpnService : VpnService() {
   ) {
     val sni = config.serverSni.trim().takeIf { it.isNotEmpty() }
       ?: error("Opera Proxy requires an SNI")
-    val useByeDpi = config.useByedpi
+    val upstreamMode = normalizeOperaUpstreamMode(config.upstreamMode, config.useByedpi)
+    val useByeDpi = upstreamMode == OPERA_UPSTREAM_BYEDPI
+    val customUpstream = config.customUpstreamProxy.trim()
+    if (upstreamMode == OPERA_UPSTREAM_CUSTOM && !isValidOperaCustomProxy(customUpstream)) {
+      error(getString(R.string.operaproxy_custom_proxy_error))
+    }
 
     if (useByeDpi) {
       NonRootVpnRuntime.log(getString(R.string.non_root_log_start_component, "ByeDPI · $displayName"))
@@ -389,7 +470,17 @@ class NonRootVpnService : VpnService() {
       logFile = File(runtimeStore.logsDir, "api_proxy_check-$label.log"),
     )
     if (!selectedApiProxy.isNullOrBlank()) operaArgs += listOf("-api-proxy", selectedApiProxy)
-    if (useByeDpi) operaArgs += listOf("-proxy", "socks5://${NonRootPortRegistry.LOOPBACK}:$byedpiPort")
+    val upstreamProxy = when (upstreamMode) {
+      OPERA_UPSTREAM_BYEDPI -> "socks5://${NonRootPortRegistry.LOOPBACK}:$byedpiPort"
+      OPERA_UPSTREAM_CUSTOM -> customUpstream
+      else -> null
+    }
+    if (!upstreamProxy.isNullOrBlank()) {
+      operaArgs += listOf("-proxy", upstreamProxy)
+      NonRootVpnRuntime.log(
+        getString(R.string.non_root_log_opera_upstream, maskOperaProxyForLog(upstreamProxy)),
+      )
+    }
     if (config.overrideProxyAddress.isNotBlank()) {
       operaArgs += listOf("-override-proxy-address", config.overrideProxyAddress.trim())
     }
@@ -425,13 +516,13 @@ class NonRootVpnService : VpnService() {
 
   private fun buildT2sArgs(
     state: NonRootCascadeState,
-    enabledProfiles: Map<String, NonRootCascadeProfile>,
+    healthyPorts: Map<String, List<Int>>,
     listenPort: Int,
     apiPort: Int,
   ): List<String> {
     val actualPorts = state.route.flatMap { item ->
       if (item.type == NonRootCascadeRouteItemType.PROFILE) {
-        enabledProfiles[item.profileId]?.let(::cascadePorts).orEmpty()
+        healthyPorts[item.profileId].orEmpty()
       } else emptyList()
     }
     val directFirst = state.backendMode == NonRootCascadeBackendMode.PRIORITY &&
@@ -469,7 +560,7 @@ class NonRootVpnService : VpnService() {
       "--scope", "nonroot/cascade",
     )
     if (state.backendMode == NonRootCascadeBackendMode.PRIORITY) {
-      priorityGroups(state.route, enabledProfiles).takeIf { it.isNotBlank() }?.let {
+      priorityGroups(state.route, healthyPorts).takeIf { it.isNotBlank() }?.let {
         args += listOf("--backend-priority", it)
       }
       if (state.t2s.prioritySpeedAware) args += "--priority-speed-aware"
@@ -481,12 +572,12 @@ class NonRootVpnService : VpnService() {
 
   private fun priorityGroups(
     route: List<NonRootCascadeRouteItem>,
-    profiles: Map<String, NonRootCascadeProfile>,
+    healthyPorts: Map<String, List<Int>>,
   ): String {
     val groups = mutableListOf<MutableList<Int>>(mutableListOf())
     route.forEach { item ->
       when (item.type) {
-        NonRootCascadeRouteItemType.PROFILE -> profiles[item.profileId]?.let { groups.last() += cascadePorts(it) }
+        NonRootCascadeRouteItemType.PROFILE -> healthyPorts[item.profileId]?.let { groups.last() += it }
         NonRootCascadeRouteItemType.GROUP -> if (groups.last().isNotEmpty()) groups.add(mutableListOf())
         NonRootCascadeRouteItemType.DIRECT_START,
         NonRootCascadeRouteItemType.DIRECT_BLOCK -> Unit
@@ -626,17 +717,23 @@ class NonRootVpnService : VpnService() {
     val builder = ProcessBuilder(listOf(executable.absolutePath) + args)
       .directory(runtimeStore.runtimeDir)
       .redirectErrorStream(true)
-      .redirectOutput(ProcessBuilder.Redirect.to(logFile))
+      .redirectOutput(ProcessBuilder.Redirect.PIPE)
     builder.environment().putAll(environment)
     val process = builder.start()
-    processes += ManagedProcess(name, process)
+    val logJob = serviceScope.launch(Dispatchers.IO) {
+      runCatching { BoundedLogWriter.copyProcessOutput(process.inputStream, logFile) }
+    }
+    processes += ManagedProcess(name, process, logJob)
     return process
   }
 
   @Synchronized
   private fun stopProcess(name: String) {
     val matches = processes.filter { it.name == name }
-    matches.forEach { terminateProcess(it.process) }
+    matches.forEach {
+      terminateProcess(it.process)
+      it.logJob.cancel()
+    }
     processes.removeAll(matches.toSet())
   }
 
@@ -654,9 +751,14 @@ class NonRootVpnService : VpnService() {
     }
     if (processes.isNotEmpty()) {
       if (reportProgress) NonRootVpnRuntime.log(getString(R.string.non_root_log_stop_proxy_processes))
-      processes.asReversed().forEach { terminateProcess(it.process) }
+      processes.asReversed().forEach {
+        terminateProcess(it.process)
+        it.logJob.cancel()
+      }
       processes.clear()
     }
+    AppStorageMaintenance.trimNonRootVpnLogs(applicationContext)
+    AppStorageMaintenance.cleanupNonRootRuntimeWorkspace(applicationContext)
   }
 
   private fun terminateProcess(process: Process) {
@@ -759,18 +861,17 @@ class NonRootVpnService : VpnService() {
     val udpMode: String = "tcp",
   )
 
-  private data class ManagedProcess(val name: String, val process: Process)
+  private data class ManagedProcess(val name: String, val process: Process, val logJob: Job)
 
   private object HevBridge {
-    @Volatile private var lease: VpnHevBridge.Lease? = null
-    fun start(configPath: String, fd: Int): Boolean {
-      val current = VpnHevBridge.reserve("nonroot")
-      lease = current
-      try { return VpnHevBridge.run(current, configPath, fd) }
-      finally { if (lease === current) lease = null }
-    }
-    fun stop(): Boolean = lease?.let { VpnHevBridge.stop(it) } ?: false
-    fun isRunning(): Boolean = lease?.let { VpnHevBridge.isRunning(it) } ?: false
+    private val clazz by lazy { Class.forName("hev.htproxy.TProxyService") }
+    private val startMethod by lazy { clazz.getMethod("TProxyStartService", String::class.java, java.lang.Integer.TYPE) }
+    private val stopMethod by lazy { clazz.getMethod("TProxyStopService") }
+    private val runningMethod by lazy { clazz.getMethod("TProxyIsRunning") }
+
+    fun start(configPath: String, fd: Int): Boolean = startMethod.invoke(null, configPath, fd) as? Boolean ?: false
+    fun stop(): Boolean = stopMethod.invoke(null) as? Boolean ?: false
+    fun isRunning(): Boolean = runningMethod.invoke(null) as? Boolean ?: false
   }
 
   private fun upsertWireProxySocks5Bind(configText: String, port: Int): String {
@@ -849,4 +950,3 @@ class NonRootVpnService : VpnService() {
     }
   }
 }
-

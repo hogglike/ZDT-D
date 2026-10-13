@@ -24,16 +24,23 @@ import com.android.zdtd.service.ui.ZdtdApp
 import com.android.zdtd.service.ui.theme.ZdtdTheme
 import com.android.zdtd.service.ui.theme.ZdtdThemeMode
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
   companion object {
     const val EXTRA_OPEN_ROOT_SETUP = "com.android.zdtd.service.extra.OPEN_ROOT_SETUP"
+    private const val STATE_INSTALLER_APK = "storage.installer_apk"
+    private const val STATE_SHARED_CACHE = "storage.shared_cache"
   }
 
   private val vm: MainViewModel by viewModels()
-  private var redirectedToNonRoot = false
+  private var pendingInstallerApkPath: String? = null
+  private var installerPausedActivity = false
+  private var pendingSharedCachePath: String? = null
+  private var sharePausedActivity = false
 
   private val unknownSourcesLauncher = registerForActivityResult(
     ActivityResultContracts.StartActivityForResult()
@@ -57,6 +64,12 @@ class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 
+    AppStorageMaintenance.cleanupOnAppStart(applicationContext)
+    pendingInstallerApkPath = savedInstanceState?.getString(STATE_INSTALLER_APK)
+    installerPausedActivity = pendingInstallerApkPath != null
+    pendingSharedCachePath = savedInstanceState?.getString(STATE_SHARED_CACHE)
+    sharePausedActivity = pendingSharedCachePath != null
+
     // Apply the persisted ZDT-D theme to status-bar icon appearance before
     // the first Compose frame. This prevents a light-theme launch from briefly
     // inheriting white icons from a dark system/AppCompat theme. The bar itself
@@ -70,15 +83,6 @@ class MainActivity : AppCompatActivity() {
 
     // Capture crashes to a local file so we can diagnose issues even without logcat.
     CrashLogger.install(applicationContext)
-
-    // Non-root is a separate application runtime/activity. Root-only backup and
-    // daemon flows must not be entered while the limited runtime is selected.
-    if (RootConfigManager(applicationContext).isNonRootRuntimeMode()) {
-      redirectedToNonRoot = true
-      startActivity(Intent(this, NonRootActivity::class.java))
-      finish()
-      return
-    }
 
     // Detect a true cold start from launcher (to show the optional module update prompt).
     val fromLauncher = intent?.action == Intent.ACTION_MAIN && (intent?.categories?.contains(Intent.CATEGORY_LAUNCHER) == true)
@@ -145,25 +149,10 @@ class MainActivity : AppCompatActivity() {
             backupFlow = vm.backup,
             programUpdatesFlow = vm.programUpdates,
             actions = remember(vm) { vm },
-            onContinueWithoutRoot = ::enterNonRootMode,
           )
         }
       }
     }
-  }
-
-  private fun enterNonRootMode() {
-    val config = RootConfigManager(applicationContext)
-    config.setRuntimeMode("non_root")
-    runCatching { NonRootRuntimeStore(applicationContext).ensureLayout() }
-      .onFailure {
-        Toast.makeText(this, it.message ?: getString(R.string.common_error), Toast.LENGTH_LONG).show()
-        config.setRuntimeMode("root")
-        return
-      }
-    redirectedToNonRoot = true
-    startActivity(Intent(this, NonRootActivity::class.java))
-    finish()
   }
 
   private fun applyInitialStatusBarAppearance() {
@@ -220,8 +209,14 @@ class MainActivity : AppCompatActivity() {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
+      pendingInstallerApkPath = filePath
+      installerPausedActivity = false
+      AppStorageMaintenance.markInstallerArtifact(applicationContext, filePath)
       startActivity(i)
     }.onFailure {
+      pendingInstallerApkPath = null
+      installerPausedActivity = false
+      vm.onApkInstallerReturned(filePath)
       // Fallback to releases page if install intent fails.
       openUrl("https://github.com/GAME-OVER-op/ZDT-D/releases")
     }
@@ -236,24 +231,57 @@ class MainActivity : AppCompatActivity() {
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
       }
+      pendingSharedCachePath = filePath
+      sharePausedActivity = false
       startActivity(Intent.createChooser(i, getString(R.string.ma_share_backup)))
     }.onFailure {
+      pendingSharedCachePath = null
+      sharePausedActivity = false
+      AppStorageMaintenance.deleteCacheArtifact(applicationContext, filePath)
       Toast.makeText(this, getString(R.string.ma_share_failed), Toast.LENGTH_SHORT).show()
     }
   }
 
+  override fun onPause() {
+    if (pendingInstallerApkPath != null) installerPausedActivity = true
+    if (pendingSharedCachePath != null) sharePausedActivity = true
+    super.onPause()
+  }
+
+  override fun onSaveInstanceState(outState: Bundle) {
+    pendingInstallerApkPath?.let { outState.putString(STATE_INSTALLER_APK, it) }
+    pendingSharedCachePath?.let { outState.putString(STATE_SHARED_CACHE, it) }
+    super.onSaveInstanceState(outState)
+  }
+
   override fun onStart() {
     super.onStart()
-    if (!redirectedToNonRoot) vm.setAppVisible(true)
+    vm.setAppVisible(true)
   }
 
   override fun onStop() {
-    if (!redirectedToNonRoot) vm.setAppVisible(false)
+    vm.setAppVisible(false)
     super.onStop()
   }
 
   override fun onResume() {
     super.onResume()
-    if (!redirectedToNonRoot) vm.onAppResumed()
+    if (installerPausedActivity) {
+      val path = pendingInstallerApkPath
+      pendingInstallerApkPath = null
+      installerPausedActivity = false
+      vm.onApkInstallerReturned(path)
+    }
+    if (sharePausedActivity) {
+      val path = pendingSharedCachePath
+      pendingSharedCachePath = null
+      sharePausedActivity = false
+      lifecycleScope.launch(Dispatchers.IO) {
+        // Give the receiving app enough time to open the granted FileProvider URI.
+        delay(5L * 60L * 1000L)
+        AppStorageMaintenance.deleteCacheArtifact(applicationContext, path)
+      }
+    }
+    vm.onAppResumed()
   }
 }

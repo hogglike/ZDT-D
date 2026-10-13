@@ -28,13 +28,28 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class NonRootActivity : AppCompatActivity() {
+  private companion object {
+    const val STATE_PLUGIN_INSTALLER = "storage.plugin_installer"
+    const val STATE_FULL_APP_INSTALLER = "storage.full_app_installer"
+  }
+
   private val vm: NonRootViewModel by viewModels()
   private val vpsVm: com.android.zdtd.service.vps.VpsViewModel by viewModels()
+  private var pendingPluginInstaller = false
+  private var pendingFullAppInstaller = false
+  private var installerPausedActivity = false
   private val pluginInstallPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
-      vm.installDownloadedTgWsPlugin()
+      launchDownloadedTgWsPluginInstaller()
     } else {
       vm.onTgWsPluginInstallPermissionDenied()
+    }
+  }
+  private val fullAppInstallPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+      launchDownloadedFullAppInstaller()
+    } else {
+      vm.onFullAppInstallPermissionDenied()
     }
   }
   private val vpnPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -43,6 +58,11 @@ class NonRootActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+
+    AppStorageMaintenance.cleanupOnAppStart(applicationContext)
+    pendingPluginInstaller = savedInstanceState?.getBoolean(STATE_PLUGIN_INSTALLER, false) == true
+    pendingFullAppInstaller = savedInstanceState?.getBoolean(STATE_FULL_APP_INSTALLER, false) == true
+    installerPausedActivity = pendingPluginInstaller || pendingFullAppInstaller
 
     AppLanguageSupport.applyPersistedAppLocale(applicationContext)
     CrashLogger.install(applicationContext)
@@ -60,10 +80,12 @@ class NonRootActivity : AppCompatActivity() {
       val vpnState by vm.vpnState.collectAsStateWithLifecycle()
       val vpnLastError by vm.vpnLastError.collectAsStateWithLifecycle()
       val vpnLogs by vm.vpnLogs.collectAsStateWithLifecycle()
+      val vpnProfileFailures by vm.vpnProfileFailures.collectAsStateWithLifecycle()
       val tgWsConfig by vm.tgWsConfig.collectAsStateWithLifecycle()
       val tgWsPluginState by vm.tgWsPluginState.collectAsStateWithLifecycle()
       val tgWsRuntimeState by vm.tgWsRuntimeState.collectAsStateWithLifecycle()
       val tgWsRuntimeLastError by vm.tgWsRuntimeLastError.collectAsStateWithLifecycle()
+      val fullAppUpgradeState by vm.fullAppUpgradeState.collectAsStateWithLifecycle()
       ZdtdTheme(themeMode = ZdtdThemeMode.fromStorage(themeMode)) {
         val lightBars = MaterialTheme.colorScheme.background.luminance() > 0.5f
         SideEffect {
@@ -84,14 +106,16 @@ class NonRootActivity : AppCompatActivity() {
             vpnState = vpnState,
             vpnLastError = vpnLastError,
             vpnLogs = vpnLogs,
+            vpnProfileFailures = vpnProfileFailures,
             tgWsConfig = tgWsConfig,
             tgWsPluginState = tgWsPluginState,
             tgWsRuntimeState = tgWsRuntimeState,
             tgWsRuntimeLastError = tgWsRuntimeLastError,
+            fullAppUpgradeState = fullAppUpgradeState,
             vpsViewModel = vpsVm,
             onVpnStart = ::requestNonRootVpnStart,
             onVpnStop = { NonRootVpnService.stop(this@NonRootActivity) },
-            onRequestRootMode = ::switchToRootSetup,
+            onRequestFullVersion = ::requestFullVersionInstall,
             onLanguageModeChange = vm::setLanguageMode,
             onThemeModeChange = vm::setThemeMode,
             onWorkModeChange = vm::setWorkMode,
@@ -125,8 +149,28 @@ class NonRootActivity : AppCompatActivity() {
   }
 
 
+  override fun onPause() {
+    if (pendingPluginInstaller || pendingFullAppInstaller) installerPausedActivity = true
+    super.onPause()
+  }
+
+  override fun onSaveInstanceState(outState: Bundle) {
+    outState.putBoolean(STATE_PLUGIN_INSTALLER, pendingPluginInstaller)
+    outState.putBoolean(STATE_FULL_APP_INSTALLER, pendingFullAppInstaller)
+    super.onSaveInstanceState(outState)
+  }
+
   override fun onResume() {
     super.onResume()
+    if (installerPausedActivity) {
+      vm.onApkInstallersReturned(
+        plugin = pendingPluginInstaller,
+        fullApp = pendingFullAppInstaller,
+      )
+      pendingPluginInstaller = false
+      pendingFullAppInstaller = false
+      installerPausedActivity = false
+    }
     vm.refreshTgWsPlugin(checkRemote = false)
   }
 
@@ -141,19 +185,35 @@ class NonRootActivity : AppCompatActivity() {
         return@launch
       }
 
-      vm.installDownloadedTgWsPlugin()
+      launchDownloadedTgWsPluginInstaller()
     }
   }
 
-  private fun switchToRootSetup() {
-    NonRootTgWsService.stop(applicationContext, persistDisabled = false)
-    NonRootVpnService.stop(this)
-    RootConfigManager(applicationContext).setRuntimeMode("root")
-    startActivity(
-      Intent(this, MainActivity::class.java)
-        .putExtra(MainActivity.EXTRA_OPEN_ROOT_SETUP, true)
-    )
-    finish()
+  private fun requestFullVersionInstall() {
+    lifecycleScope.launch {
+      if (!vm.downloadLatestFullApp()) return@launch
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+        fullAppInstallPermissionLauncher.launch(
+          Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+        )
+      } else {
+        launchDownloadedFullAppInstaller()
+      }
+    }
+  }
+
+  private fun launchDownloadedTgWsPluginInstaller() {
+    if (vm.installDownloadedTgWsPlugin()) {
+      pendingPluginInstaller = true
+      installerPausedActivity = false
+    }
+  }
+
+  private fun launchDownloadedFullAppInstaller() {
+    if (vm.installDownloadedFullApp()) {
+      pendingFullAppInstaller = true
+      installerPausedActivity = false
+    }
   }
 
   private fun restartNonRootVpn() {

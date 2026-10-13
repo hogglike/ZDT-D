@@ -89,8 +89,6 @@ pub struct RuntimeProfileStatus {
     pub tun: String,
     pub dns: String,
     pub process_running: bool,
-    pub proxy_port: u16,
-    pub config_current: bool,
     pub netd_applied: bool,
     pub pid: Option<i32>,
     pub log_path: String,
@@ -1076,13 +1074,6 @@ pub fn runtime_status() -> RuntimeStatus {
                 .profiles
                 .iter()
                 .any(|p| p.owner_program == "dnsprofiles" && p.profile == *id && p.netid == plan.netid);
-            // A VpnService consumer must not attach to an older running DoH config.
-            let config_current = fs::read(&plan.config)
-                .ok()
-                .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-                .zip(build_singbox_config(&plan).ok())
-                .map(|(running, expected)| running == expected)
-                .unwrap_or(false);
             profiles.insert(
                 id.clone(),
                 RuntimeProfileStatus {
@@ -1091,8 +1082,6 @@ pub fn runtime_status() -> RuntimeStatus {
                     tun: plan.tun,
                     dns: plan.dns,
                     process_running: pid.is_some() && tun2socks_running,
-                    proxy_port: plan.proxy_port,
-                    config_current,
                     netd_applied,
                     pid,
                     log_path: plan.log.display().to_string(),
@@ -1448,4 +1437,3 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }
-

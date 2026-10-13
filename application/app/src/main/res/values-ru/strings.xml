@@ -2486,8 +2486,8 @@ APatch: 10700+</string>
     <string name="non_root_service_state_stopping">Служба: останавливается</string>
     <string name="non_root_service_state_stopped">Служба: остановлена</string>
     <string name="non_root_service_state_error">Служба: ошибка</string>
-    <string name="non_root_switch_root_title">Переключиться в root-режим?</string>
-    <string name="non_root_switch_root_body">Желаете переключиться в root-режим? Откроется существующий мастер установки на экране запроса root-доступа.</string>
+    <string name="non_root_switch_root_title">Установить полную root-версию?</string>
+    <string name="non_root_switch_root_body">ZDT-D загрузит app-release.apk из последнего стабильного релиза, проверит пакет и подпись, а затем откроет установщик Android. Текущие настройки сохранятся.</string>
     <string name="non_root_log_preparing_runtime">Подготовка non-root runtime…</string>
     <string name="non_root_log_start_mode">Запуск режима %1$s…</string>
     <string name="non_root_log_start_component">Запуск %1$s…</string>
@@ -2570,4 +2570,38 @@ APatch: 10700+</string>
     <string name="non_root_tgws_plugin_install_permission_required">Разрешите ZDT-D устанавливать приложения из неизвестных источников, чтобы продолжить установку плагина TGWS.</string>
     <string name="non_root_tgws_plugin_installed_fmt">Установленный плагин: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">Доступный плагин: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">Версии модуля и приложения различаются</string>
+    <string name="setup_online_module_version_mismatch_body">Скачанный модуль имеет версию %1$s (versionCode %2$s), а онлайн-установщик — версию %3$s (versionCode %4$d). Установка этого модуля через данную версию онлайн-установщика невозможна. Вместо этого можно скачать полный root APK версии %1$s.</string>
+    <string name="setup_online_module_download_full_apk">Скачать полный APK</string>
+    <string name="setup_online_module_download_failed">Не удалось загрузить модуль ZDT-D. Возможно, GitHub недоступен или возникла проблема с подключением. Попробуйте позже либо скачайте полную версию ZDT-D, в которой модуль уже встроен.</string>
+    <string name="setup_online_module_installer_missing">Не удалось определить Magisk, KernelSU или APatch. Онлайн-версия не содержит архив модуля и не может сохранить его для ручной установки. Используйте поддерживаемый root-менеджер либо скачайте полную версию ZDT-D.</string>
+    <string name="setup_online_full_apk_download_failed">Не удалось скачать полный APK: %1$s</string>
+
+    <string name="vps_open_terminal">Открыть терминал</string>
+    <string name="vps_terminal_title">Терминал</string>
+    <string name="vps_terminal_paste">Вставить</string>
+    <string name="vps_terminal_preparing">Подготовка терминала</string>
+    <string name="vps_terminal_retry">Повторить</string>
+    <string name="vps_terminal_check_tmux">Проверка tmux</string>
+    <string name="vps_terminal_install_tmux">Установка tmux</string>
+    <string name="vps_terminal_check_session">Проверка zdt-d_console</string>
+    <string name="vps_terminal_create_session">Создание zdt-d_console</string>
+    <string name="vps_terminal_connect">Подключение терминала</string>
+    <string name="vps_terminal_error_tmux">Не удалось установить tmux</string>
+    <string name="vps_terminal_error_session">Не удалось подготовить zdt-d_console</string>
+    <string name="vps_terminal_error_connect">Не удалось подключиться к терминалу</string>
+    <string name="vps_terminal_error_disconnected">Соединение с терминалом закрыто</string>
+    <string name="non_root_log_cascade_backend_skipped">Каскад: %1$s пропущен из-за ошибки запуска: %2$s</string>
+    <string name="non_root_profile_failure_open_log">Открыть лог ошибки запуска</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">Внешний прокси</string>
+    <string name="operaproxy_upstream_desc">Выберите, через что Opera Proxy подключается к сети. По умолчанию выбран ByeDPI.</string>
+    <string name="operaproxy_upstream_direct">Без прокси</string>
+    <string name="operaproxy_upstream_custom">Свой прокси</string>
+    <string name="operaproxy_custom_proxy_title">Свой внешний прокси</string>
+    <string name="operaproxy_custom_proxy_desc">Введите полный адрес прокси. Можно использовать удалённый сервер из интернета. Поддерживаются http://, https://, socks5:// и socks5h://; логин и пароль можно указать прямо в URL.</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">Укажите корректный HTTP, HTTPS, SOCKS5 или SOCKS5H прокси с адресом и портом.</string>
+    <string name="non_root_log_opera_upstream">Внешний прокси Opera: %1$s</string>
 </resources>

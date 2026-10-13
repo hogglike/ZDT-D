@@ -2488,8 +2488,8 @@ ZDT-D को सही तरह इंस्टॉल करने के ल�
     <string name="non_root_service_state_stopping">सेवा: रुक रही है</string>
     <string name="non_root_service_state_stopped">सेवा: रुकी हुई है</string>
     <string name="non_root_service_state_error">सेवा: त्रुटि</string>
-    <string name="non_root_switch_root_title">रूट मोड पर स्विच करें?</string>
-    <string name="non_root_switch_root_body">क्या आप रूट मोड पर स्विच करना चाहते हैं? मौजूदा सेटअप विज़ार्ड रूट एक्सेस अनुरोध चरण पर खुलेगा।</string>
+    <string name="non_root_switch_root_title">पूरा रूट संस्करण इंस्टॉल करें?</string>
+    <string name="non_root_switch_root_body">ZDT-D नवीनतम स्थिर रिलीज़ से app-release.apk डाउनलोड करेगा, पैकेज और हस्ताक्षर की पुष्टि करेगा और फिर Android इंस्टॉलर खोलेगा। आपकी मौजूदा सेटिंग सुरक्षित रहेंगी।</string>
     <string name="non_root_log_preparing_runtime">बिना root रनटाइम तैयार किया जा रहा है…</string>
     <string name="non_root_log_start_mode">%1$s मोड शुरू किया जा रहा है…</string>
     <string name="non_root_log_start_component">%1$s शुरू किया जा रहा है…</string>
@@ -2572,4 +2572,38 @@ ZDT-D को सही तरह इंस्टॉल करने के ल�
     <string name="non_root_tgws_plugin_install_permission_required">TGWS प्लगइन की स्थापना जारी रखने के लिए ZDT-D को अज्ञात ऐप इंस्टॉल करने की अनुमति दें।</string>
     <string name="non_root_tgws_plugin_installed_fmt">इंस्टॉल प्लगइन: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">उपलब्ध प्लगइन: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">मॉड्यूल संस्करण मेल नहीं खाता</string>
+    <string name="setup_online_module_version_mismatch_body">डाउनलोड किया गया मॉड्यूल संस्करण %1$s (versionCode %2$s) है, लेकिन यह ऑनलाइन इंस्टॉलर संस्करण %3$s (versionCode %4$d) है। यह मॉड्यूल इस इंस्टॉलर से इंस्टॉल नहीं किया जा सकता। इसके बजाय आप संस्करण %1$s का पूरा root APK डाउनलोड कर सकते हैं।</string>
+    <string name="setup_online_module_download_full_apk">पूरा APK डाउनलोड करें</string>
+    <string name="setup_online_module_download_failed">ZDT-D मॉड्यूल डाउनलोड नहीं हो सका। संभव है कि GitHub उपलब्ध न हो या नेटवर्क कनेक्शन में समस्या हो। बाद में फिर प्रयास करें या ZDT-D का पूर्ण संस्करण डाउनलोड करें, जिसमें मॉड्यूल पहले से शामिल है।</string>
+    <string name="setup_online_module_installer_missing">Magisk, KernelSU या APatch नहीं मिला। ऑनलाइन संस्करण में मॉड्यूल आर्काइव शामिल नहीं है और इसे मैन्युअल इंस्टॉलेशन के लिए सहेजा नहीं जा सकता। समर्थित root manager का उपयोग करें या ZDT-D का पूर्ण संस्करण डाउनलोड करें।</string>
+    <string name="setup_online_full_apk_download_failed">पूरा APK डाउनलोड नहीं हो सका: %1$s</string>
+
+    <string name="vps_open_terminal">टर्मिनल खोलें</string>
+    <string name="vps_terminal_title">टर्मिनल</string>
+    <string name="vps_terminal_paste">पेस्ट करें</string>
+    <string name="vps_terminal_preparing">टर्मिनल तैयार किया जा रहा है</string>
+    <string name="vps_terminal_retry">फिर कोशिश करें</string>
+    <string name="vps_terminal_check_tmux">tmux की जाँच हो रही है</string>
+    <string name="vps_terminal_install_tmux">tmux इंस्टॉल हो रहा है</string>
+    <string name="vps_terminal_check_session">zdt-d_console की जाँच हो रही है</string>
+    <string name="vps_terminal_create_session">zdt-d_console बनाया जा रहा है</string>
+    <string name="vps_terminal_connect">टर्मिनल से कनेक्ट हो रहा है</string>
+    <string name="vps_terminal_error_tmux">tmux इंस्टॉल नहीं किया जा सका</string>
+    <string name="vps_terminal_error_session">zdt-d_console तैयार नहीं किया जा सका</string>
+    <string name="vps_terminal_error_connect">टर्मिनल से कनेक्ट नहीं हो सका</string>
+    <string name="vps_terminal_error_disconnected">टर्मिनल कनेक्शन बंद हो गया</string>
+    <string name="non_root_log_cascade_backend_skipped">कैस्केड: स्टार्टअप त्रुटि के बाद %1$s को छोड़ दिया गया: %2$s</string>
+    <string name="non_root_profile_failure_open_log">स्टार्टअप त्रुटि लॉग खोलें</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">अपस्ट्रीम प्रॉक्सी</string>
+    <string name="operaproxy_upstream_desc">चुनें कि Opera Proxy नेटवर्क से कैसे जुड़े। डिफ़ॉल्ट रूप से ByeDPI चुना गया है।</string>
+    <string name="operaproxy_upstream_direct">बिना प्रॉक्सी</string>
+    <string name="operaproxy_upstream_custom">अपना प्रॉक्सी</string>
+    <string name="operaproxy_custom_proxy_title">अपना अपस्ट्रीम प्रॉक्सी</string>
+    <string name="operaproxy_custom_proxy_desc">पूरा प्रॉक्सी URL दर्ज करें। इंटरनेट पर दूरस्थ सर्वर समर्थित हैं। प्रारूप: http://, https://, socks5:// और socks5h://। URL में यूज़रनेम और पासवर्ड भी दिए जा सकते हैं।</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">होस्ट और पोर्ट के साथ मान्य HTTP, HTTPS, SOCKS5 या SOCKS5H प्रॉक्सी URL दर्ज करें।</string>
+    <string name="non_root_log_opera_upstream">Opera अपस्ट्रीम: %1$s</string>
 </resources>

@@ -2490,8 +2490,8 @@ APatch: 10700+</string>
     <string name="non_root_service_state_stopping">Служба: зупиняється</string>
     <string name="non_root_service_state_stopped">Служба: зупинена</string>
     <string name="non_root_service_state_error">Служба: помилка</string>
-    <string name="non_root_switch_root_title">Перейти в root-режим?</string>
-    <string name="non_root_switch_root_body">Бажаєте перейти в root-режим? Відкриється наявний майстер встановлення на екрані запиту root-доступу.</string>
+    <string name="non_root_switch_root_title">Установити повну root-версію?</string>
+    <string name="non_root_switch_root_body">ZDT-D завантажить app-release.apk з останнього стабільного випуску, перевірить пакет і підпис, а потім відкриє інсталятор Android. Поточні налаштування буде збережено.</string>
     <string name="non_root_log_preparing_runtime">Підготовка non-root runtime…</string>
     <string name="non_root_log_start_mode">Запуск режиму %1$s…</string>
     <string name="non_root_log_start_component">Запуск %1$s…</string>
@@ -2574,4 +2574,38 @@ APatch: 10700+</string>
     <string name="non_root_tgws_plugin_install_permission_required">Дозвольте ZDT-D встановлювати програми з невідомих джерел, щоб продовжити встановлення плагіна TGWS.</string>
     <string name="non_root_tgws_plugin_installed_fmt">Встановлений плагін: %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">Доступний плагін: %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">Версії модуля й застосунку не збігаються</string>
+    <string name="setup_online_module_version_mismatch_body">Завантажений модуль має версію %1$s (versionCode %2$s), а онлайн-інсталятор — версію %3$s (versionCode %4$d). Цей модуль неможливо встановити цим інсталятором. Натомість можна завантажити повний root APK версії %1$s.</string>
+    <string name="setup_online_module_download_full_apk">Завантажити повний APK</string>
+    <string name="setup_online_module_download_failed">Не вдалося завантажити модуль ZDT-D. Можливо, GitHub недоступний або виникла проблема з підключенням. Спробуйте пізніше або завантажте повну версію ZDT-D, у якій модуль уже вбудовано.</string>
+    <string name="setup_online_module_installer_missing">Не вдалося визначити Magisk, KernelSU або APatch. Онлайн-версія не містить архів модуля і не може зберегти його для ручного встановлення. Використовуйте підтримуваний root-менеджер або завантажте повну версію ZDT-D.</string>
+    <string name="setup_online_full_apk_download_failed">Не вдалося завантажити повний APK: %1$s</string>
+
+    <string name="vps_open_terminal">Відкрити термінал</string>
+    <string name="vps_terminal_title">Термінал</string>
+    <string name="vps_terminal_paste">Вставити</string>
+    <string name="vps_terminal_preparing">Підготовка термінала</string>
+    <string name="vps_terminal_retry">Повторити</string>
+    <string name="vps_terminal_check_tmux">Перевірка tmux</string>
+    <string name="vps_terminal_install_tmux">Встановлення tmux</string>
+    <string name="vps_terminal_check_session">Перевірка zdt-d_console</string>
+    <string name="vps_terminal_create_session">Створення zdt-d_console</string>
+    <string name="vps_terminal_connect">Підключення термінала</string>
+    <string name="vps_terminal_error_tmux">Не вдалося встановити tmux</string>
+    <string name="vps_terminal_error_session">Не вдалося підготувати zdt-d_console</string>
+    <string name="vps_terminal_error_connect">Не вдалося підключитися до термінала</string>
+    <string name="vps_terminal_error_disconnected">З’єднання з терміналом закрито</string>
+    <string name="non_root_log_cascade_backend_skipped">Каскад: %1$s пропущено через помилку запуску: %2$s</string>
+    <string name="non_root_profile_failure_open_log">Відкрити журнал помилки запуску</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">Зовнішній проксі</string>
+    <string name="operaproxy_upstream_desc">Виберіть, через що Opera Proxy підключається до мережі. Типово вибрано ByeDPI.</string>
+    <string name="operaproxy_upstream_direct">Без проксі</string>
+    <string name="operaproxy_upstream_custom">Свій проксі</string>
+    <string name="operaproxy_custom_proxy_title">Свій зовнішній проксі</string>
+    <string name="operaproxy_custom_proxy_desc">Введіть повну адресу проксі. Можна використовувати віддалений сервер з Інтернету. Підтримуються http://, https://, socks5:// і socks5h://; логін і пароль можна вказати в URL.</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">Вкажіть коректний HTTP, HTTPS, SOCKS5 або SOCKS5H проксі з адресою та портом.</string>
+    <string name="non_root_log_opera_upstream">Зовнішній проксі Opera: %1$s</string>
 </resources>

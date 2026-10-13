@@ -24,6 +24,7 @@ class NonRootViewModel(application: Application) : AndroidViewModel(application)
   private val cascadeStore = NonRootCascadeStore(application.applicationContext)
   private val tgWsStore = NonRootTgWsStore(application.applicationContext)
   private val tgWsPluginManager = TgWsPluginManager(application.applicationContext)
+  private val fullAppUpgradeManager = FullAppUpgradeManager(application.applicationContext)
 
   private val _languageMode = MutableStateFlow(config.getAppLanguageMode())
   val languageMode: StateFlow<String> = _languageMode.asStateFlow()
@@ -58,10 +59,12 @@ class NonRootViewModel(application: Application) : AndroidViewModel(application)
   val tgWsPluginState: StateFlow<TgWsPluginState> = TgWsPluginStateBus.state
   val tgWsRuntimeState: StateFlow<NonRootTgWsRuntimeState> = NonRootTgWsRuntime.state
   val tgWsRuntimeLastError: StateFlow<String?> = NonRootTgWsRuntime.lastError
+  val fullAppUpgradeState: StateFlow<FullAppUpgradeState> = fullAppUpgradeManager.state
 
   val vpnState: StateFlow<NonRootVpnState> = NonRootVpnRuntime.state
   val vpnLastError: StateFlow<String?> = NonRootVpnRuntime.lastError
   val vpnLogs: StateFlow<List<NonRootRuntimeLogEntry>> = NonRootVpnRuntime.logs
+  val vpnProfileFailures: StateFlow<List<NonRootProfileFailure>> = NonRootVpnRuntime.profileFailures
 
   init {
     // Create the private runtime/token now so T2S and proxy backends can rely on
@@ -199,12 +202,24 @@ class NonRootViewModel(application: Application) : AndroidViewModel(application)
     return state.errorMessage == null && tgWsPluginManager.hasDownloadedPlugin()
   }
 
-  fun installDownloadedTgWsPlugin() {
-    tgWsPluginManager.installDownloadedPlugin()
-  }
+  fun installDownloadedTgWsPlugin(): Boolean =
+    tgWsPluginManager.installDownloadedPlugin().let { it.installing && it.errorMessage == null }
 
   fun onTgWsPluginInstallPermissionDenied() {
     tgWsPluginManager.markInstallPermissionDenied()
+  }
+
+  suspend fun downloadLatestFullApp(): Boolean = fullAppUpgradeManager.downloadLatestBundledApk()
+
+  fun installDownloadedFullApp(): Boolean = fullAppUpgradeManager.installDownloadedApk()
+
+  fun onApkInstallersReturned(plugin: Boolean, fullApp: Boolean) {
+    if (plugin) tgWsPluginManager.onInstallerReturned()
+    if (fullApp) fullAppUpgradeManager.onInstallerReturned()
+  }
+
+  fun onFullAppInstallPermissionDenied() {
+    fullAppUpgradeManager.markInstallPermissionDenied()
   }
 
   fun removeTgWsPlugin() {
@@ -260,5 +275,3 @@ class NonRootViewModel(application: Application) : AndroidViewModel(application)
   }
 
 }
-
-

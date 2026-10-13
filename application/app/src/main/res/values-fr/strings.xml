@@ -2488,8 +2488,8 @@ La cause restante se situe probablement côté daemon/API. Consultez les journau
     <string name="non_root_service_state_stopping">Service : arrêt</string>
     <string name="non_root_service_state_stopped">Service : arrêté</string>
     <string name="non_root_service_state_error">Service : erreur</string>
-    <string name="non_root_switch_root_title">Passer en mode root ?</string>
-    <string name="non_root_switch_root_body">Voulez-vous passer en mode root ? L’assistant de configuration existant s’ouvrira à l’étape de demande d’accès root.</string>
+    <string name="non_root_switch_root_title">Installer la version root complète ?</string>
+    <string name="non_root_switch_root_body">ZDT-D téléchargera app-release.apk depuis la dernière version stable, vérifiera le paquet et la signature, puis ouvrira le programme d’installation Android. Vos paramètres actuels seront conservés.</string>
     <string name="non_root_log_preparing_runtime">Préparation de l’exécution sans root…</string>
     <string name="non_root_log_start_mode">Démarrage du mode %1$s…</string>
     <string name="non_root_log_start_component">Démarrage de %1$s…</string>
@@ -2572,4 +2572,38 @@ La cause restante se situe probablement côté daemon/API. Consultez les journau
     <string name="non_root_tgws_plugin_install_permission_required">Autorisez ZDT-D à installer des applications inconnues pour poursuivre l’installation du plugin TGWS.</string>
     <string name="non_root_tgws_plugin_installed_fmt">Plugin installé : %1$s</string>
     <string name="non_root_tgws_plugin_latest_fmt">Plugin disponible : %1$s</string>
+    <string name="setup_online_module_version_mismatch_title">Version du module incompatible</string>
+    <string name="setup_online_module_version_mismatch_body">Le module téléchargé est en version %1$s (versionCode %2$s), mais cet installateur en ligne est en version %3$s (versionCode %4$d). Ce module ne peut pas être installé avec cet installateur. Vous pouvez télécharger à la place l’APK root complet de la version %1$s.</string>
+    <string name="setup_online_module_download_full_apk">Télécharger l’APK complet</string>
+    <string name="setup_online_module_download_failed">Impossible de télécharger le module ZDT-D. GitHub est peut-être indisponible ou un problème réseau est survenu. Réessayez plus tard ou téléchargez la version complète de ZDT-D, qui contient déjà le module.</string>
+    <string name="setup_online_module_installer_missing">Magisk, KernelSU ou APatch n’a pas été détecté. La version en ligne ne contient pas l’archive du module et ne peut pas l’enregistrer pour une installation manuelle. Utilisez un gestionnaire root pris en charge ou téléchargez la version complète de ZDT-D.</string>
+    <string name="setup_online_full_apk_download_failed">Impossible de télécharger l’APK complet : %1$s</string>
+
+    <string name="vps_open_terminal">Ouvrir le terminal</string>
+    <string name="vps_terminal_title">Terminal</string>
+    <string name="vps_terminal_paste">Coller</string>
+    <string name="vps_terminal_preparing">Préparation du terminal</string>
+    <string name="vps_terminal_retry">Réessayer</string>
+    <string name="vps_terminal_check_tmux">Vérification de tmux</string>
+    <string name="vps_terminal_install_tmux">Installation de tmux</string>
+    <string name="vps_terminal_check_session">Vérification de zdt-d_console</string>
+    <string name="vps_terminal_create_session">Création de zdt-d_console</string>
+    <string name="vps_terminal_connect">Connexion au terminal</string>
+    <string name="vps_terminal_error_tmux">Impossible d’installer tmux</string>
+    <string name="vps_terminal_error_session">Impossible de préparer zdt-d_console</string>
+    <string name="vps_terminal_error_connect">Impossible de se connecter au terminal</string>
+    <string name="vps_terminal_error_disconnected">La connexion au terminal a été fermée</string>
+    <string name="non_root_log_cascade_backend_skipped">Cascade : %1$s a été ignoré après une erreur de démarrage : %2$s</string>
+    <string name="non_root_profile_failure_open_log">Ouvrir le journal de l’erreur de démarrage</string>
+
+    <!-- Opera Proxy upstream routing -->
+    <string name="operaproxy_upstream_title">Proxy amont</string>
+    <string name="operaproxy_upstream_desc">Choisissez comment Opera Proxy se connecte au réseau. ByeDPI est sélectionné par défaut.</string>
+    <string name="operaproxy_upstream_direct">Sans proxy</string>
+    <string name="operaproxy_upstream_custom">Proxy personnalisé</string>
+    <string name="operaproxy_custom_proxy_title">Proxy amont personnalisé</string>
+    <string name="operaproxy_custom_proxy_desc">Saisissez l’URL complète du proxy. Les serveurs distants sur Internet sont pris en charge. Formats : http://, https://, socks5:// et socks5h://. Les identifiants peuvent être inclus dans l’URL.</string>
+    <string name="operaproxy_custom_proxy_placeholder">socks5://user:password@proxy.example.com:1080</string>
+    <string name="operaproxy_custom_proxy_error">Saisissez une URL de proxy HTTP, HTTPS, SOCKS5 ou SOCKS5H valide avec hôte et port.</string>
+    <string name="non_root_log_opera_upstream">Proxy amont Opera : %1$s</string>
 </resources>
