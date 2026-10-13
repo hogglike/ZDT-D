@@ -409,6 +409,12 @@ class ApiClient(
     return true
   }
 
+  fun validateOperaInput(kind: String, content: String): String? {
+    val obj = requestJson("POST", "/api/programs/operaproxy/validate", JSONObject().put("kind", kind).put("content", content))
+    val result = obj?.optJSONObject("data") ?: throw IOException("Проверка недоступна. Обнови модуль вместе с APK.")
+    return if (result.optBoolean("valid", false)) null else result.optString("message", "Неверные настройки")
+  }
+
   fun postJsonData(path: String, data: JSONObject): Boolean {
     val obj = requestJson("POST", path, data)
     val ok = jsonBool(obj, "ok", true)

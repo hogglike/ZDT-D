@@ -95,6 +95,7 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <activity android:name=".proxy.ProxyCatalogActivity" android:exported="false" />
+        <activity android:name=".proxy.OperaDiagnosticsActivity" android:exported="false" />
         <activity android:name=".modes.ConnectionModesActivity" android:exported="false" />
         <activity android:name=".modes.ModeServerPickerActivity" android:exported="false" />
         <activity android:name=".modes.ModeSwitchActivity" android:exported="false" android:excludeFromRecents="true" android:taskAffinity="" android:theme="@style/Theme.ModeConfirmation" />

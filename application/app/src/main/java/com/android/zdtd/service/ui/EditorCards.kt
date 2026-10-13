@@ -42,6 +42,7 @@ fun TextEditorCard(
   snackHost: SnackbarHostState,
   onContentLoaded: ((String) -> Unit)? = null,
   onSaveSuccess: ((String) -> Unit)? = null,
+  validationKind: String? = null,
 ) {
   val compactWidth = rememberIsCompactWidth()
   val shortHeight = rememberIsShortHeight()
@@ -53,6 +54,8 @@ fun TextEditorCard(
   var loading by remember(path) { mutableStateOf(true) }
   var saving by remember(path) { mutableStateOf(false) }
   val scope = rememberCoroutineScope()
+  val context = androidx.compose.ui.platform.LocalContext.current
+  var validationError by remember(path) { mutableStateOf<String?>(null) }
 
   LaunchedEffect(path) {
     loading = true
@@ -66,13 +69,21 @@ fun TextEditorCard(
 
   fun save() {
     saving = true
-    actions.saveText(path, text) { ok ->
-      saving = false
-      if (ok) {
-        lastLoaded = text
-        onSaveSuccess?.invoke(text)
+    val candidate = text
+    scope.launch {
+      if (validationKind != null) {
+        validationError = try {
+          kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.android.zdtd.service.modes.ModeClient.api(context).validateOperaInput(validationKind, candidate)
+          }
+        } catch (_: Exception) { "Не удалось проверить. Обнови модуль и проверь связь со службой." }
+        if (validationError != null) { saving = false; return@launch }
       }
-      scope.launch { snackHost.showSnackbar(if (ok) msgSavedApplyRestart else msgSaveFailed) }
+      actions.saveText(path, candidate) { ok ->
+        saving = false
+        if (ok) { lastLoaded = candidate; onSaveSuccess?.invoke(candidate) }
+        scope.launch { snackHost.showSnackbar(if (ok) msgSavedApplyRestart else msgSaveFailed) }
+      }
     }
   }
 
@@ -102,6 +113,7 @@ fun TextEditorCard(
         }
       }
 
+      validationError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
       Spacer(Modifier.height(10.dp))
 
       OutlinedTextField(

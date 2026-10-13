@@ -2118,6 +2118,7 @@ private fun OperaProxySection(
   var tab by remember { mutableStateOf(0) }
 
   val scope = rememberCoroutineScope()
+  val context = LocalContext.current
   fun snack(msg: String) { scope.launch { snackHost.showSnackbar(msg) } }
 
   val labels = listOf(
@@ -2129,6 +2130,9 @@ private fun OperaProxySection(
   )
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    OutlinedButton(onClick = {
+      context.startActivity(android.content.Intent(context, com.android.zdtd.service.proxy.OperaDiagnosticsActivity::class.java))
+    }, modifier = Modifier.fillMaxWidth()) { Text("Диагностика Opera · проверить SNI") }
     OperaProxyTabSelector(
       labels = labels,
       selected = tab,
@@ -2160,6 +2164,7 @@ private fun OperaProxySection(
           title = stringResource(R.string.byedpi_start_args_title),
           desc = stringResource(R.string.byedpi_start_args_desc),
           path = "/api/programs/operaproxy/byedpi/start_args",
+          validationKind = "byedpi",
           actions = actions,
           snackHost = snackHost,
         )
@@ -2167,6 +2172,7 @@ private fun OperaProxySection(
           title = stringResource(R.string.byedpi_restart_args_title),
           desc = stringResource(R.string.byedpi_restart_args_desc),
           path = "/api/programs/operaproxy/byedpi/restart_args",
+          validationKind = "byedpi",
           actions = actions,
           snackHost = snackHost,
         )
@@ -2691,10 +2697,11 @@ private fun OperaSniServerDialog(
     OPERA_UPSTREAM_AUTO -> customProxies.isNotEmpty() && customProxies.all(::isValidOperaCustomProxy)
     else -> true
   }
-  val inputValid = currentItem.sni.isNotEmpty() && isValidOverrideProxyAddress(address) && customProxyValid
+  val sniValid = currentItem.sni.length in 1..253 && !currentItem.sni.matches(Regex("[0-9.]+")) && currentItem.sni.split('.').all { part -> part.length in 1..63 && !part.startsWith('-') && !part.endsWith('-') && part.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' } }
+  val inputValid = sniValid && isValidOverrideProxyAddress(address) && customProxyValid
   val hasChanges = !isEditing || currentItem != initial
   val canSave = inputValid && hasChanges
-  val sniError = attemptedSave && currentItem.sni.isEmpty()
+  val sniError = attemptedSave && !sniValid
   val addressError = attemptedSave && !isValidOverrideProxyAddress(address)
   val customProxyError = proxyMode == OPERA_UPSTREAM_CUSTOM && customProxy.isNotBlank() &&
     !isValidOperaCustomProxy(customProxy)
@@ -2792,7 +2799,7 @@ private fun OperaSniServerDialog(
           isError = sniError,
           supportingText = {
             if (sniError) {
-              Text(stringResource(R.string.operaproxy_sni_required))
+              Text("Нужен домен, например m.vk.com. Адреса Webshare вводятся в API Прокси.")
             }
           },
         )
@@ -3092,17 +3099,25 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
       .any { token -> !token.startsWith("/") && allowed.none { prefix -> token.startsWith(prefix, ignoreCase = true) } }
   }
 
+  var argsValidationError by remember { mutableStateOf<String?>(null) }
   fun save() {
-    if (apiProxyHasInvalidEntries(apiProxy)) {
-      snack(context.getString(R.string.opera_args_api_proxy_invalid))
-      return
+    if (dlLimit.trim().toLongOrNull() == null || verbosity.trim().toIntOrNull() == null) {
+      argsValidationError = "Лимит загрузки и уровень логов должны быть целыми числами"; return
     }
     val obj = buildArgsJson()
     saving = true
-    actions.saveJsonData(apiPath, obj) { ok ->
-      saving = false
-      if (ok) lastSavedArgsJson = obj.toString()
-      snack(if (ok) context.getString(R.string.saved) else context.getString(R.string.save_failed))
+    scope.launch {
+      argsValidationError = try {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+          com.android.zdtd.service.modes.ModeClient.api(context).validateOperaInput("args", obj.toString())
+        }
+      } catch (_: Exception) { "Не удалось проверить настройки. Обнови модуль вместе с APK." }
+      if (argsValidationError != null) { saving = false; return@launch }
+      actions.saveJsonData(apiPath, obj) { ok ->
+        saving = false
+        if (ok) lastSavedArgsJson = obj.toString()
+        snack(if (ok) context.getString(R.string.saved) else context.getString(R.string.save_failed))
+      }
     }
   }
 
@@ -3133,6 +3148,7 @@ private fun OperaArgsSection(actions: ZdtdActions, snackHost: SnackbarHostState)
   val dnsDirty = lastSavedDnsResolvers?.let { normalizeDnsResolvers(dnsResolvers) != it } == true
 
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    argsValidationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
     // ── Card: -api-proxy ── (highlighted as most important)
     val apiProxyInvalid = apiProxyHasInvalidEntries(apiProxy)

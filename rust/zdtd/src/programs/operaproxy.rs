@@ -207,8 +207,13 @@ pub fn read_opera_args() -> OperaArgs {
     }
 }
 
+#[path = "operaproxy_diagnostics.rs"]
+mod diagnostics;
+pub use diagnostics::{validate_opera_args, validate_sni_content, validate_byedpi_args, start_diagnostics, diagnostic_status};
+
 /// Write configurable opera-proxy arguments to config/args.json.
 pub fn write_opera_args(args: &OperaArgs) -> Result<()> {
+    diagnostics::validate_opera_args(args)?;
     let path = Path::new(OPERA_ARGS_JSON);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -414,6 +419,7 @@ pub fn start_if_enabled() -> Result<()> {
 
     // Load configurable opera-proxy args (falls back to defaults if file missing/invalid)
     let opera_args = read_opera_args();
+    diagnostics::validate_opera_args(&opera_args)?;
     info!(
         "operaproxy: args loaded: api_proxy_configured={} verbosity={} server_selection='{}' init_retry='{}'",
         !opera_args.api_proxy.trim().is_empty(),
@@ -438,16 +444,12 @@ pub fn start_if_enabled() -> Result<()> {
     let log_dir = Path::new(OPERA_ROOT).join("log");
     fs::create_dir_all(&log_dir).with_context(|| format!("mkdir {}", log_dir.display()))?;
 
-    // Resolve -api-proxy before spawning opera-proxy instances.
-    // The user may provide one proxy URL, several proxy URLs separated by commas,
-    // or an http(s) URL to a plain text proxy list. URL lists are downloaded
-    // again on every start and saved to config/api_proxy_list.txt. We only pass
-    // one checked working proxy to opera-proxy; if none works or the list cannot
-    // be downloaded, opera-proxy is started as if api_proxy was empty.
+    // Let Opera validate registration and discovery through every candidate.
+    // A reachable proxy socket alone does not prove API access or the right region.
     let api_proxy_check_log = log_dir.join("api_proxy_check.log");
     truncate_file(&api_proxy_check_log)?;
-    let selected_api_proxy = if sni_list.iter().any(|entry| opera_upstream_mode(entry) != OperaUpstreamMode::Auto) {
-        select_working_api_proxy(&opera_args.api_proxy, &api_proxy_check_log)
+    let api_proxy_file = if sni_list.iter().any(|entry| opera_upstream_mode(entry) != OperaUpstreamMode::Auto) {
+        diagnostics::prepare_api_proxy_file(&opera_args, &api_proxy_check_log)?
     } else { None };
 
     // 1) Start byedpi (initial) only if at least one SNI entry requests it.
@@ -511,9 +513,10 @@ pub fn start_if_enabled() -> Result<()> {
             entry.override_proxy_address.as_deref(),
             &country,
             &bootstrap_dns,
-            if auto { None } else { selected_api_proxy.as_deref() },
+            if auto { None } else { api_proxy_file.as_deref() },
             &opera_args,
             &log_path,
+            Some(&log_dir.join(format!("zdt_diagnostic_state_{}.json", idx))),
         )?;
 
         std::thread::sleep(Duration::from_millis(2500));
@@ -1422,6 +1425,7 @@ fn mask_proxy_for_log(value: &str) -> String {
     let Some((scheme, rest)) = value.split_once("://") else {
         return value.to_string();
     };
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let safe_rest = match rest.rsplit_once('@') {
         Some((_userinfo, hostport)) => format!("***@{}", hostport),
         None => rest.to_string(),
@@ -1479,9 +1483,10 @@ fn spawn_opera_proxy(
     override_proxy_address: Option<&str>,
     country: &str,
     bootstrap_dns: &str,
-    selected_api_proxy: Option<&str>,
+    api_proxy_file: Option<&Path>,
     opera_args: &OperaArgs,
     log_path: &Path,
+    diagnostic_state: Option<&Path>,
 ) -> Result<()> {
     let logf = OpenOptions::new()
         .create(true)
@@ -1515,8 +1520,12 @@ fn spawn_opera_proxy(
         .arg(opera_args.server_selection_dl_limit.to_string())
         .arg("-verbosity")
         .arg(opera_args.verbosity.to_string());
-    if let Some(api_proxy) = selected_api_proxy.map(str::trim).filter(|s| !s.is_empty()) {
-        cmd.arg("-api-proxy").arg(api_proxy);
+    if let Some(path) = api_proxy_file {
+        cmd.arg("-api-proxy-file").arg(path).arg("-api-proxy-parallel").arg("5");
+    }
+    if let Some(path) = diagnostic_state {
+        let _ = fs::remove_file(path);
+        cmd.arg("-zdt-diagnostic-state").arg(path);
     }
     cmd.arg("-server-selection-test-url")
         .arg(&opera_args.server_selection_test_url);

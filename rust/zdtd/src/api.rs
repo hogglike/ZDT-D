@@ -6459,6 +6459,28 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        ("POST", ["api", "programs", "operaproxy", "validate"]) => {
+            let res=(||->Result<()> {
+                let v:serde_json::Value=serde_json::from_slice(body)?;
+                let content=v.get("content").and_then(|v|v.as_str()).unwrap_or("");
+                match v.get("kind").and_then(|v|v.as_str()).unwrap_or("") {
+                    "byedpi"=>crate::programs::operaproxy::validate_byedpi_args(content),
+                    "sni"=>crate::programs::operaproxy::validate_sni_content(content),
+                    "args"=>crate::programs::operaproxy::validate_opera_args(&serde_json::from_str(content)?),
+                    _=>anyhow::bail!("Неизвестный тип проверки"),
+                }
+            })();
+            match res { Ok(_)=>write_json(stream,200,json!({"ok":true,"data":{"valid":true}})),
+                Err(e)=>write_json(stream,200,json!({"ok":true,"data":{"valid":false,"message":e.to_string()}})), }
+        }
+        ("GET", ["api", "programs", "operaproxy", "diagnostics"]) => {
+            write_json(stream, 200, json!({"ok":true,"data":crate::programs::operaproxy::diagnostic_status()}))
+        }
+        ("POST", ["api", "programs", "operaproxy", "diagnostics"]) => {
+            match crate::programs::operaproxy::start_diagnostics() {
+                Ok(_) => write_ok(stream), Err(e) => write_err(stream,e),
+            }
+        }
         ("GET", ["api", "programs", "operaproxy", "upstreams"]) => {
             let root = program_root("operaproxy");
             let mut statuses = Vec::new();
@@ -6495,6 +6517,7 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             let res = (|| -> Result<()> {
                 let req: ContentReq = serde_json::from_slice(body)
                     .map_err(|e| anyhow::anyhow!("bad JSON body: {e}"))?;
+                crate::programs::operaproxy::validate_sni_content(&req.content)?;
                 let p = program_root("operaproxy").join("config/sni.json");
                 write_text_atomic(&p, &req.content)?;
                 Ok(())
@@ -6566,6 +6589,7 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             let res = (|| -> Result<()> {
                 let req: ContentReq = serde_json::from_slice(body)
                     .map_err(|e| anyhow::anyhow!("bad JSON body: {e}"))?;
+                crate::programs::operaproxy::validate_byedpi_args(&req.content)?;
                 let p = program_root("operaproxy").join("byedpi/config/start.txt");
                 write_text_atomic(&p, &req.content)?;
                 Ok(())
@@ -6587,6 +6611,7 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             let res = (|| -> Result<()> {
                 let req: ContentReq = serde_json::from_slice(body)
                     .map_err(|e| anyhow::anyhow!("bad JSON body: {e}"))?;
+                crate::programs::operaproxy::validate_byedpi_args(&req.content)?;
                 let p = program_root("operaproxy").join("byedpi/config/restart.txt");
                 write_text_atomic(&p, &req.content)?;
                 Ok(())
