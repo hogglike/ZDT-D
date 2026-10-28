@@ -20,7 +20,7 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
   val prefs = remember { context.getSharedPreferences("zapret_auto", Context.MODE_PRIVATE) }
   val scope = rememberCoroutineScope()
   val report by ZapretAutoReport.state.collectAsState()
-  var urls by remember { mutableStateOf(prefs.getString("urls", "https://www.youtube.com/\nhttps://discord.com/").orEmpty()) }
+  var urls by remember { mutableStateOf(prefs.getString("urls", "https://www.youtube.com/\nhttps://i.ytimg.com/generate_204\nhttps://discord.com/").orEmpty()) }
   var limit by remember { mutableStateOf(prefs.getInt("limit", 12)) }
   var message by remember { mutableStateOf("") }
   var details by remember { mutableStateOf(false) }
@@ -44,7 +44,7 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
         }, enabled = !serviceRunning && !running && ZapretTestOwner.owner.get() == null) { Text("Подобрать автоматически") }
         if (running) OutlinedButton(onClick = { ZapretAutoService.stop(context) }) { Text("Стоп") }
       }
-      if (serviceRunning) Text("Останови ZDT-D кнопкой питания, затем запусти подбор.")
+      if (serviceRunning) Text("Вернись на главную вкладку и выключи ZDT-D кнопкой питания. «Обновить статус» только перечитывает состояние. Затем вернись сюда и нажми «Подобрать автоматически».")
       if (running) LinearProgressIndicator(Modifier.fillMaxWidth())
       if (report.has("started")) Text("${report.optString("network")} · ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(report.optLong("started")))}", style = MaterialTheme.typography.bodySmall)
       Text(report.optString("message", "Проверка ещё не запускалась"))

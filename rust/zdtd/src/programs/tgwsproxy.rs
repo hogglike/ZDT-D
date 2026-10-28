@@ -585,3 +585,109 @@ fn write_json_pretty<T: Serialize>(p: &Path, v: &T) -> Result<()> {
     let txt = serde_json::to_string_pretty(v)?;
     write_text_atomic(p, &txt)
 }
+
+
+// A separate loopback listener exercises MTProto without disturbing Telegram's live port.
+// The worker is bounded and the authenticated API only returns a redacted report.
+static CHECK_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CHECK_REPORT: std::sync::OnceLock<std::sync::Mutex<serde_json::Value>> = std::sync::OnceLock::new();
+fn check_report() -> &'static std::sync::Mutex<serde_json::Value> {
+    CHECK_REPORT.get_or_init(|| std::sync::Mutex::new(json!({"state":"idle"})))
+}
+pub fn diagnostics_status() -> serde_json::Value {
+    let report = check_report().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    json!({"ok":true,"data":report,"running":CHECK_RUNNING.load(std::sync::atomic::Ordering::SeqCst)})
+}
+pub fn start_diagnostics() -> Result<()> {
+    use std::sync::atomic::Ordering;
+    anyhow::ensure!(is_installed(), "Сначала установи компонент TG WS Proxy в дополнительных утилитах");
+    let setting = read_setting()?;
+    validate_setting(&setting)?;
+    if CHECK_RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() { return Ok(()); }
+    *check_report().lock().unwrap_or_else(|e| e.into_inner()) = json!({"state":"running","message":"Проверяется WebSocket и настоящий MTProto-ответ Telegram. До 90 секунд."});
+    if let Err(e) = thread::Builder::new().name("tgws-check".into()).spawn(move || {
+        let result = run_diagnostics(&setting);
+        let report = match result {
+            Ok((passed, text)) => json!({"state":if passed {"ready"} else {"error"},"message":if passed {"Проверка пройдена"} else {"Не все этапы прошли. Смотри отчёт ниже; доступность зависит от сети."},"report":text}),
+            Err(e) => json!({"state":"error","message":format!("{e:#}")}),
+        };
+        *check_report().lock().unwrap_or_else(|e| e.into_inner()) = report;
+        CHECK_RUNNING.store(false, Ordering::SeqCst);
+    }) {
+        CHECK_RUNNING.store(false, Ordering::SeqCst);
+        *check_report().lock().unwrap_or_else(|e| e.into_inner()) = json!({"state":"error","message":"Не удалось запустить проверку"});
+        return Err(e.into());
+    }
+    Ok(())
+}
+fn run_diagnostics(saved: &Setting) -> Result<(bool, String)> {
+    use std::io::{Seek, SeekFrom};
+    let mut setting = saved.clone();
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    setting.port = listener.local_addr()?.port();
+    setting.host_mode = "local".into();
+    setting.link_ip.clear();
+    setting.quiet = false;
+    setting.verbose = false;
+    setting.log_file = format!("{GENERATED_DIR}/diagnostics.log");
+    let mut output = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(&setting.log_file)?;
+    let mut args = build_args(&setting);
+    // Send logger and check summaries to one bounded diagnostic sink, never the live log.
+    if let Some(i) = args.iter().position(|a| a == "--log-file") { args.drain(i..i+2); }
+    args.push("--check-listener".into());
+    drop(listener);
+    let mut child = Command::new(TGWS_BIN).args(args).stdin(Stdio::null())
+        .stdout(Stdio::from(output.try_clone()?)).stderr(Stdio::from(output.try_clone()?)).spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let (passed, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status.success(), false),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(200)),
+            Ok(None) => { let _ = child.kill(); let _ = child.wait(); break (false, true); }
+            Err(e) => { let _ = child.kill(); let _ = child.wait(); return Err(e.into()); }
+        }
+    };
+    let len = output.metadata()?.len();
+    output.seek(SeekFrom::Start(len.saturating_sub(16 * 1024)))?;
+    let mut bytes = Vec::new(); output.take(16 * 1024).read_to_end(&mut bytes)?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if timed_out { text.push_str("\nПроверка остановлена по лимиту 90 секунд."); }
+    text = redact_diagnostics(&setting, text);
+    let _ = fs::remove_file(&setting.log_file);
+    Ok((passed, text))
+}
+fn redact_diagnostics(setting: &Setting, mut text: String) -> String {
+    for secret in &setting.secrets {
+        if !secret.is_empty() { text = text.replace(secret, "[секрет скрыт]"); }
+        if let Ok(key) = cli_secret_key(secret) { text = text.replace(&key, "[секрет скрыт]"); }
+    }
+    for proxy in &setting.mtproto_proxies {
+        if let Some(secret) = proxy.rsplit(':').next() {
+            if !secret.is_empty() { text = text.replace(secret, "[секрет скрыт]"); }
+        }
+    }
+    if let Some((_, tail)) = setting.outbound_proxy.split_once("://") {
+        if let Some((credentials, _)) = tail.rsplit_once('@') {
+            if !credentials.is_empty() { text = text.replace(credentials, "[доступ скрыт]"); }
+        }
+    }
+    text
+}
+
+#[cfg(test)]
+mod tgws_tests {
+    use super::*;
+    #[test]
+    fn diagnostics_hide_access_and_preserve_routing() {
+        let mut setting = Setting::default();
+        setting.secrets = vec!["aabbccddeeff00112233445566778899".into()];
+        setting.outbound_proxy = "socks5h://user:password@example.com:1080".into();
+        setting.default_domains = true; setting.cf_priority = true;
+        let args = build_args(&setting);
+        assert!(args.contains(&"--default-domains".into()));
+        assert!(args.contains(&"--cf-priority".into()));
+        let log = format!("{} {}", setting.secrets[0], setting.outbound_proxy);
+        let safe = redact_diagnostics(&setting, log);
+        assert!(!safe.contains("password")); assert!(!safe.contains(&setting.secrets[0]));
+    }
+}

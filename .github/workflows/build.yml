@@ -64,7 +64,7 @@ env:
   TOR_ZLIB_REF: "v1.3.2"
   TOR_ZSTD_REF: "v1.5.7"
   LYREBIRD_REF: "main"
-  TG_WS_PROXY_REF: "v1.6.4"
+  TG_WS_PROXY_REF: "v2.5.8"
   HEV_SOCKS5_TUNNEL_REF: "2.18.0"
 
 permissions:
@@ -482,6 +482,7 @@ jobs:
           RUSTC_WRAPPER: ""
         run: |
           set -euo pipefail
+          cargo test --manifest-path rust/zdtd/Cargo.toml --target x86_64-unknown-linux-gnu programs::tgwsproxy::tgws_tests
           cargo test --manifest-path rust/zdtd/Cargo.toml --target x86_64-unknown-linux-gnu rejects_proxy_as_sni_and_invalid_args
           ZDT_TELEGRAM_FIXTURE=/tmp/zdt-telegram.json cargo test --manifest-path rust/zdtd/Cargo.toml --target x86_64-unknown-linux-gnu programs::telegram_bridge::tests
           curl -fL --retry 3 https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64.tar.gz -o /tmp/zdt-telegram-core.tar.gz
@@ -5123,6 +5124,9 @@ jobs:
       - name: Build tg-ws-proxy
         run: |
           set -euo pipefail
+          if [[ "${{ matrix.abi }}" == "arm64-v8a" ]]; then
+            env -u CC -u CXX -u AR -u RANLIB -u TARGET_CC -u TARGET_CXX cargo test --lib --target x86_64-unknown-linux-gnu
+          fi
           cargo build --release --target "${{ matrix.rust_target }}"
 
       - name: Collect tg-ws-proxy
@@ -5722,6 +5726,7 @@ jobs:
           RUSTC_WRAPPER: ""
         run: |
           set -euo pipefail
+          cargo test --manifest-path rust/nfqws-tester/Cargo.toml --target x86_64-unknown-linux-gnu
           cargo build --manifest-path rust/nfqws-tester/Cargo.toml --profile "${{ env.CARGO_PROFILE }}" --target "${{ matrix.rust_target }}"
 
       - name: Collect nfqws-tester
@@ -7389,7 +7394,7 @@ jobs:
           test -s "out/mod/${stem}_PLAIN.zip"
           mv "out/mod/${stem}.apk" "out/mod/${apk}"
           mv "out/mod/${stem}_PLAIN.zip" "out/mod/${zip}"
-          cp docs/UPDATE_4.3.0-mod39_RU.md out/mod/INSTRUCTION_RU.md
+          cp docs/UPDATE_4.3.0-mod40_RU.md out/mod/INSTRUCTION_RU.md
           (cd out/mod && sha256sum "$apk" "$zip" INSTRUCTION_RU.md > SHA256SUMS.txt)
           tag="v${version}"
           # Preserve a previously published version; fixes use a new mod number.
@@ -7399,5 +7404,5 @@ jobs:
           fi
           gh release create "$tag" --target "$GITHUB_SHA" \
             --title "ZDT-D ${version} — без функций для часов" \
-            --notes-file docs/UPDATE_4.3.0-mod39_RU.md --prerelease --latest=false \
+            --notes-file docs/UPDATE_4.3.0-mod40_RU.md --prerelease --latest=false \
             "out/mod/${apk}" "out/mod/${zip}" out/mod/INSTRUCTION_RU.md out/mod/SHA256SUMS.txt

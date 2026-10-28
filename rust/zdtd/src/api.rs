@@ -3474,6 +3474,16 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        ("GET", ["api", "programs", "tgwsproxy", "diagnostics"]) => {
+            write_json(stream, 200, crate::programs::tgwsproxy::diagnostics_status())
+        }
+        ("PUT", ["api", "programs", "tgwsproxy", "diagnostics"]) => {
+            match crate::programs::tgwsproxy::start_diagnostics() {
+                Ok(()) => write_ok(stream),
+                Err(e) => write_err(stream, e),
+            }
+        }
+
         // --- openvpn profile API
         ("GET", ["api", "programs", "openvpn", "profiles"]) => {
             let res = (|| -> Result<serde_json::Value> {

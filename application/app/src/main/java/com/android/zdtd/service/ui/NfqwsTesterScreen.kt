@@ -129,7 +129,7 @@ fun NfqwsTesterScreen(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f)),
       ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          Text(stringResource(R.string.nfqws_tester_choose_program), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+          Text("Ядро для автоподбора и ручного теста", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             FilterChip(selected = selectedProgram == "nfqws", onClick = { selectedProgram = "nfqws" }, label = { Text("nfqws") })
             FilterChip(selected = selectedProgram == "nfqws2", onClick = { selectedProgram = "nfqws2" }, label = { Text("nfqws2") })
@@ -158,7 +158,7 @@ fun NfqwsTesterScreen(
               ok = !serviceRunning,
               okText = stringResource(R.string.nfqws_tester_service_stopped),
               failText = stringResource(R.string.nfqws_tester_service_must_be_stopped),
-              buttonText = stringResource(R.string.nfqws_tester_refresh_status),
+              buttonText = "Обновить состояние (службу не выключает)",
               onButton = actions::refreshStatus,
             )
           }

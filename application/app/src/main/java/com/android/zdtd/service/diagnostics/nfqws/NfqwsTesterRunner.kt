@@ -23,7 +23,7 @@ class NfqwsTesterRunner(
     }
 
     suspend fun startStrategy(program: String, configPath: String, qnum: Int = 200, guarded: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
-        runJson(listOf("start", "--program", program, "--config", configPath, "--qnum", qnum.toString()) + if (guarded) listOf("--owner-pid", android.os.Process.myPid().toString()) else emptyList())
+        runJson(listOf("start", "--program", program, "--config", configPath, "--qnum", qnum.toString()) + if (guarded) listOf("--owner-pid", android.os.Process.myPid().toString(), "--probe-uid", android.os.Process.myUid().toString()) else emptyList())
     }
 
     suspend fun stopTester(): JSONObject = withContext(Dispatchers.IO) {

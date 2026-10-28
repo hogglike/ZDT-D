@@ -1809,7 +1809,7 @@ APatch: 10700+</string>
 
     <string name="analysis_tools_badge_advanced">ADV</string>
     <string name="nfqws_tester_title">Тестер стратегий NFQWS</string>
-    <string name="nfqws_tester_short_desc">Ручная проверка стратегий nfqws и nfqws2 с плавающим окном и быстрым применением.</string>
+    <string name="nfqws_tester_short_desc">Автоподбор по HTTPS и ручная проверка стратегий nfqws/nfqws2 с плавающим окном.</string>
     <string name="nfqws_tester_intro">По очереди запускает стратегии из strategicvar, каждый раз заново перестраивает NFQUEUE-правила и позволяет отметить результат через плавающее окно.</string>
     <string name="nfqws_tester_choose_program">Выбор инструмента</string>
     <string name="nfqws_tester_overlay_permission_title">Разрешение на плавающее окно</string>

@@ -185,6 +185,12 @@ fun AppsListScreen(
       )
     }
 
+    item(key = "analysis_tools_entry") {
+      androidx.compose.material3.OutlinedButton(onClick = onOpenAnalysisTools, modifier = Modifier.fillMaxWidth()) {
+        Text("Центр инструментов · автоподбор Zapret")
+      }
+    }
+
     item(key = "dns_profiles_entry") {
       DnsProfilesEntryCard(
         compact = compactCards,
