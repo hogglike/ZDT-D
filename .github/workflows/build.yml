@@ -7366,7 +7366,7 @@ jobs:
   publish_mod:
     name: Publish versioned mod APK and plain module
     runs-on: ubuntu-latest
-    needs: [build_apk, pack_module]
+    needs: [build_apk, pack_module, package_tg_ws_proxy_asset, build_tgws_plugin_apk]
     if: github.ref == 'refs/heads/copilot-polish' && github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'Release'
     steps:
       - name: Checkout validated sources
@@ -7380,6 +7380,16 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: zdt-test-module-plain
+          path: out/mod
+      - name: Download matching TG WS core
+        uses: actions/download-artifact@v8
+        with:
+          name: tg-ws-proxy-technical-asset
+          path: out/mod
+      - name: Download matching TG WS plugin
+        uses: actions/download-artifact@v8
+        with:
+          name: tgws-plugin-technical-assets
           path: out/mod
       - name: Publish paired versioned files
         env:
@@ -7396,8 +7406,17 @@ jobs:
           test -s "out/mod/${stem}_PLAIN.zip"
           mv "out/mod/${stem}.apk" "out/mod/${apk}"
           mv "out/mod/${stem}_PLAIN.zip" "out/mod/${zip}"
-          cp docs/UPDATE_4.3.0-mod40_RU.md out/mod/INSTRUCTION_RU.md
-          (cd out/mod && sha256sum "$apk" "$zip" INSTRUCTION_RU.md > SHA256SUMS.txt)
+          cp docs/UPDATE_4.3.0-mod41_RU.md out/mod/INSTRUCTION_RU.md
+          test -s out/mod/tg_ws_proxy.zip
+          test -s out/mod/zdt-d-tgws-plugin.apk
+          test -s out/mod/tgws-plugin.json
+          python3 - <<'PY_TGWS'
+          import json, os, zipfile
+          with zipfile.ZipFile('out/mod/tg_ws_proxy.zip') as z:
+              meta = json.loads(z.read('manifest.json'))
+              assert meta['version'] == os.environ['TG_WS_PROXY_REF']
+          PY_TGWS
+          (cd out/mod && sha256sum "$apk" "$zip" INSTRUCTION_RU.md tg_ws_proxy.zip zdt-d-tgws-plugin.apk tgws-plugin.json > SHA256SUMS.txt)
           tag="v${version}"
           # Preserve a previously published version; fixes use a new mod number.
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -7406,5 +7425,6 @@ jobs:
           fi
           gh release create "$tag" --target "$GITHUB_SHA" \
             --title "ZDT-D ${version} — без функций для часов" \
-            --notes-file docs/UPDATE_4.3.0-mod40_RU.md --prerelease --latest=false \
-            "out/mod/${apk}" "out/mod/${zip}" out/mod/INSTRUCTION_RU.md out/mod/SHA256SUMS.txt
+            --notes-file docs/UPDATE_4.3.0-mod41_RU.md --prerelease --latest=false \
+            "out/mod/${apk}" "out/mod/${zip}" out/mod/INSTRUCTION_RU.md out/mod/SHA256SUMS.txt \
+            out/mod/tg_ws_proxy.zip out/mod/zdt-d-tgws-plugin.apk out/mod/tgws-plugin.json
