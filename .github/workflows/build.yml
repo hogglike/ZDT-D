@@ -3262,6 +3262,10 @@ jobs:
           done
 
           echo "=== Build DPITunnel-cli (${DPITUNNEL_REF}) ==="
+          # FindOpenSSL also queries pkg-config for static transitive libraries.
+          # Keep host Ubuntu OpenSSL (jitterentropy/zstd) out of the Android link.
+          export PKG_CONFIG_LIBDIR="$DEPS_DIR/lib/pkgconfig:$DEPS_DIR/lib64/pkgconfig"
+          export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
           cmake -S "$SRC/DPITunnel-cli" -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake" \
