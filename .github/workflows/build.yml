@@ -5124,6 +5124,8 @@ jobs:
       - name: Build tg-ws-proxy
         run: |
           set -euo pipefail
+          # Upstream pins Rust in rust-toolchain.toml; install the target for that toolchain.
+          rustup target add "${{ matrix.rust_target }}"
           if [[ "${{ matrix.abi }}" == "arm64-v8a" ]]; then
             env -u CC -u CXX -u AR -u RANLIB -u TARGET_CC -u TARGET_CXX cargo test --lib --target x86_64-unknown-linux-gnu
           fi
