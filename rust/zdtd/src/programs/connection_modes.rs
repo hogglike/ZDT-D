@@ -52,6 +52,19 @@ fn update(g: u64, patch: Value) {
     }); }
 }
 pub fn status() -> Value { status_lock().lock().unwrap_or_else(|e| e.into_inner()).clone() }
+pub fn widget_status() -> Value {
+    let mut value=status();
+    if let Ok(c)=config() {
+        let summary:serde_json::Map<String,Value>=c.modes.iter().map(|(name,m)|{
+            let auto=mode_policy::automatic(name,m.auto_enabled,m.manual_override);
+            let key=if m.selected_key.is_empty(){&m.last_key}else{&m.selected_key};
+            let label=c.catalog.get(key).map(|n|n.name.as_str()).unwrap_or("Сервер не выбран");
+            (name.clone(),json!({"auto":auto,"server":label,"apps":m.apps,"app_policy":m.app_policy}))
+        }).collect();
+        value["mode_summary"]=json!(summary);
+    }
+    value
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -205,6 +218,10 @@ fn nodes() -> Result<Vec<Node>> {
     }).collect();
     let mut used=BTreeSet::new();result.retain(|n|used.insert(n.key.clone()));
     Ok(result)
+}
+/// Shared subscription conversion, without exposing credentials in public snapshots.
+pub(super) fn proxy_nodes() -> Result<Vec<(String,String,Value)>> {
+    Ok(nodes()?.into_iter().filter_map(|n|n.outbound.map(|out|(n.key,n.name,out))).collect())
 }
 pub fn snapshot() -> Result<Value> {
     let (c,removed,stored)=config_with_catalog()?;

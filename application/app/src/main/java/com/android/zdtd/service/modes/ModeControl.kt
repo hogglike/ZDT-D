@@ -175,13 +175,46 @@ class ModeWidgetProvider : android.appwidget.AppWidgetProvider() {
     }
     fun bind(context: Context, views: RemoteViews) {
       val status = ModeClient.cached(context)
+      val active = status.optString("mode")
+      val state = status.optString("state")
+      val connected = state == "connected"
+      val summary = status.optJSONObject("mode_summary") ?: JSONObject()
+      views.setTextViewText(R.id.mode_title, if (active in ModeClient.modes) "VPN · ${ModeState.title(active)}" else "ZDT-D · VPN выключен")
+      views.setTextViewText(R.id.mode_status, when {
+        state == "connecting" -> "Подключение…"
+        connected && status.optBoolean("verified") -> "✓ Проверен · ${status.optString("server")}"
+        connected -> "Без проверки · ${status.optString("server")}"
+        state == "error" -> "Ошибка · нажми «Повторить»"
+        else -> "Выбери режим ниже"
+      })
+      val editMode = active.takeIf { it in ModeClient.modes } ?: "normal"
+      val details = summary.optJSONObject(editMode) ?: JSONObject()
+      val packages = details.optJSONArray("apps")
+      val labels = (0 until (packages?.length() ?: 0)).take(3).map { index ->
+        val pkg = packages!!.optString(index)
+        runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+      }
+      val policy = details.optString("app_policy")
+      val appTitle = when (policy) { "blacklist" -> "Исключены"; "all" -> "Все приложения"; "except_dns" -> "Все кроме DNS"; else -> "Приложения" }
+      views.setTextViewText(R.id.mode_apps, "$appTitle${if (labels.isNotEmpty()) ": " + labels.joinToString(", ") else ""}${if ((packages?.length() ?: 0) > 3) " +${packages!!.length() - 3}" else ""} ▸")
+      views.setOnClickPendingIntent(R.id.mode_apps, PendingIntent.getActivity(context, 19983,
+        Intent(context, ConnectionModesActivity::class.java).putExtra("mode", editMode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+      views.setTextViewText(R.id.mode_retry, "Повторить")
+      views.setBoolean(R.id.mode_retry, "setEnabled", active in ModeClient.modes && state != "connecting")
+      views.setOnClickPendingIntent(R.id.mode_retry, PendingIntent.getForegroundService(context, 19984,
+        Intent(context, ModeActionService::class.java).putExtra("mode", active), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+      views.setTextViewText(R.id.mode_stop, if (state == "connecting") "Отменить" else "Отключить")
+      views.setBoolean(R.id.mode_stop, "setEnabled", active in ModeClient.modes)
         views.setTextViewText(R.id.mode_message, status.optString("message", "Открой настройки режимов"))
         val buttons = listOf(R.id.mode_white, R.id.mode_normal, R.id.mode_browser)
         val pickers = listOf(R.id.pick_white, R.id.pick_normal, R.id.pick_browser)
         ModeClient.modes.forEachIndexed { index, mode ->
+          val m = summary.optJSONObject(mode)
+          views.setTextViewText(pickers[index], when { m == null -> "Сервер ▾"; m.optBoolean("auto") -> "Авто ▾"; else -> m.optString("server", "Сервер") + " ▾" })
+          views.setBoolean(buttons[index], "setEnabled", !(mode == active && state in listOf("connected", "connecting")))
           views.setOnClickPendingIntent(pickers[index], PendingIntent.getActivity(context, 20100 + index,
             Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-          views.setInt(buttons[index], "setBackgroundColor", ModeState.color(mode, status.optString("mode"), status.optString("state")))
+          views.setInt(buttons[index], "setBackgroundColor", ModeState.color(mode, status.optString("mode"), status.optString("state"), status.optBoolean("verified")))
           val launch = if (mode == "white") PendingIntent.getActivity(context, 19972 + index,
             ModeClient.confirmation(context, mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
           else PendingIntent.getForegroundService(context, 19972 + index,

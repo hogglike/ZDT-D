@@ -6,9 +6,10 @@ object ModeState {
   const val YELLOW = -256
   const val GREEN = -11355904
   const val RED = -2937041
-  fun color(button: String, active: String, state: String): Int = when {
+  fun color(button: String, active: String, state: String, verified: Boolean = true): Int = when {
     button != active -> WHITE
     state == "connecting" -> YELLOW
+    state == "connected" && !verified -> 0xFFFFE082.toInt()
     state == "connected" -> GREEN
     state == "error" -> RED
     else -> WHITE

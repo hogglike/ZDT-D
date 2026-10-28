@@ -94,6 +94,8 @@
             android:name=".diagnostics.nfqws.NfqwsTesterOverlayService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service android:name=".diagnostics.nfqws.ZapretAutoService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <activity android:name=".telegram.TelegramBridgeActivity" android:exported="false" />
         <activity android:name=".proxy.ProxyCatalogActivity" android:exported="false" />
         <activity android:name=".proxy.OperaDiagnosticsActivity" android:exported="false" />
         <activity android:name=".modes.ConnectionModesActivity" android:exported="false" />

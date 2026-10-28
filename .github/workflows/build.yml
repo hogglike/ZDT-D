@@ -483,6 +483,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path rust/zdtd/Cargo.toml --target x86_64-unknown-linux-gnu rejects_proxy_as_sni_and_invalid_args
+          ZDT_TELEGRAM_FIXTURE=/tmp/zdt-telegram.json cargo test --manifest-path rust/zdtd/Cargo.toml --target x86_64-unknown-linux-gnu programs::telegram_bridge::tests
+          curl -fL --retry 3 https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64.tar.gz -o /tmp/zdt-telegram-core.tar.gz
+          echo "12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f  /tmp/zdt-telegram-core.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/zdt-telegram-core.tar.gz -C /tmp
+          sudo python3 scripts/test_variant/test_telegram_bridge.py /tmp/sing-box-1.14.1-linux-amd64/sing-box /tmp/zdt-telegram.json
           cargo build --manifest-path rust/zdtd/Cargo.toml --profile "${{ env.CARGO_PROFILE }}" --target "${{ matrix.rust_target }}"
 
       - name: Collect zdtd
@@ -7378,7 +7383,7 @@ jobs:
           test -s "out/mod/${stem}_PLAIN.zip"
           mv "out/mod/${stem}.apk" "out/mod/${apk}"
           mv "out/mod/${stem}_PLAIN.zip" "out/mod/${zip}"
-          cp docs/UPDATE_4.3.0-mod38_RU.md out/mod/INSTRUCTION_RU.md
+          cp docs/UPDATE_4.3.0-mod39_RU.md out/mod/INSTRUCTION_RU.md
           (cd out/mod && sha256sum "$apk" "$zip" INSTRUCTION_RU.md > SHA256SUMS.txt)
           tag="v${version}"
           # Preserve a previously published version; fixes use a new mod number.
@@ -7388,5 +7393,5 @@ jobs:
           fi
           gh release create "$tag" --target "$GITHUB_SHA" \
             --title "ZDT-D ${version} — без функций для часов" \
-            --notes-file docs/UPDATE_4.3.0-mod38_RU.md --prerelease --latest=false \
+            --notes-file docs/UPDATE_4.3.0-mod39_RU.md --prerelease --latest=false \
             "out/mod/${apk}" "out/mod/${zip}" out/mod/INSTRUCTION_RU.md out/mod/SHA256SUMS.txt

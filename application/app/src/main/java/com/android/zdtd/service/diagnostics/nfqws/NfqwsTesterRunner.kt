@@ -22,8 +22,8 @@ class NfqwsTesterRunner(
         }
     }
 
-    suspend fun startStrategy(program: String, configPath: String, qnum: Int = 200): JSONObject = withContext(Dispatchers.IO) {
-        runJson(listOf("start", "--program", program, "--config", configPath, "--qnum", qnum.toString()))
+    suspend fun startStrategy(program: String, configPath: String, qnum: Int = 200, guarded: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
+        runJson(listOf("start", "--program", program, "--config", configPath, "--qnum", qnum.toString()) + if (guarded) listOf("--owner-pid", android.os.Process.myPid().toString()) else emptyList())
     }
 
     suspend fun stopTester(): JSONObject = withContext(Dispatchers.IO) {
@@ -47,8 +47,8 @@ class NfqwsTesterRunner(
         val command = buildRootCommand(binary.absolutePath, args)
         val result = rootConfigManager.execRootSh(command)
         val raw = (result.out + result.err).joinToString("\n").trim()
-        if (!result.isSuccess && raw.isBlank()) {
-            throw IllegalStateException("nfqws_tester command failed with code ${result.code}")
+        if (!result.isSuccess) {
+            throw IllegalStateException(raw.take(500).ifBlank { "nfqws_tester command failed with code ${result.code}" })
         }
         JSONObject(raw.ifBlank { "{}" })
     }

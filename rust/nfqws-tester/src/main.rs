@@ -6,6 +6,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::unix::process::CommandExt;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::thread;
@@ -28,6 +29,8 @@ struct SessionState {
     pid: u32,
     qnum: u16,
     started_at_unix_ms: u64,
+    #[serde(default)]
+    process_start_ticks: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +38,7 @@ struct StartOptions {
     program: String,
     config_path: String,
     qnum: u16,
+    owner_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +76,9 @@ fn entry() -> Result<()> {
         return Ok(());
     }
 
+    // Serialize queue/session changes with the watchdog, including across processes.
+    if args[0]=="guard" {return guard_session(&args[1..]);}
+    let _lock=if ["start","stop","cleanup"].contains(&args[0].as_str()){Some(session_lock()?)}else{None};
     match args[0].as_str() {
         "--version" | "version" => {
             println!("nfqws-tester {VERSION}");
@@ -130,7 +137,8 @@ fn parse_start_options(args: &[String]) -> Result<StartOptions> {
         Ok(v) => v.parse::<u16>().context("invalid --qnum")?,
         Err(_) => DEFAULT_QNUM,
     };
-    Ok(StartOptions { program, config_path, qnum })
+    let owner_pid=parse_named_value(args,"--owner-pid").ok().map(|v|v.parse::<u32>()).transpose().context("invalid owner pid")?;
+    Ok(StartOptions { program, config_path, qnum, owner_pid })
 }
 
 fn normalize_program(program: &str) -> Result<String> {
@@ -182,7 +190,7 @@ fn start_strategy(options: StartOptions) -> Result<()> {
     let filter = extract_proto_port_filter(&raw);
     let pid = spawn_program(&options.program, &bin, config_path.parent().unwrap_or(Path::new("/")), options.qnum, &args)?;
     if let Err(err) = apply_nfqueue_rules(&options.program, options.qnum, &filter) {
-        let _ = kill_program(&options.program);
+        kill_owned(&SessionState{program:options.program.clone(),config_path:String::new(),config_name:String::new(),pid,qnum:options.qnum,started_at_unix_ms:0,process_start_ticks:process_start_ticks(pid)});
         let _ = cleanup_rules_for_program(&options.program);
         return Err(err);
     }
@@ -194,8 +202,15 @@ fn start_strategy(options: StartOptions) -> Result<()> {
         pid,
         qnum: options.qnum,
         started_at_unix_ms: now_unix_ms(),
+        process_start_ticks:process_start_ticks(pid),
     };
-    write_session(&state)?;
+    if let Err(e)=write_session(&state){kill_owned(&state);let _=cleanup_rules_for_program(&state.program);return Err(e);}
+    if let Some(owner)=options.owner_pid {
+        if let Err(e)=Command::new(env::current_exe()?).args(["guard",&owner.to_string(),&state.started_at_unix_ms.to_string()])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            let _=cleanup_all();return Err(e.into());
+        }
+    }
 
     println!("{}", json!({
         "ok": true,
@@ -301,17 +316,43 @@ fn read_session() -> Result<Option<SessionState>> {
 }
 
 fn cleanup_all() -> Result<()> {
-    kill_program("nfqws")?;
-    kill_program("nfqws2")?;
+    if let Ok(Some(state))=read_session(){kill_owned(&state);}
     cleanup_rules_for_program("nfqws")?;
     cleanup_rules_for_program("nfqws2")?;
     let _ = fs::remove_file(SESSION_FILE);
     Ok(())
 }
 
-fn kill_program(program: &str) -> Result<()> {
-    let _ = run("sh", &["-c", &format!("pkill -9 -x {program} 2>/dev/null || true")])?;
-    Ok(())
+fn kill_owned(state:&SessionState) {
+    if state.pid<=1 || state.process_start_ticks.is_none() || state.process_start_ticks!=process_start_ticks(state.pid){return;}
+    let cmd=fs::read(format!("/proc/{}/cmdline",state.pid)).unwrap_or_default();
+    let args:Vec<_>=cmd.split(|c|*c==0).collect();
+    let bin=program_bin(&state.program);
+    let queue=format!("--qnum={}",state.qnum);
+    if args.first().copied()==Some(bin.as_os_str().as_encoded_bytes()) && args.contains(&queue.as_bytes()) {
+        unsafe {libc::kill(state.pid as i32,libc::SIGKILL);}
+    }
+}
+fn session_lock()->Result<File> {
+    ensure_work_dir()?;
+    let file=File::options().create(true).truncate(false).read(true).write(true).open(Path::new(WORK_DIR).join("operation.lock"))?;
+    if unsafe{libc::flock(file.as_raw_fd(),libc::LOCK_EX)}!=0 {bail!("could not lock tester");}
+    Ok(file)
+}
+fn guard_session(args:&[String])->Result<()> {
+    let owner=args.first().context("guard owner")?.parse::<u32>()?;
+    let started=args.get(1).context("guard session")?.parse::<u64>()?;
+    let deadline=std::time::Instant::now()+Duration::from_secs(180);
+    loop {
+        thread::sleep(Duration::from_secs(1));
+        let _lock=session_lock()?;
+        match read_session()? {
+            Some(state) if state.started_at_unix_ms==started=>{
+                if !process_alive(owner)||std::time::Instant::now()>=deadline {cleanup_all()?;return Ok(());}
+            },
+            _=>return Ok(()),
+        }
+    }
 }
 
 fn chain_name(program: &str) -> &'static str {
@@ -500,6 +541,11 @@ fn spawn_program(program: &str, bin: &Path, cwd: &Path, qnum: u16, config_args: 
     Ok(pid)
 }
 
+fn process_start_ticks(pid:u32)->Option<u64> {
+    let stat=fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // comm is parenthesized and may contain spaces: starttime is field 22.
+    stat.rsplit_once(") ")?.1.split_whitespace().nth(19)?.parse().ok()
+}
 fn process_alive(pid: u32) -> bool {
     PathBuf::from("/proc").join(pid.to_string()).is_dir()
 }

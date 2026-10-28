@@ -218,6 +218,16 @@ fun AppsListScreen(
       )
     }
 
+    item(key = "telegram_bridge_entry") {
+      Card(onClick = { context.startActivity(Intent(context, com.android.zdtd.service.telegram.TelegramBridgeActivity::class.java)) },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(Modifier.padding(16.dp)) {
+          Text("Telegram через подписку", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+          Text("Свой локальный SOCKS5 · автоперебор · без Opera", style = MaterialTheme.typography.bodySmall)
+        }
+      }
+    }
+
     item(key = "proxy_catalog_entry") {
       Card(
         onClick = { context.startActivity(Intent(context, ProxyCatalogActivity::class.java)) },

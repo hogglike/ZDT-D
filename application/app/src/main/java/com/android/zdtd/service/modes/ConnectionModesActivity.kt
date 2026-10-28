@@ -65,7 +65,7 @@ class ConnectionModesActivity : ComponentActivity() {
     var snapshot by remember { mutableStateOf(JSONObject()) }
     var draft by remember { mutableStateOf(JSONObject()) }
     var status by remember { mutableStateOf(ModeClient.cached(this)) }
-    var editMode by remember { mutableStateOf("white") }
+    var editMode by remember { mutableStateOf(intent.getStringExtra("mode")?.takeIf { it in ModeClient.modes } ?: "white") }
     var message by remember { mutableStateOf("Загрузка настроек…") }
     var dirty by remember { mutableStateOf(false) }
     var appDialog by remember { mutableStateOf(false) }
@@ -134,7 +134,7 @@ class ConnectionModesActivity : ComponentActivity() {
             Surface(modifier = Modifier.weight(1f).combinedClickable(
               onClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.switch(this@ConnectionModesActivity, mode) },
               onLongClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.pickServer(this@ConnectionModesActivity, mode) }),
-              shape = MaterialTheme.shapes.large, color = Color(ModeState.color(mode, status.optString("mode"), status.optString("state")))) {
+              shape = MaterialTheme.shapes.large, color = Color(ModeState.color(mode, status.optString("mode"), status.optString("state"), status.optBoolean("verified")))) {
               Text(ModeState.title(mode), Modifier.padding(horizontal = 4.dp, vertical = 14.dp), color = Color.Black, maxLines = 1, style = MaterialTheme.typography.labelMedium)
             }
           }

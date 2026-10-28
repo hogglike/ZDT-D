@@ -7191,12 +7191,27 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
         return write_empty_404(stream);
     }
 
+    if path.starts_with("/api/telegram-bridge") {
+        let result=(|| -> Result<serde_json::Value> {
+            use crate::programs::telegram_bridge as bridge;
+            match (method.as_str(),path.as_str()) {
+                ("GET","/api/telegram-bridge") => bridge::snapshot(),
+                ("GET","/api/telegram-bridge/status") => Ok(json!({"ok":true,"status":bridge::status()})),
+                ("PUT","/api/telegram-bridge") => {bridge::save(serde_json::from_slice(&body)?)?;Ok(json!({"ok":true}))},
+                ("POST","/api/telegram-bridge/stop") => {bridge::stop()?;Ok(json!({"ok":true}))},
+                ("POST","/api/telegram-bridge/retry") => {bridge::retry();Ok(json!({"ok":true}))},
+                _ => anyhow::bail!("Unknown Telegram bridge route"),
+            }
+        })();
+        return match result {Ok(v)=>write_json(stream,200,v),Err(e)=>write_err(stream,e)};
+    }
+
     if path.starts_with("/api/connection-modes") {
         let result = (|| -> Result<serde_json::Value> {
             use crate::programs::connection_modes as modes;
             match (method.as_str(), path.as_str()) {
                 ("GET", "/api/connection-modes") => modes::snapshot(),
-                ("GET", "/api/connection-modes/status") => Ok(json!({"ok":true,"status":modes::status()})),
+                ("GET", "/api/connection-modes/status") => Ok(json!({"ok":true,"status":modes::widget_status()})),
                 ("GET", "/api/connection-modes/diagnostics") => modes::diagnostics(),
                 ("POST", "/api/connection-modes/refresh-servers") => {
                     if !services_running || start_in_progress || stop_in_progress {anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска");}

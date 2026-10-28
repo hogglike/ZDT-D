@@ -51,7 +51,7 @@ class ProxyCatalogActivity : ComponentActivity() {
     var deleting by remember { mutableStateOf<SavedProxy?>(null) }
     var applying by remember { mutableStateOf(false) }
     var applyingApi by remember { mutableStateOf(false) }
-    var resetUpstreams by remember { mutableStateOf(true) }
+    var resetUpstreams by remember { mutableStateOf(false) }
     var statuses by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     LaunchedEffect(Unit) {
       while (true) {
@@ -108,7 +108,8 @@ class ProxyCatalogActivity : ComponentActivity() {
       }
     }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-      Column(Modifier.safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      LazyColumn(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
           Text(if (pick) "Выбрать прокси" else "Прокси", style = MaterialTheme.typography.headlineSmall)
           TextButton(onClick = { finish() }) { Text("Назад") }
@@ -142,7 +143,7 @@ class ProxyCatalogActivity : ComponentActivity() {
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         OutlinedTextField(search, { search = it }, label = { Text("Поиск адреса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         if (loaded && entries.isEmpty()) Text("Список пуст. Загрузи файл или вставь строки.")
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        } }
           items(entries.filter { it.endpoint.contains(search, true) }, key = { it.url }) { entry ->
             OutlinedCard(Modifier.fillMaxWidth()) {
               Column(Modifier.padding(12.dp)) {
@@ -160,8 +161,7 @@ class ProxyCatalogActivity : ComponentActivity() {
               }
             }
           }
-        }
-        Text("Для API: список проверяется при запуске Opera, пока не пройдут авторизация и получение серверов. Для всего трафика: прокси перебираются при новых соединениях. После изменения настроек перезапусти ZDT-D.", style = MaterialTheme.typography.bodySmall)
+        item { Text("Для API: список проверяется при запуске Opera, пока не пройдут авторизация и получение серверов. Для всего трафика: прокси перебираются при новых соединениях. После изменения настроек перезапусти ZDT-D.", style = MaterialTheme.typography.bodySmall) }
       }
     }
     if (paste) AlertDialog(onDismissRequest = { paste = false }, title = { Text("Список прокси") }, text = {
@@ -198,7 +198,7 @@ class ProxyCatalogActivity : ComponentActivity() {
       Column {
         Text("Opera проверит авторизацию и получение серверов через весь список, затем выберет рабочий прокси. Обычные сайты будут идти через серверы Opera. HTTP рекомендуется для TXT Webshare; rotating endpoint можно импортировать как один URL.")
         Row { Checkbox(resetUpstreams, { resetUpstreams = it }); Text("Вернуть записи SNI, использующие этот каталог, к ByeDPI", style = MaterialTheme.typography.bodySmall) }
-        Text("Настройки SNI и адресов серверов сохранятся. После применения перезапусти ZDT-D.", style = MaterialTheme.typography.bodySmall)
+        Text("Список добавится к текущему без дубликатов. Другие аргументы сохранятся. Настройки SNI и адресов серверов сохранятся. После применения перезапусти ZDT-D.", style = MaterialTheme.typography.bodySmall)
       }
     }, confirmButton = { TextButton(onClick = { scope.launch {
       busy = true
@@ -207,10 +207,12 @@ class ProxyCatalogActivity : ComponentActivity() {
           val api = ModeClient.api(this@ProxyCatalogActivity)
           val original = api.getJsonData("/api/programs/operaproxy/args")
           check(original.has("api_proxy")) { "Нет связи с модулем" }
-          val updated = JSONObject(original.toString()).put("api_proxy", entries.joinToString("\n") { it.url })
+          val current = original.optString("api_proxy").split(Regex("[,\\s]+" )).map { it.trim() }.filter { it.isNotEmpty() }
+          val combined = (current + entries.map { it.url }).distinct().joinToString(",")
+          val updated = JSONObject(original.toString()).put("api_proxy", combined)
           val validation = api.validateOperaInput("args", updated.toString())
           check(validation == null) { validation ?: "Неверные настройки" }
-          api.putJsonData("/api/programs/operaproxy/args", updated)
+          check(api.putJsonData("/api/programs/operaproxy/args", updated)) { "Не удалось сохранить список API" }
           if (resetUpstreams) {
             try {
               val list = JSONArray(api.getTextContent("/api/programs/operaproxy/sni"))

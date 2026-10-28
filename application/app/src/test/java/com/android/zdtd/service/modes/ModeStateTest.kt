@@ -2,6 +2,10 @@ package com.android.zdtd.service.modes
 import org.junit.Assert.assertEquals
 import org.junit.Test
 class ModeStateTest {
+  @Test fun unverifiedConnectionNeverLooksVerified() {
+    assertEquals(0xFFFFE082.toInt(), ModeState.color("normal", "normal", "connected", false))
+    assertEquals(ModeState.GREEN, ModeState.color("normal", "normal", "connected", true))
+  }
   @Test fun endpointChangeInvalidatesOldLatencyWithoutLosingSelection() {
     assertEquals(true, ModeState.measurementCurrent("same", "same"))
     assertEquals(false, ModeState.measurementCurrent("new", "old"))
