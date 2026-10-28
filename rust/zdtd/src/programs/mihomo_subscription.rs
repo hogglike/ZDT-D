@@ -308,18 +308,37 @@ fn write_nodes(id: &str, nodes: &[SubscriptionNode]) -> Result<()> {
     Ok(())
 }
 
-fn preserve_existing_node_ids(subscription_id: &str, nodes: &mut [SubscriptionNode]) {
-    let existing = read_nodes(subscription_id);
-    let mut used = BTreeSet::<String>::new();
-    for node in nodes {
-        let Some(previous) = existing.iter().find(|previous| {
-            previous.protocol.eq_ignore_ascii_case(&node.protocol)
-                && previous.name.eq_ignore_ascii_case(&node.name)
-                && !used.contains(&previous.id)
-        }) else { continue; };
-        node.id = previous.id.clone();
-        used.insert(previous.id.clone());
+fn selection_definition(definition:&JsonValue) -> JsonValue {
+    let mut value=definition.clone();
+    if let Some(obj)=value.as_object_mut(){for key in ["name","tag","remarks","_zdt_share_link"]{obj.remove(key);}}
+    value
+}
+fn preserve_node_ids_from(existing:&[SubscriptionNode],nodes:&mut [SubscriptionNode]) {
+    let mut used=BTreeSet::<String>::new();let mut matched=vec![false;nodes.len()];
+    // Match definitions before labels so reordered duplicate names don't swap identities.
+    for (index,node) in nodes.iter_mut().enumerate() {
+        if let Some(previous)=existing.iter().find(|p|p.protocol.eq_ignore_ascii_case(&node.protocol) && selection_definition(&p.definition)==selection_definition(&node.definition) && !used.contains(&p.id)) {
+            node.id=previous.id.clone();used.insert(previous.id.clone());matched[index]=true;
+        }
     }
+    // Provider changes to addresses/keys keep the same logical named slot.
+    for (index,node) in nodes.iter_mut().enumerate() {
+        if matched[index] {continue;}
+        if let Some(previous)=existing.iter().find(|p|p.protocol.eq_ignore_ascii_case(&node.protocol) && p.name.eq_ignore_ascii_case(&node.name) && !used.contains(&p.id)) {
+            node.id=previous.id.clone();used.insert(previous.id.clone());matched[index]=true;
+        }
+    }
+    // A renamed server may now own another new server's generated ID.
+    // Give unmatched nodes unique IDs rather than silently dropping a duplicate.
+    for (index,node) in nodes.iter_mut().enumerate() {
+        if matched[index] {continue;}
+        let base=node.id.clone();let mut suffix=1;
+        while used.contains(&node.id) {node.id=format!("{base}_new_{suffix}");suffix+=1;}
+        used.insert(node.id.clone());
+    }
+}
+fn preserve_existing_node_ids(subscription_id:&str,nodes:&mut [SubscriptionNode]) {
+    preserve_node_ids_from(&read_nodes(subscription_id),nodes);
 }
 
 fn write_store(store: &SubscriptionStore) -> Result<()> {
@@ -1256,28 +1275,35 @@ fn endpoint_text(host: &str, port: u16) -> String {
 
 fn tls_json(definition: &JsonValue, default_enabled: bool) -> Option<JsonValue> {
     if let Some(tls) = definition.get("tls").filter(|value| value.is_object()) {
-        return Some(tls.clone());
+        let mut tls=tls.clone();
+        if tls.get("enabled").is_none() {tls["enabled"]=json!(true);}
+        if tls.get("reality").and_then(|v|v.get("enabled")).and_then(JsonValue::as_bool)==Some(true) && tls.get("utls").is_none() {
+            tls["utls"]=json!({"enabled":true,"fingerprint":"chrome"});
+        }
+        return Some(tls);
     }
     let security = json_string_any(definition, &["security", "tls"]);
-    let enabled = default_enabled || security.eq_ignore_ascii_case("tls") || security.eq_ignore_ascii_case("reality") || bool_any(definition, &["tls"]);
+    let has_reality=definition.get("reality-opts").is_some() || definition.get("reality_opts").is_some() || !json_string_any(definition,&["pbk","public-key","public_key","publicKey"]).is_empty();
+    let enabled = default_enabled || has_reality || security.eq_ignore_ascii_case("tls") || security.eq_ignore_ascii_case("reality") || bool_any(definition, &["tls"]);
     if !enabled { return None; }
-    let sni = json_string_any(definition, &["sni", "servername", "server-name", "peer"]);
+    let sni = json_string_any(definition, &["sni", "servername", "server-name", "server_name", "serverName", "peer"]);
     let mut tls = json!({"enabled": true, "insecure": bool_any(definition, &["skip-cert-verify", "allowInsecure", "insecure"])});
     if !sni.is_empty() { tls["server_name"] = json!(sni); }
-    let fp = json_string_any(definition, &["client-fingerprint", "fp"]);
+    let fp = json_string_any(definition, &["client-fingerprint", "fingerprint", "fp"]);
     if !fp.is_empty() { tls["utls"] = json!({"enabled": true, "fingerprint": fp}); }
     let reality = definition.get("reality-opts").or_else(|| definition.get("reality_opts"));
     let public_key = reality.map(|v| json_string_any(v, &["public-key", "public_key"]))
-        .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["pbk", "public-key"]));
+        .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["pbk", "public-key", "public_key", "publicKey"]));
     if !public_key.is_empty() {
         let short_id = reality.map(|v| json_string_any(v, &["short-id", "short_id"]))
-            .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["sid", "short-id"]));
+            .filter(|v| !v.is_empty()).unwrap_or_else(|| json_string_any(definition, &["sid", "short-id", "short_id", "shortId"]));
         tls["reality"] = json!({"enabled": true, "public_key": public_key, "short_id": short_id});
+        if fp.is_empty() {tls["utls"]=json!({"enabled":true,"fingerprint":"chrome"});}
     }
     Some(tls)
 }
 
-fn singbox_outbound(node: &SubscriptionNode) -> Result<JsonValue> {
+pub(crate) fn singbox_outbound(node: &SubscriptionNode) -> Result<JsonValue> {
     let d = &node.definition;
     let mut out = json!({"type": node.protocol, "tag": "proxy", "server": node.server, "server_port": node.port});
     match node.protocol.as_str() {
@@ -2078,3 +2104,31 @@ pub fn apply_selected_to_runtime_yaml(profile: &str, raw_yaml: &str, selected_id
     let out = serde_yaml::to_string(&root).context("serialize Mihomo runtime YAML with subscriptions")?;
     Ok(out)
 }
+
+/// Selection reconciliation also needs disabled subscriptions. Missing/unreadable
+/// cache files are incomplete snapshots, not proof that a server was removed.
+pub(crate) fn mode_selection_catalog() -> Result<(Vec<(String,String,bool,SubscriptionNode)>,bool)> {
+    let store=read_store()?;
+    let mut records=Vec::new();let mut ready=true;
+    for item in store.subscriptions.values() {
+        let cached=fs::read_to_string(nodes_path(&item.id)).ok().and_then(|raw|serde_json::from_str::<Vec<SubscriptionNode>>(&raw).ok());
+        match cached {
+            Some(nodes)=>for n in nodes {records.push((item.id.clone(),item.name.clone(),item.enabled,normalize_stored_node(n)));},
+            None=>ready=false,
+        }
+    }
+    Ok((records,ready))
+}
+
+/// Enabled subscription snapshots for connection modes; no HTTP request here.
+pub(crate) fn mode_nodes() -> Result<Vec<(String, String, SubscriptionNode)>> {
+    let store = read_store()?;
+    let mut nodes = Vec::new();
+    for item in store.subscriptions.values().filter(|s| s.enabled) {
+        for node in read_nodes(&item.id) {
+            nodes.push((item.id.clone(), item.name.clone(), node));
+        }
+    }
+    Ok(nodes)
+}
+

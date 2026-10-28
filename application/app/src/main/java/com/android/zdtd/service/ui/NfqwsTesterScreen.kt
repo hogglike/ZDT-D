@@ -55,6 +55,9 @@ import com.android.zdtd.service.diagnostics.nfqws.NfqwsTesterOverlayService
 import com.android.zdtd.service.diagnostics.nfqws.NfqwsTesterPhase
 import com.android.zdtd.service.diagnostics.nfqws.NfqwsTesterStore
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 @Composable
 fun NfqwsTesterScreen(
@@ -70,6 +73,10 @@ fun NfqwsTesterScreen(
   val testerState by NfqwsTesterStore.state.collectAsStateWithLifecycle()
   var selectedProgram by remember { mutableStateOf("nfqws") }
   var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+  var applyProgram by remember { mutableStateOf("nfqws") }
+  val applyScope = androidx.compose.runtime.rememberCoroutineScope()
+  var applyMessage by remember { mutableStateOf("") }
+  var applying by remember { mutableStateOf(false) }
   var selectedWorking by remember { mutableStateOf<String?>(null) }
 
   LaunchedEffect(Unit) {
@@ -84,7 +91,7 @@ fun NfqwsTesterScreen(
 
   val serviceRunning = ApiModels.isServiceOn(uiState.status)
   val activeProgram = testerState.program.ifBlank { selectedProgram }
-  val programProfiles = uiState.programs.firstOrNull { it.id == activeProgram }?.profiles.orEmpty()
+  val programProfiles = uiState.programs.firstOrNull { it.id == applyProgram }?.profiles.orEmpty()
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
@@ -96,6 +103,8 @@ fun NfqwsTesterScreen(
     ),
     verticalArrangement = Arrangement.spacedBy(if (shortHeight) 8.dp else 10.dp),
   ) {
+    item { ZapretAutoCard(selectedProgram, serviceRunning) { program, strategy -> applyProgram = program; selectedWorking = strategy } }
+    if (applyMessage.isNotBlank()) item { Text(applyMessage) }
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
@@ -120,7 +129,7 @@ fun NfqwsTesterScreen(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f)),
       ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          Text(stringResource(R.string.nfqws_tester_choose_program), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+          Text("Ядро для автоподбора и ручного теста", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             FilterChip(selected = selectedProgram == "nfqws", onClick = { selectedProgram = "nfqws" }, label = { Text("nfqws") })
             FilterChip(selected = selectedProgram == "nfqws2", onClick = { selectedProgram = "nfqws2" }, label = { Text("nfqws2") })
@@ -149,14 +158,14 @@ fun NfqwsTesterScreen(
               ok = !serviceRunning,
               okText = stringResource(R.string.nfqws_tester_service_stopped),
               failText = stringResource(R.string.nfqws_tester_service_must_be_stopped),
-              buttonText = stringResource(R.string.nfqws_tester_refresh_status),
+              buttonText = "Обновить состояние (службу не выключает)",
               onButton = actions::refreshStatus,
             )
           }
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
               onClick = { NfqwsTesterOverlayService.start(context, selectedProgram) },
-              enabled = overlayGranted && !serviceRunning && testerState.phase != NfqwsTesterPhase.RUNNING && testerState.phase != NfqwsTesterPhase.PREPARING,
+              enabled = com.android.zdtd.service.diagnostics.nfqws.ZapretTestOwner.owner.get() == null && overlayGranted && !serviceRunning && testerState.phase != NfqwsTesterPhase.RUNNING && testerState.phase != NfqwsTesterPhase.PREPARING,
             ) {
               Text(stringResource(R.string.nfqws_tester_start))
             }
@@ -215,7 +224,7 @@ fun NfqwsTesterScreen(
           title = stringResource(R.string.nfqws_tester_working_title),
           items = testerState.working,
           clickable = true,
-          onClick = { selectedWorking = it },
+          onClick = { applyProgram = activeProgram; selectedWorking = it },
         )
       }
       item {
@@ -244,7 +253,7 @@ fun NfqwsTesterScreen(
         title = { Text(stringResource(R.string.nfqws_tester_apply_title)) },
         text = {
           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.nfqws_tester_apply_message_fmt, strategy, activeProgram))
+            Text(stringResource(R.string.nfqws_tester_apply_message_fmt, strategy, applyProgram))
             programProfiles.forEach { profile ->
               Surface(
                 modifier = Modifier.fillMaxWidth().clickable { selectedProfile = profile.name },
@@ -258,9 +267,27 @@ fun NfqwsTesterScreen(
         },
         confirmButton = {
           Button(onClick = {
-            actions.applyStrategicVariant(activeProgram, selectedProfile, strategy) { }
-            selectedWorking = null
-          }) {
+            applying = true
+            applyScope.launch {
+              try {
+                val path = "/api/programs/$applyProgram/profiles/${android.net.Uri.encode(selectedProfile)}/config"
+                val previous = withContext(Dispatchers.IO) {
+                  val api = com.android.zdtd.service.modes.ModeClient.api(context)
+                  val status = api.getStatus() ?: error("Нет связи со службой")
+                  check(!ApiModels.isServiceOn(status) && !status.startInProgress && !status.stopInProgress && com.android.zdtd.service.diagnostics.nfqws.ZapretTestOwner.owner.get() == null) { "Сначала останови ZDT-D и тестер" }
+                  val data = api.getJsonData(path)
+                  check(data.has("content")) { "Не удалось сохранить предыдущие аргументы" }
+                  data.getString("content")
+                }
+                check(context.getSharedPreferences("zapret_auto", 0).edit().putString("backup", org.json.JSONObject().put("path", path).put("content", previous).toString()).commit()) { "Не удалось сохранить резервную копию" }
+                actions.applyStrategicVariant(applyProgram, selectedProfile, strategy) { ok ->
+                  applyMessage = if (ok) "Стратегия сохранена. Запусти ZDT-D и проверь нужное приложение" else "Не удалось применить стратегию"
+                  applying = false
+                }
+                selectedWorking = null
+              } catch(e: Exception) { applyMessage = e.message.orEmpty(); applying = false }
+            }
+          }, enabled = !applying && !serviceRunning) {
             Text(stringResource(R.string.common_yes))
           }
         },

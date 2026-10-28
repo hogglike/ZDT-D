@@ -29,6 +29,7 @@
 !/keystores/.gitkeep
 
 # Binary artifacts
+/application/app/libs/*.aar
 *.apk
 *.aab
 *.ap_
@@ -67,3 +68,10 @@ build-tail.log
 # Copilot polish runtime/report files
 .copilot-polish-summary.md
 .copilot-polish-summary*.md
+
+# TGWS plugin Android build outputs
+/plugin/local.properties
+/plugin/keystore.properties
+/plugin/.gradle/
+/plugin/build/
+/plugin/app/build/

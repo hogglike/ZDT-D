@@ -2,21 +2,19 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <!-- Needed to request installing APK updates downloaded by the app (online update). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- Android 13+ runtime permission (requested only when user enables notifications). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- Needed to list all installed apps (incl. system) for the app picker on Android 11+. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
-
 
     <application
         android:allowBackup="true"
@@ -30,162 +28,8 @@
         android:theme="@style/Theme.AW22xxxConfig">
 
         <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="@string/xposed_description" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="93" />
-        <meta-data
-            android:name="xposedsharedprefs"
-            android:value="true" />
-        <meta-data
-            android:name="xposedscope"
-            android:resource="@array/xposed_scope" />
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:launchMode="singleTop">
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-
-            <!-- Allow file managers to offer ZDT-D for .zdtb backup files. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="file"
-                    android:host="*"
-                    android:pathPattern=".*\.zdtb"
-                    android:mimeType="*/*" />
-            </intent-filter>
-
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="content"
-                    android:host="*"
-                    android:pathPattern=".*\.zdtb"
-                    android:mimeType="*/*" />
-            </intent-filter>
-
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="content" android:mimeType="application/octet-stream" />
-                <data android:scheme="content" android:mimeType="application/gzip" />
-                <data android:scheme="content" android:mimeType="application/x-gzip" />
-                <data android:scheme="content" android:mimeType="application/zip" />
-                <data android:scheme="content" android:mimeType="application/vnd.zdtd.backup" />
-                <data android:scheme="file" android:mimeType="application/octet-stream" />
-                <data android:scheme="file" android:mimeType="application/gzip" />
-                <data android:scheme="file" android:mimeType="application/x-gzip" />
-                <data android:scheme="file" android:mimeType="application/zip" />
-                <data android:scheme="file" android:mimeType="application/vnd.zdtd.backup" />
-            </intent-filter>
-
-        </activity>
-
-        <activity
-            android:name=".RemoteSetupActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".WorldMapActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".LocalWebPanelActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".T2sPanelActivity"
-            android:exported="false" />
-
-
-        <activity
-            android:name=".ProxyInfoProbeDetailsActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".CaptiveDevicesActivity"
-            android:exported="false" />
-
-        <service
-            android:name=".tile.ZdtdTileService"
-            android:label="@string/qs_tile_label"
-            android:icon="@drawable/ic_qs_tile"
-            android:exported="true"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
-            <intent-filter>
-                <action android:name="android.service.quicksettings.action.QS_TILE" />
-            </intent-filter>
-        </service>
-
-        <!-- Receives daemon state broadcasts from the root daemon via `am broadcast`. -->
-        <receiver
-            android:name=".DaemonStateReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.android.zdtd.service.ACTION_DAEMON_STATE" />
-            </intent-filter>
-        </receiver>
-
-        <receiver
-            android:name=".ProxyInfoProbeReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.android.zdtd.service.ACTION_PROXYINFO_PROBE_DETECTED" />
-            </intent-filter>
-        </receiver>
-
-        <!-- Receives fire-once captive-portal "device pending" broadcasts from the daemon. -->
-        <receiver
-            android:name=".CaptiveDeviceReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.android.zdtd.service.ACTION_CAPTIVE_DEVICE_PENDING" />
-            </intent-filter>
-        </receiver>
-
-        <!-- Handles Allow/Deny action buttons; app-private (not exported). -->
-        <receiver
-            android:name=".CaptiveActionReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.android.zdtd.service.ACTION_CAPTIVE_ALLOW" />
-                <action android:name="com.android.zdtd.service.ACTION_CAPTIVE_DENY" />
-            </intent-filter>
-        </receiver>
-
-
-
-        <receiver
-            android:name=".widgets.ZdtdMiniDashboardWidgetProvider"
-            android:label="@string/widget_mini_dashboard_name"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/widget_mini_dashboard_info" />
-        </receiver>
-
-        <service
-            android:name=".diagnostics.nfqws.NfqwsTesterOverlayService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:name="com.android.zdtd.service.DISTRIBUTION"
+            android:value="${zdtDistribution}" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -196,7 +40,5 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-
     </application>
-
 </manifest>

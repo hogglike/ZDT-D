@@ -202,6 +202,20 @@ hr
 
 MODDIR="${MODPATH:-$PWD}"
 
+# Preserve user settings/profile data across module updates. Root managers extract
+# the new module into modules_update/<id>, so without this copy an update would
+# replace working_folder with the empty template bundled in the ZIP.
+MODULE_ID="$(awk -F= '/^id=/{print $2; exit}' "$MODDIR/module.prop" 2>/dev/null | tr -d '\r')"
+OLD_MODULE_DIR="/data/adb/modules/$MODULE_ID"
+if [ -n "$MODULE_ID" ] && [ -d "$OLD_MODULE_DIR/working_folder" ] && [ "$OLD_MODULE_DIR" != "$MODDIR" ]; then
+  ui_print "- Preserving existing working_folder from $OLD_MODULE_DIR"
+  rm -rf "$MODDIR/working_folder" 2>/dev/null || true
+  mkdir -p "$MODDIR/working_folder"
+  cp -a "$OLD_MODULE_DIR/working_folder/." "$MODDIR/working_folder/" 2>/dev/null || {
+    ui_print "! Warning: failed to preserve some working_folder files"
+  }
+fi
+
 ################################################################################
 # Verify extracted module files before applying permissions
 ################################################################################

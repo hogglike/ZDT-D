@@ -52,6 +52,7 @@ class NfqwsTesterOverlayService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var runner: NfqwsTesterRunner
     private lateinit var rootConfig: RootConfigManager
+    private var ownsSession = false
     private var pollJob: Job? = null
     private var windowManager: WindowManager? = null
 
@@ -118,13 +119,14 @@ class NfqwsTesterOverlayService : Service() {
 
     override fun onDestroy() {
         pollJob?.cancel()
-        runCatching {
+        if (ownsSession) runCatching {
             rootConfig.execRootSh(
                 "if [ -x /data/user/0/${packageName}/no_backup/bin/nfqws_tester ]; then " +
                     "/data/user/0/${packageName}/no_backup/bin/nfqws_tester stop >/dev/null 2>&1; " +
                     "fi"
             )
         }
+        if (ownsSession) ZapretTestOwner.owner.compareAndSet("manual", null)
         removeOverlay()
         serviceScope.cancel()
         super.onDestroy()
@@ -133,6 +135,10 @@ class NfqwsTesterOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private suspend fun beginSession(program: String) {
+        if (ownsSession) return
+        ownsSession = ZapretTestOwner.owner.compareAndSet(null, "manual")
+        if (!ownsSession) { stopSelfSafely(); return }
+
         if (!Settings.canDrawOverlays(this)) {
             NfqwsTesterStore.update {
                 it.copy(

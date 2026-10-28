@@ -67,6 +67,10 @@ import org.json.JSONObject
 import kotlin.random.Random
 
 private data class TgWsSettingUi(
+  val preservedJson: String = "{}",
+  val wsTimeout: Int = 10,
+  val cfTimeout: Int = 10,
+  val tcpTimeout: Int = 10,
   val port: String = "1443",
   val hostMode: String = "local",
   val secret: String = "",
@@ -122,6 +126,12 @@ fun TgWsProxySettingsScreen(
   var saving by remember { mutableStateOf(false) }
   var preview by remember { mutableStateOf(TgWsPreviewUi()) }
   var advancedExpanded by remember { mutableStateOf(false) }
+  var checkStarting by remember { mutableStateOf(false) }
+  var checking by remember { mutableStateOf(false) }
+  var diagnosis by remember { mutableStateOf(JSONObject()) }
+  var checkMessage by remember { mutableStateOf("") }
+  var reportExpanded by remember { mutableStateOf(false) }
+
 
   fun showSnack(text: String) {
     scope.launch { snackHost.showSnackbar(text) }
@@ -184,6 +194,18 @@ fun TgWsProxySettingsScreen(
     }
   }
 
+  LaunchedEffect(checking) {
+    if (checking) {
+      while (checking) {
+        actions.loadJsonData("/api/programs/tgwsproxy/diagnostics") { obj ->
+          if (obj != null) { diagnosis = obj; checking = obj.optString("state") == "running" }
+          else { checking = false; checkMessage = "Нет связи со службой. Повтори проверку статуса." }
+        }
+        delay(1500)
+      }
+    }
+  }
+
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(top = topContentPadding + 8.dp, bottom = bottomContentPadding + 16.dp),
@@ -191,6 +213,33 @@ fun TgWsProxySettingsScreen(
   ) {
     item {
       TgWsHeaderCard(enabled = enabled)
+    }
+
+    item {
+      TgWsSectionCard(title = "Быстрая настройка Telegram", desc = "Локальный MTProto → WebSocket → Telegram. VPN-подписка и Opera не нужны.") {
+        Text("Выбери начальный вариант. Настройки сохранятся автоматически; для работающего прокси затем перезапусти ZDT-D. Порт и секрет сохраняются.")
+        OutlinedButton(onClick = {
+          setting = setting.copy(defaultDomains = true, cfPriority = true, cfBalance = true, wsTimeout = 4, cfTimeout = 4, tcpTimeout = 4)
+        }, enabled = !loading && !checking, modifier = Modifier.fillMaxWidth()) { Text("Cloudflare сначала · затем прямое") }
+        OutlinedButton(onClick = {
+          setting = setting.copy(defaultDomains = false, cfDomains = "", cfWorkerDomains = "", cfPriority = false, cfBalance = false, mtprotoProxies = "", wsTimeout = 4, cfTimeout = 4, tcpTimeout = 4)
+        }, enabled = !loading && !checking, modifier = Modifier.fillMaxWidth()) { Text("Прямой WebSocket · без Cloudflare") }
+        Text("Если долго висит «Подключение», сравни эти варианты в своей сети. Cloudflare может отвечать 429 или быть недоступен; прямой путь тоже может блокироваться. Внешний прокси и свои адреса DC эти кнопки не меняют.", style = MaterialTheme.typography.bodySmall)
+        Button(onClick = {
+          checkStarting = true; checkMessage = ""; diagnosis = JSONObject().put("state", "running")
+          actions.saveJsonData("/api/programs/tgwsproxy/diagnostics", JSONObject()) { ok ->
+            checkStarting = false
+            if (ok) checking = true
+            if (!ok) { checking = false; checkMessage = "Не удалось запустить проверку. Проверь установку компонента и версию модуля." }
+          }
+        }, enabled = !loading && !saving && setting == syncedSetting && !checking && !checkStarting, modifier = Modifier.fillMaxWidth()) { Text(if (checking || checkStarting) "Проверяется Telegram…" else "Проверить MTProto и WebSocket") }
+        Text(diagnosis.optString("message", "Проверка создаёт отдельное локальное подключение и ждёт ответ Telegram, а не просто открытый порт. До 90 секунд. Сообщения и звонки проверь в приложении."))
+        if (checkMessage.isNotBlank()) Text(checkMessage, color = MaterialTheme.colorScheme.error)
+        if (diagnosis.optString("report").isNotBlank()) {
+          OutlinedButton(onClick = { reportExpanded = !reportExpanded }) { Text(if (reportExpanded) "Скрыть отчёт" else "Показать отчёт") }
+          if (reportExpanded) Text(diagnosis.optString("report"), style = MaterialTheme.typography.bodySmall)
+        }
+      }
     }
 
     item {
@@ -456,6 +505,10 @@ private fun parseTgWsSetting(obj: JSONObject?): TgWsSettingUi {
   val secrets = obj?.optJSONArray("secrets")
   val secret = secrets?.optString(0, "").orEmpty()
   return TgWsSettingUi(
+    preservedJson = obj?.toString() ?: "{}",
+    wsTimeout = obj?.optInt("ws_connect_timeout", 10) ?: 10,
+    cfTimeout = obj?.optInt("cf_connect_timeout", 10) ?: 10,
+    tcpTimeout = obj?.optInt("tcp_fallback_timeout", 10) ?: 10,
     port = obj?.optInt("port", 1443)?.toString() ?: "1443",
     hostMode = obj?.optString("host_mode", "local")?.takeIf { it == "lan" } ?: "local",
     secret = secret,
@@ -492,12 +545,15 @@ private fun parseTgWsPreview(obj: JSONObject?): TgWsPreviewUi = TgWsPreviewUi(
 
 private fun TgWsSettingUi.toJson(): JSONObject {
   val host = if (hostMode == "lan") "0.0.0.0" else "127.0.0.1"
-  return JSONObject()
+  return JSONObject(preservedJson)
     .put("port", port.toIntOrNull() ?: 1443)
     .put("host_mode", if (hostMode == "lan") "lan" else "local")
     .put("host", host)
-    .put("link_ip", "")
-    .put("secrets", JSONArray().also { arr -> if (secret.isNotBlank()) arr.put(secret.trim()) })
+    .put("secrets", JSONArray().also { arr ->
+      if (secret.isNotBlank()) arr.put(secret.trim())
+      val old = JSONObject(preservedJson).optJSONArray("secrets") ?: JSONArray()
+      for (i in 1 until old.length()) arr.put(old.getString(i))
+    })
     .put("listen_faketls_enabled", fakeTlsEnabled)
     .put("listen_faketls_domain", fakeTlsDomain.trim())
     .put("dc_ip", linesToJsonArray(dcIp))
@@ -506,7 +562,6 @@ private fun TgWsSettingUi.toJson(): JSONObject {
     .put("max_connections", maxConnections.toIntOrNull() ?: 0)
     .put("verbose", verbose && !quiet)
     .put("quiet", quiet)
-    .put("log_file", "")
     .put("mtproto_proxies", linesToJsonArray(mtprotoProxies))
     .put("cf_domains", linesToJsonArray(cfDomains))
     .put("cf_worker_domains", linesToJsonArray(cfWorkerDomains))
@@ -515,17 +570,9 @@ private fun TgWsSettingUi.toJson(): JSONObject {
     .put("default_domains", defaultDomains)
     .put("fronting_domain", frontingDomain.trim())
     .put("fronting_cooldown", frontingCooldown.toLongOrNull() ?: 1800L)
-    .put("ws_connect_timeout", 10)
-    .put("ws_fail_probe_timeout", 2)
-    .put("ws_fail_cooldown", 30)
-    .put("ws_redirect_cooldown", 300)
-    .put("handshake_timeout", 10)
-    .put("tcp_fallback_timeout", 10)
-    .put("upstream_connect_timeout", 5)
-    .put("upstream_fail_cooldown", 60)
-    .put("cf_connect_timeout", 10)
-    .put("cf_fail_cooldown", 60)
-    .put("pool_max_age", 55)
+    .put("ws_connect_timeout", wsTimeout)
+    .put("tcp_fallback_timeout", tcpTimeout)
+    .put("cf_connect_timeout", cfTimeout)
     .put("outbound_proxy", outboundProxy.trim())
     .put("no_outbound_proxy", noOutboundProxy)
     .put("no_proxy", noProxy.trim())
