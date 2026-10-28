@@ -4048,7 +4048,9 @@ jobs:
           export ac_cv_prog_AR="$TOR_AR"
           export ac_cv_prog_RANLIB="$TOR_RANLIB"
           export ac_cv_prog_STRIP="$TOR_STRIP"
-          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+          # Do not auto-enable host-only liblzma or other Ubuntu libraries.
+          export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/lib64/pkgconfig"
+          export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
           export CPPFLAGS="-I$PREFIX/include -D__ANDROID_API__=$TOR_ANDROID_API_LEVEL"
           export CFLAGS="-Os -fPIC -fPIE -D__ANDROID_API__=$TOR_ANDROID_API_LEVEL"
           export CXXFLAGS="$CFLAGS"
@@ -4081,7 +4083,7 @@ jobs:
           make -C "$SRC/zstd/lib" \
             PREFIX="$PREFIX" \
             BUILD_SHARED=no \
-            install-static install-includes
+            install-static install-includes install-pc
 
           echo "=== Build OpenSSL (${TOR_OPENSSL_REF}) ==="
           pushd "$SRC/openssl" > /dev/null
