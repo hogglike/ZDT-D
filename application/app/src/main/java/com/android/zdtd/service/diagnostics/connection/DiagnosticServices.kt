@@ -37,7 +37,8 @@ class DiagnosticService : Service() {
       } catch (e: Exception) {
         ConnectionHealth.preferences(this@DiagnosticService).edit().putString("error", "${e.javaClass.simpleName}: ${e.message}").apply()
       } finally {
-        stopSelf(startId)
+        ConnectionWidgetProvider.render(applicationContext)
+        stopSelf()
       }
     }
     return START_NOT_STICKY

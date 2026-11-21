@@ -29,12 +29,12 @@ object ModeClient {
   fun cached(context: Context): JSONObject = runCatching { JSONObject(prefs(context).getString("status", "{}")!!) }.getOrDefault(JSONObject())
   fun cache(context: Context, status: JSONObject) {
     val old = cached(context)
-    val changed = listOf("mode", "state", "server").any { old.optString(it) != status.optString(it) }
     prefs(context).edit().putString("status", status.toString()).apply()
-    ModeWidgetProvider.render(context)
-    if (!changed) return
-    listOf(WhiteModeTile::class.java, NormalModeTile::class.java, BrowserModeTile::class.java).forEach {
-      TileService.requestListeningState(context, ComponentName(context, it))
+    if (old.optString("mode") != status.optString("mode") ||
+      old.optString("state") != status.optString("state") ||
+      old.optBoolean("verified") != status.optBoolean("verified")
+    ) {
+      ConnectionWidgetProvider.render(context)
     }
   }
   fun refresh(context: Context): JSONObject {

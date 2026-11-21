@@ -65,7 +65,7 @@ class ConnectionModesActivity : ComponentActivity() {
     var snapshot by remember { mutableStateOf(JSONObject()) }
     var draft by remember { mutableStateOf(JSONObject()) }
     var status by remember { mutableStateOf(ModeClient.cached(this)) }
-    var editMode by remember { mutableStateOf(intent.getStringExtra("mode")?.takeIf { it in ModeClient.modes } ?: "white") }
+    val editMode = "normal"
     var message by remember { mutableStateOf("Загрузка настроек…") }
     var dirty by remember { mutableStateOf(false) }
     var appDialog by remember { mutableStateOf(false) }
@@ -127,17 +127,16 @@ class ConnectionModesActivity : ComponentActivity() {
       }
     }) { contentPadding ->
       Column(Modifier.padding(contentPadding).safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Режимы подключения · ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.headlineSmall)
-        Text("Нажми режим для подключения. Выбор сервера доступен удержанием кнопки.", style = MaterialTheme.typography.bodySmall)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          ModeClient.modes.forEach { mode ->
-            Surface(modifier = Modifier.weight(1f).combinedClickable(
-              onClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.switch(this@ConnectionModesActivity, mode) },
-              onLongClick = { if (dirty) message = "Сначала сохрани настройки" else ModeClient.pickServer(this@ConnectionModesActivity, mode) }),
-              shape = MaterialTheme.shapes.large, color = Color(ModeState.color(mode, status.optString("mode"), status.optString("state"), status.optBoolean("verified")))) {
-              Text(ModeState.title(mode), Modifier.padding(horizontal = 4.dp, vertical = 14.dp), color = Color.Black, maxLines = 1, style = MaterialTheme.typography.labelMedium)
-            }
-          }
+        Text("VPN", style = MaterialTheme.typography.headlineSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Button(
+            enabled = settings != null && !dirty && status.optString("state") !in listOf("connecting", "connected"),
+            onClick = { ModeClient.switch(this@ConnectionModesActivity, editMode) },
+          ) { Text("Подключить") }
+          OutlinedButton(
+            enabled = settings != null && !dirty,
+            onClick = { ModeClient.pickServer(this@ConnectionModesActivity, editMode) },
+          ) { Text("Сервер") }
         }
         Text(status.optString("message", "Выключено"), color = if (status.optString("state") == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
         TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) { Text("Диагностика ${if (diagnosticsExpanded) "▴" else "▾"}") }
@@ -162,7 +161,7 @@ class ConnectionModesActivity : ComponentActivity() {
         }) { Text("Скопировать диагностику подключения") }
         }
         if (status.optInt("total") > 0 && status.optString("state") == "connecting") Text("Попытка ${status.optInt("attempt")} из ${status.optInt("total")} · круг ${status.optInt("round")}")
-        OutlinedButton(onClick = { ModeClient.switch(this@ConnectionModesActivity, "") }, modifier = Modifier.fillMaxWidth()) { Text("Отключить режим") }
+        OutlinedButton(onClick = { ModeClient.switch(this@ConnectionModesActivity, "") }, modifier = Modifier.fillMaxWidth()) { Text("Отключить VPN") }
         HorizontalDivider()
         if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
         TabRow(selectedTabIndex = page) {
@@ -171,10 +170,6 @@ class ConnectionModesActivity : ComponentActivity() {
           }
         }
         if (page == 0) {
-        Text("Настроить режим", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          ModeClient.modes.forEach { mode -> FilterChip(selected = editMode == mode, onClick = { editMode = mode }, label = { Text(ModeState.title(mode)) }) }
-        }
         if (settings != null) {
           val blacklist = settings.optString("app_policy") == "blacklist"
           Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), shape = MaterialTheme.shapes.medium) {

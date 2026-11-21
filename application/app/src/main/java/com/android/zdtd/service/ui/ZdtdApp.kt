@@ -207,15 +207,7 @@ fun ZdtdApp(
           RootState.CHECKING -> SplashScreen()
           RootState.DENIED -> RootInfoScreen(rootState = rootState, onRequest = actions::retryRoot, onRemoteSetup = actions::openRemoteSetup)
           RootState.GRANTED -> {
-            MainShell(
-              setup = setup,
-              uiStateFlow = uiStateFlow,
-              logsFlow = logsFlow,
-              appUpdateFlow = appUpdateFlow,
-              backupFlow = backupFlow,
-              programUpdatesFlow = programUpdatesFlow,
-              actions = actions,
-            )
+            NetworkHome(uiStateFlow, actions)
           }
         }
       }

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - per-app-dns-stage2-test
+      - network-lite
   workflow_dispatch:
     inputs:
       build_type:

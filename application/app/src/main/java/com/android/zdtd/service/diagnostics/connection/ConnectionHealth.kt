@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import com.android.zdtd.service.RootConfigManager
 import com.android.zdtd.service.api.ApiClient
+import com.android.zdtd.service.modes.ModeClient
 import kotlinx.coroutines.*
 import okhttp3.*
 import org.json.JSONArray
@@ -78,30 +79,30 @@ object ConnectionHealth {
             }
           } catch (e: Exception) { row("DNS-профили", "fail", e.javaClass.simpleName) }
         }
-        val opera = async(Dispatchers.IO) {
+        val vpn = async(Dispatchers.IO) {
           try {
-            val a = api(RootConfigManager(context))
-            val enabled = a.getJsonData("/api/programs/operaproxy/enabled")
-            if (!enabled.has("enabled")) row("Opera proxy", "fail", "Не удалось прочитать настройки")
-            else if (!enabled.optBoolean("enabled")) row("Opera proxy", "off", "Выключен")
-            else {
-              val ports = a.getJsonData("/api/programs/operaproxy/ports")
-              val port = ports.optInt("opera_start_port")
-              if (port !in 1..65535) row("Opera proxy", "fail", "Не найден SOCKS-порт Opera")
-              else {
-                val proxyClient = client.newBuilder().socketFactory(javax.net.SocketFactory.getDefault())
-                  .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port))).build()
-                probe(proxyClient, "Opera proxy", "https://www.gstatic.com/generate_204", 204)
-                  .apply { put("detail", "SOCKS 127.0.0.1:$port → Google: ${optString("detail")}") }
-              }
+            val status = ModeClient.refresh(context)
+            val state = status.optString("state")
+            val server = status.optString("server")
+            when {
+              state == "connected" && status.optBoolean("verified") ->
+                row("VPN", "ok", "Сайт доступен через сервер: $server")
+              state == "connected" -> row("VPN", "unknown", "Подключён: $server. Проверка сайтов отключена")
+              state == "connecting" -> row("VPN", "unknown", "Подключается")
+              state == "error" -> row("VPN", "fail", status.optString("message", "Ошибка подключения"))
+              else -> row("VPN", "off", "Выключен")
             }
-          } catch (e: Exception) { row("Opera proxy", "fail", e.javaClass.simpleName) }
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Exception) {
+            row("VPN", "fail", "Нет связи с модулем")
+          }
         }
         val rows = direct.awaitAll()
         JSONObject().put("time", System.currentTimeMillis()).put("network", networkName)
           .put("summary", HealthRules.summary(rows.take(2).map { it.optString("state") == "ok" }, rows.drop(2).take(2).map { it.optString("state") == "ok" }))
-          .put("rows", JSONArray(rows + listOf(opera.await(), dns.await())))
-          .put("note", "Прямые запросы привязаны к физической сети. YouTube: HTTPS, без проверки воспроизведения. Таймаут также может означать сбой сайта или DNS.")
+          .put("rows", JSONArray(rows + listOf(dns.await(), vpn.await())))
+          .put("note", "YouTube: HTTPS с UID виджета. Воспроизведение проверяется в самом YouTube. DNS: проверяются слушатели профилей. Для проверки назначения открой нужное приложение.")
       }
       prefs.edit().putString("report", result.toString()).apply()
     } finally {

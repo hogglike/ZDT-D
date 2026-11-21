@@ -71,9 +71,9 @@ fun NfqwsTesterScreen(
   val shortHeight = rememberIsShortHeight()
   val uiState by uiStateFlow.collectAsStateWithLifecycle()
   val testerState by NfqwsTesterStore.state.collectAsStateWithLifecycle()
-  var selectedProgram by remember { mutableStateOf("nfqws") }
+  var selectedProgram by remember { mutableStateOf("nfqws2") }
   var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-  var applyProgram by remember { mutableStateOf("nfqws") }
+  var applyProgram by remember { mutableStateOf("nfqws2") }
   val applyScope = androidx.compose.runtime.rememberCoroutineScope()
   var applyMessage by remember { mutableStateOf("") }
   var applying by remember { mutableStateOf(false) }

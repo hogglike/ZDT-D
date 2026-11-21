@@ -1,9 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/health_root" android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:padding="14dp" android:background="#FFF7F7">
-    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="ZDT-D · связь" android:textSize="18sp" android:textStyle="bold" android:textColor="#AD1830" />
-    <TextView android:id="@+id/health_time" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" android:textColor="#555555" />
-    <TextView android:id="@+id/health_results" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:textSize="13sp" android:textColor="#333333" />
-    <Button android:id="@+id/health_check" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Проверить" />
+    android:id="@+id/health_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_network_background"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/health_time"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#BCCFC9"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/health_results"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:textColor="#F2FAF7"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/health_check"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Проверить"
+            android:textColor="#A9F2D7"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/health_vpn"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="VPN вкл."
+            android:textColor="#A9F2D7"
+            android:textStyle="bold" />
+    </LinearLayout>
 </LinearLayout>

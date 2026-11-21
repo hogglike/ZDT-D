@@ -73,7 +73,7 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.safeDrawingPadding().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Проверка соединения", style = MaterialTheme.typography.headlineSmall)
-            Text("Прямой доступ · Opera · DNS · YouTube")
+            Text("Интернет · DNS · YouTube · VPN")
             Button(onClick = { start("CHECK") }, enabled = !checking && !capture) { Text(if (checking) "Проверка…" else "Проверить сейчас") }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
               Switch(checked = prefs.getBoolean("automatic", false), onCheckedChange = {
