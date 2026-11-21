@@ -4237,7 +4237,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '${{ env.GO_VERSION }}'
+          go-version: '1.26.10'
           cache: false
 
       - name: Prepare Android SDK paths
