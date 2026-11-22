@@ -35,7 +35,7 @@ internal fun ModeNodeLabel(node: JSONObject, status: JSONObject, showError: Bool
   val delay = when (rank) {
     0 -> "✓ ${ping!!.optLong("ms")} мс · ${java.text.DateFormat.getTimeInstance().format(java.util.Date(ping.optLong("time") * 1000))}"
     2 -> "× Нет ответа" + if (showError) " · ${ping?.optString("error").orEmpty()}" else ""
-    3 -> if (!node.optBoolean("enabled", true)) "Подписка выключена" else "Не поддерживается этим ядром"
+    3 -> if (!node.optBoolean("enabled", true)) "Подписка выключена" else if (node.optString("transport").isBlank()) "Не поддерживается этим ядром" else "Транспорт ${node.optString("transport")} не поддерживается"
     else -> "Задержка не проверена"
   }
   Column {

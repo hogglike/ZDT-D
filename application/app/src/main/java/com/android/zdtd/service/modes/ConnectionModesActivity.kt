@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -18,6 +19,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -29,7 +33,7 @@ import org.json.JSONObject
 
 private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).map { optString(it) }
 private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
-private data class ModeApp(val packageName: String, val label: String, val uid: Int)
+private data class ModeApp(val packageName: String, val label: String, val uid: Int, val system: Boolean)
 private fun pickedApps(settings: JSONObject?, apps: List<ModeApp>, dns: List<String>): List<String> {
   if (settings == null) return emptyList()
   val dnsUids = apps.filter { it.packageName in dns }.map { it.uid }.toSet()
@@ -90,7 +94,7 @@ class ConnectionModesActivity : ComponentActivity() {
       apps = withContext(Dispatchers.IO) {
         @Suppress("DEPRECATION")
         packageManager.getInstalledApplications(0).filter { it.uid % 100000 >= 10000 && !it.packageName.startsWith(packageName.substringBeforeLast('.')) }
-          .map { ModeApp(it.packageName, packageManager.getApplicationLabel(it).toString(), it.uid) }.sortedBy { it.label.lowercase() }
+          .map { ModeApp(it.packageName, packageManager.getApplicationLabel(it).toString(), it.uid, (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0) }.sortedBy { it.label.lowercase() }
       }
       while (isActive) {
         delay(1200)
@@ -106,7 +110,7 @@ class ConnectionModesActivity : ComponentActivity() {
     LaunchedEffect(settings, apps) {
       if (openApps && settings != null && apps.isNotEmpty()) {
         openApps = false
-        appDialog = settings.optString("app_policy") in listOf("selected", "blacklist")
+        appDialog = true
       }
     }
     Scaffold(bottomBar = {
@@ -142,6 +146,13 @@ class ConnectionModesActivity : ComponentActivity() {
             onClick = { ModeClient.pickServer(this@ConnectionModesActivity, editMode) },
           ) { Text("Сервер") }
         }
+        val vpnHealth = when (status.optString("vpn_health")) {
+          "fail" -> "VPN включён, проверка не прошла"
+          "partial" -> "Частичный доступ через VPN"
+          "checking" -> "Проверяем выбранный VPN"
+          else -> ""
+        }
+        if (status.optString("state") == "connected" && vpnHealth.isNotBlank()) Text(vpnHealth, style = MaterialTheme.typography.bodyMedium)
         Text(status.optString("message", "Выключено"), color = if (status.optString("state") == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
         TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) { Text("Диагностика ${if (diagnosticsExpanded) "▴" else "▾"}") }
         if (diagnosticsExpanded) {
@@ -182,9 +193,7 @@ class ConnectionModesActivity : ComponentActivity() {
               if (selectedApps.isEmpty()) Text("Приложения не выбраны", style = MaterialTheme.typography.bodySmall)
               apps.filter { it.packageName in selectedApps }.take(6).forEach { Text(it.label, style = MaterialTheme.typography.bodySmall) }
               if (selectedApps.size > 6) Text("Ещё ${selectedApps.size - 6} · открой список", style = MaterialTheme.typography.bodySmall)
-              if (settings.optString("app_policy") in listOf("selected", "blacklist")) {
               OutlinedButton(onClick = { appDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("Изменить приложения") }
-            }
             }
           }
           if (editMode != "white") {
@@ -201,7 +210,7 @@ class ConnectionModesActivity : ComponentActivity() {
               })
             }
           }
-          Text(if (multiple) "Авто: до шести кандидатов одновременно. Ручной выбор сохраняет список." else "Один сервер для выбранных приложений.", style = MaterialTheme.typography.bodySmall)
+          Text(if (multiple) "Авто использует сохранённый сервер и замеры." else "Один сервер для выбранных приложений.", style = MaterialTheme.typography.bodySmall)
           if (multiple) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               FilterChip(selected = !settings.optBoolean("manual_override"), onClick = { change("manual_override", false); change("check_enabled", true) }, label = { Text("Авто") })
@@ -211,18 +220,6 @@ class ConnectionModesActivity : ComponentActivity() {
             if (settings.optBoolean("manual_override")) OutlinedButton(onClick = {
               if (dirty) message = "Сначала сохрани настройки" else ModeClient.pickServer(this@ConnectionModesActivity, editMode)
             }) { Text("Выбрать ручной сервер") }
-          }
-          val policies = listOf(
-            "selected" to "Только выбранные приложения",
-            "blacklist" to "Все, кроме выбранных",
-            "all" to "Все приложения",
-            "except_dns" to "Все, кроме приложений с DNS-профилями",
-          )
-          policies.forEach { (policy, label) ->
-            Row(Modifier.fillMaxWidth().clickable { change("apps", JSONArray(selectedApps)); change("app_policy", policy) }) {
-              RadioButton(settings.optString("app_policy") == policy, onClick = { change("apps", JSONArray(selectedApps)); change("app_policy", policy) })
-              Text(label, Modifier.padding(top = 12.dp))
-            }
           }
           if (editMode == "browser") OutlinedButton(onClick = {
             @Suppress("DEPRECATION")
@@ -267,11 +264,16 @@ class ConnectionModesActivity : ComponentActivity() {
           if (checksExpanded) {
           HorizontalDivider()
           Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Проверять сайты перед подключением", Modifier.weight(1f).padding(top = 10.dp))
+            Text("Проверять выбранный VPN после подключения", Modifier.weight(1f).padding(top = 10.dp))
             Switch(settings.optBoolean("check_enabled", true), onCheckedChange = { change("check_enabled", it) })
           }
-          Text(if (settings.optBoolean("check_enabled", true)) "Проверка применяется только к этому режиму. Каждый сайт можно выключить отдельно. HTTP-код 0: подходит любой ответ 200–399; можно задать точный код." else "Сервер и маршруты будут применены без проверки доступа к сайтам. Зелёный цвет означает, что режим применён; работоспособность интернета не подтверждена.", style = MaterialTheme.typography.bodySmall)
-          if (multiple && !settings.optBoolean("check_enabled", true)) Text("Без проверки применяется только первый кандидат; автоперебор не может определить работоспособность.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+          Text("До двух включённых HTTPS-целей проверяются параллельно. При ошибке VPN остаётся включён.", style = MaterialTheme.typography.bodySmall)
+          TextButton(enabled = status.optString("state") == "connected" && status.optString("mode") == editMode, onClick = {
+            scope.launch {
+              val result = withContext(Dispatchers.IO) { runCatching { ModeClient.api(this@ConnectionModesActivity).postJsonResult("/api/connection-modes/check-active", JSONObject()) } }
+              message = if (result.getOrNull()?.optBoolean("ok") == true) "Проверка запущена" else "Не удалось запустить проверку"
+            }
+          }) { Text("Повторить проверку VPN") }
           val sites = settings.optJSONArray("check_sites").objects()
           sites.forEachIndexed { index, site ->
             fun editSite(field: String, value: Any) {
@@ -286,8 +288,6 @@ class ConnectionModesActivity : ComponentActivity() {
             OutlinedTextField(site.optInt("expected_status").toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) editSite("expected_status", it.toIntOrNull() ?: 0) }, label = { Text("HTTP-код · 0 = автоматически") }, singleLine = true)
           }
           TextButton(enabled = sites.size < 12, onClick = { change("check_sites", JSONArray(sites + JSONObject().put("url", "https://example.com/").put("enabled", true).put("expected_status", 0))) }) { Text("Добавить сайт") }
-          OutlinedTextField(settings.optInt("min_success", 2).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) change("min_success", it.toIntOrNull() ?: 0) }, label = { Text("Сколько успешных ответов требуется") }, singleLine = true)
-          OutlinedTextField(settings.optInt("timeout_seconds", 8).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) change("timeout_seconds", it.toIntOrNull() ?: 0) }, label = { Text("Таймаут одного сайта · 2–30 секунд") }, singleLine = true)
           HorizontalDivider()
           }
 
@@ -296,7 +296,7 @@ class ConnectionModesActivity : ComponentActivity() {
         Text("Серверы и задержка", style = MaterialTheme.typography.titleMedium)
         Text("Обновить серверы: загрузить включённые подписки, убрать удалённые записи и проверить задержку всех поддерживаемых серверов.", style = MaterialTheme.typography.bodySmall)
         val maintenanceBusy = status.optString("maintenance_state") in listOf("pending", "refreshing", "checking")
-        Button(onClick = { ModeClient.maintenance(this@ConnectionModesActivity, true) }, enabled = !dirty && !maintenanceBusy, modifier = Modifier.fillMaxWidth()) { Text("Обновить серверы и проверить задержку") }
+        Button(onClick = { ModeClient.maintenance(this@ConnectionModesActivity, true, subscriptionOnly = true) }, enabled = !dirty && !maintenanceBusy, modifier = Modifier.fillMaxWidth()) { Text("Обновить подписки") }
         if (status.optString("maintenance_message").isNotBlank()) Text(status.optString("maintenance_message"), color = if (status.optString("maintenance_state") == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
         if (maintenanceBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -304,10 +304,10 @@ class ConnectionModesActivity : ComponentActivity() {
             Text("Автоматически обновлять и проверять")
             Text("При запущенном ZDT-D. Обычное автообновление подписок сохраняется.", style = MaterialTheme.typography.bodySmall)
           }
-          Switch(draft.optBoolean("refresh_enabled"), onCheckedChange = { draft = JSONObject(draft.toString()).put("refresh_enabled", it); dirty = true })
+          Switch(draft.optBoolean("refresh_enabled", true), onCheckedChange = { draft = JSONObject(draft.toString()).put("refresh_enabled", it); dirty = true })
         }
         if (draft.optBoolean("refresh_enabled")) {
-          OutlinedTextField(draft.optInt("refresh_interval_minutes", 60).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) { draft = JSONObject(draft.toString()).put("refresh_interval_minutes", it.toIntOrNull() ?: 0); dirty = true } }, label = { Text("Интервал, минут · 15–10080") }, singleLine = true)
+          OutlinedTextField(draft.optInt("refresh_interval_minutes", 30).toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) { draft = JSONObject(draft.toString()).put("refresh_interval_minutes", it.toIntOrNull() ?: 0); dirty = true } }, label = { Text("Интервал, минут · 15–10080") }, singleLine = true)
           Text("Первый запуск после включения расписания — сразу, если прежняя проверка уже просрочена. Массовый тест расходует трафик и заряд.", style = MaterialTheme.typography.bodySmall)
         }
         Text("Порядок выбранных серверов сохраняется. Новые добавляются в Авто по правилам имени; без правила — выбери их вручную. Ручной выбор через виджет сохраняется.", style = MaterialTheme.typography.bodySmall)
@@ -343,23 +343,80 @@ class ConnectionModesActivity : ComponentActivity() {
     }
     if (appDialog && settings != null) {
       var search by remember { mutableStateOf("") }
-      var picked by remember { mutableStateOf(selectedApps.toSet()) }
-      AlertDialog(onDismissRequest = { appDialog = false }, title = { Text("Приложения · ${picked.size}") }, text = {
-        Column {
-          OutlinedTextField(search, { search = it }, label = { Text("Поиск") })
-          Row { TextButton(onClick = { picked = apps.map { it.packageName }.toSet() }) { Text("Все") }; TextButton(onClick = { picked = apps.filter { it.uid !in apps.filter { a -> a.packageName in snapshot.optJSONArray("dns_apps").strings() }.map { a -> a.uid }.toSet() }.map { it.packageName }.toSet() }) { Text("Кроме DNS") }; TextButton(onClick = { picked = emptySet() }) { Text("Снять") } }
-          LazyColumn(Modifier.height(340.dp)) {
-            val filtered = apps.filter { it.label.contains(search, true) || it.packageName.contains(search, true) }
-            item { Text(if (settings.optString("app_policy") == "blacklist") "Исключённые приложения — сверху" else "Выбранные приложения — сверху", style = MaterialTheme.typography.bodySmall) }
-            items(filtered.sortedBy { it.packageName !in picked }, key = { it.packageName }) { app ->
-              Row(Modifier.fillMaxWidth().clickable { picked = if (app.packageName in picked) picked - app.packageName else picked + app.packageName }) {
-                Checkbox(app.packageName in picked, onCheckedChange = { checked -> picked = if (checked) picked + app.packageName else picked - app.packageName })
-                Column(Modifier.padding(top = 6.dp)) { Text(app.label); Text(app.packageName, style = MaterialTheme.typography.bodySmall) }
+      var showSystem by remember { mutableStateOf(false) }
+      var copyMenu by remember { mutableStateOf(false) }
+      var policy by remember { mutableStateOf(settings.optString("app_policy", "selected")) }
+      var picked by remember { mutableStateOf(settings.optJSONArray("apps").strings().toSet()) }
+      val dnsLabels = snapshot.optJSONObject("dns_labels")
+      val selectable = policy == "selected" || policy == "blacklist"
+      Dialog(onDismissRequest = { appDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+          Column(Modifier.safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("${ModeState.title(editMode)} · приложения", style = MaterialTheme.typography.headlineSmall)
+            listOf("selected" to "Только выбранные", "all" to "Все приложения",
+              "blacklist" to "Все, кроме выбранных", "except_dns" to "Все, кроме DNS-профилей").forEach { (key, label) ->
+              Row(Modifier.fillMaxWidth().clickable { policy = key }) {
+                RadioButton(policy == key, onClick = { policy = key })
+                Text(label, Modifier.padding(top = 12.dp))
               }
+            }
+            if (selectable) {
+              OutlinedTextField(search, { search = it }, label = { Text("Поиск приложений") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = showSystem, onClick = { showSystem = !showSystem }, label = { Text("Системные") })
+                Box {
+                  TextButton(onClick = { copyMenu = true }) { Text("Скопировать из режима") }
+                  DropdownMenu(expanded = copyMenu, onDismissRequest = { copyMenu = false }) {
+                    ModeClient.modes.filter { it != editMode }.forEach { source ->
+                      DropdownMenuItem(text = { Text(ModeState.title(source)) }, onClick = {
+                        val other = draft.optJSONObject("modes")?.optJSONObject(source)
+                        picked = other?.optJSONArray("apps").strings().toSet()
+                        policy = other?.optString("app_policy", "selected") ?: "selected"
+                        copyMenu = false
+                      })
+                    }
+                  }
+                }
+              }
+              if (editMode == "browser") {
+                TextButton(onClick = {
+                  @Suppress("DEPRECATION")
+                  val matches = packageManager.queryIntentActivities(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).addCategory(Intent.CATEGORY_BROWSABLE), PackageManager.MATCH_DEFAULT_ONLY)
+                  picked = picked + matches.map { it.activityInfo.packageName }; policy = "selected"
+                }) { Text("Добавить все браузеры") }
+              }
+              LazyColumn(Modifier.weight(1f)) {
+                val filtered = apps.filter { (showSystem || !it.system || it.packageName in picked) &&
+                  (it.label.contains(search, true) || it.packageName.contains(search, true)) }
+                items(filtered.sortedBy { it.packageName !in picked }, key = { it.packageName }) { app ->
+                  fun toggle() { picked = if (app.packageName in picked) picked - app.packageName else picked + app.packageName }
+                  Row(Modifier.fillMaxWidth().clickable(onClick = ::toggle), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(app.packageName in picked, onCheckedChange = { toggle() })
+                    var icon by remember(app.packageName) { mutableStateOf<ImageBitmap?>(null) }
+                    LaunchedEffect(app.packageName) {
+                      icon = withContext(Dispatchers.IO) { runCatching { packageManager.getApplicationIcon(app.packageName).toBitmap(80,80).asImageBitmap() }.getOrNull() }
+                    }
+                    icon?.let { Image(it, null, Modifier.size(32.dp)) } ?: Spacer(Modifier.size(32.dp))
+                    Column(Modifier.padding(start = 12.dp)) {
+                      Text(app.label)
+                      dnsLabels?.optString(app.packageName)?.takeIf { it.isNotBlank() }?.let {
+                        Text("DNS · $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                      }
+                    }
+                  }
+                }
+              }
+            } else Spacer(Modifier.weight(1f))
+            Button(onClick = {
+              change("apps", JSONArray(picked.toList()))
+              change("app_policy", policy)
+              appDialog = false
+            }, modifier = Modifier.fillMaxWidth()) {
+              Text(if (selectable) "Готово · ${picked.size}" else "Готово")
             }
           }
         }
-      }, confirmButton = { TextButton(onClick = { change("apps", JSONArray(picked.toList())); if (settings.optString("app_policy") != "blacklist") change("app_policy", "selected"); appDialog = false }) { Text("Применить") } }, dismissButton = { TextButton(onClick = { appDialog = false }) { Text("Отмена") } })
+      }
     }
     if (nodeDialog && settings != null) {
       var search by remember { mutableStateOf("") }

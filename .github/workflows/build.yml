@@ -4548,15 +4548,7 @@ jobs:
   pack_module:
     name: 5 Pack module ZIP
     runs-on: ubuntu-latest
-    needs:
-      - module_core_ready
-      - module_binaries_ready
-      - module_zygisk_ready
-    if: >-
-      needs.module_core_ready.result == 'success' &&
-      needs.module_binaries_ready.result == 'success' &&
-      needs.module_zygisk_ready.result == 'success'
-
+    needs: [build_zdtd, build_tun2socks, build_singbox, build_nfqws, build_nfqws2, build_zygisk]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -4628,91 +4620,21 @@ jobs:
         with:
           name: zdtd-arm64
           path: out/artifacts/zdtd/arm64
-      - name: Download t2s arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: t2s-arm64
-          path: out/artifacts/t2s/arm64
-      - name: Download d2s arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: d2s-arm64
-          path: out/artifacts/d2s/arm64
       - name: Download zygisk arm64
         uses: actions/download-artifact@v8
         with:
           name: zygisk-arm64
           path: out/artifacts/zygisk/arm64
-      - name: Download openvpn arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: openvpn-arm64
-          path: out/artifacts/openvpn/arm64
-      - name: Download amneziawg arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: amneziawg-arm64
-          path: out/artifacts/amneziawg/arm64
-      - name: Download wireproxy arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: wireproxy-arm64
-          path: out/artifacts/wireproxy/arm64
       - name: Download tun2socks arm64
         uses: actions/download-artifact@v8
         with:
           name: tun2socks-arm64
           path: out/artifacts/tun2socks/arm64
-      - name: Download mihomo arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: mihomo-arm64
-          path: out/artifacts/mihomo/arm64
       - name: Download sing-box arm64
         uses: actions/download-artifact@v8
         with:
           name: sing-box-arm64
           path: out/artifacts/sing-box/arm64
-      - name: Download hysteria2 arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: hysteria2-arm64
-          path: out/artifacts/hysteria2/arm64
-      - name: Download byedpi arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: byedpi-arm64
-          path: out/artifacts/byedpi/arm64
-      - name: Download dnscrypt arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: dnscrypt-arm64
-          path: out/artifacts/dnscrypt/arm64
-      - name: Download mieru arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: mieru-arm64
-          path: out/artifacts/mieru/arm64
-      - name: Download opera-proxy arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: opera-proxy-arm64
-          path: out/artifacts/opera-proxy/arm64
-      - name: Download dpitunnel arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: dpitunnel-arm64
-          path: out/artifacts/dpitunnel/arm64
-      - name: Download torproxy arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: torproxy-arm64
-          path: out/artifacts/torproxy/arm64
-      - name: Download lyrebird arm64
-        uses: actions/download-artifact@v8
-        with:
-          name: lyrebird-arm64
-          path: out/artifacts/lyrebird/arm64
       - name: Download nfqws arm64
         uses: actions/download-artifact@v8
         with:
@@ -4723,113 +4645,13 @@ jobs:
         with:
           name: nfqws2-arm64
           path: out/artifacts/nfqws2/arm64
-      - name: Download zdtd arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: zdtd-arm32
-          path: out/artifacts/zdtd/arm32
-      - name: Download t2s arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: t2s-arm32
-          path: out/artifacts/t2s/arm32
-      - name: Download d2s arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: d2s-arm32
-          path: out/artifacts/d2s/arm32
-      - name: Download zygisk arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: zygisk-arm32
-          path: out/artifacts/zygisk/arm32
-      - name: Download openvpn arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: openvpn-arm32
-          path: out/artifacts/openvpn/arm32
-      - name: Download amneziawg arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: amneziawg-arm32
-          path: out/artifacts/amneziawg/arm32
-      - name: Download wireproxy arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: wireproxy-arm32
-          path: out/artifacts/wireproxy/arm32
-      - name: Download tun2socks arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: tun2socks-arm32
-          path: out/artifacts/tun2socks/arm32
-      - name: Download mihomo arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: mihomo-arm32
-          path: out/artifacts/mihomo/arm32
-      - name: Download sing-box arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: sing-box-arm32
-          path: out/artifacts/sing-box/arm32
-      - name: Download hysteria2 arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: hysteria2-arm32
-          path: out/artifacts/hysteria2/arm32
-      - name: Download byedpi arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: byedpi-arm32
-          path: out/artifacts/byedpi/arm32
-      - name: Download dnscrypt arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: dnscrypt-arm32
-          path: out/artifacts/dnscrypt/arm32
-      - name: Download mieru arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: mieru-arm32
-          path: out/artifacts/mieru/arm32
-      - name: Download opera-proxy arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: opera-proxy-arm32
-          path: out/artifacts/opera-proxy/arm32
-      - name: Download dpitunnel arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: dpitunnel-arm32
-          path: out/artifacts/dpitunnel/arm32
-      - name: Download torproxy arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: torproxy-arm32
-          path: out/artifacts/torproxy/arm32
-      - name: Download lyrebird arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: lyrebird-arm32
-          path: out/artifacts/lyrebird/arm32
-      - name: Download nfqws arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: nfqws-arm32
-          path: out/artifacts/nfqws/arm32
-      - name: Download nfqws2 arm32
-        uses: actions/download-artifact@v8
-        with:
-          name: nfqws2-arm32
-          path: out/artifacts/nfqws2/arm32
       - name: Pack Magisk module archive
         run: |
           set -euo pipefail
 
           MODULE_BUILD_DIR="out/module_build/module_root"
           MODULE_ZIP="out/module/zdt_module.zip"
-          BINARIES="zdtd t2s d2s openvpn amneziawg-go awg wireproxy tun2socks mihomo sing-box hysteria2 byedpi dnscrypt mieru opera-proxy dpitunnel-cli torproxy lyrebird nfqws nfqws2"
+          BINARIES="zdtd tun2socks sing-box nfqws nfqws2"
 
           require_file() {
             local path="$1"
@@ -4881,11 +4703,10 @@ jobs:
           find "$MODULE_BUILD_DIR" -name .gitkeep -type f -delete 2>/dev/null || true
           rm -f "$MODULE_BUILD_DIR/zygisk/unloaded" 2>/dev/null || true
           rm -rf "$MODULE_BUILD_DIR/bin" "$MODULE_BUILD_DIR/prebuilt"
-          mkdir -p "$MODULE_BUILD_DIR/bin" "$MODULE_BUILD_DIR/prebuilt/bin/arm64-v8a" "$MODULE_BUILD_DIR/prebuilt/bin/arm-v7a" "$MODULE_BUILD_DIR/zygisk"
+          mkdir -p "$MODULE_BUILD_DIR/bin" "$MODULE_BUILD_DIR/prebuilt/bin/arm64-v8a" "$MODULE_BUILD_DIR/zygisk"
 
           cp -f out/artifacts/zygisk/arm64/arm64-v8a.so "$MODULE_BUILD_DIR/zygisk/arm64-v8a.so"
-          cp -f out/artifacts/zygisk/arm32/armeabi-v7a.so "$MODULE_BUILD_DIR/zygisk/armeabi-v7a.so"
-          chmod 644 "$MODULE_BUILD_DIR/zygisk/arm64-v8a.so" "$MODULE_BUILD_DIR/zygisk/armeabi-v7a.so"
+          chmod 644 "$MODULE_BUILD_DIR/zygisk/arm64-v8a.so"
 
           echo "=== Install zapret2 Lua scripts matching the packaged nfqws2 binary ==="
           require_file "out/artifacts/nfqws2/arm64/lua/zapret-lib.lua"
@@ -4907,10 +4728,9 @@ jobs:
           chmod 644 "$MODULE_BUILD_DIR/strategic/lua"/*.lua
           grep -n 'NFQWS2_COMPAT_VER_REQUIRED' "$MODULE_BUILD_DIR/strategic/lua/zapret-lib.lua" || true
 
-          for arch in arm64 arm32; do
+          for arch in arm64; do
             case "$arch" in
               arm64) module_arch="arm64-v8a" ;;
-              arm32) module_arch="arm-v7a" ;;
             esac
             for bin in $BINARIES; do
               src="$(artifact_path "$arch" "$bin")"
@@ -4928,9 +4748,7 @@ jobs:
             (cd "$MODULE_BUILD_DIR" && sha256sum "$rel" > "verify_sum/$rel.sha256")
           done < <(find "$MODULE_BUILD_DIR/prebuilt/bin" "$MODULE_BUILD_DIR/zygisk" -type f | sort)
           test -s "$MODULE_BUILD_DIR/verify_sum/prebuilt/bin/arm64-v8a/zdtd.sha256" || { echo "::error::arm64 zdtd verify sum missing"; exit 1; }
-          test -s "$MODULE_BUILD_DIR/verify_sum/prebuilt/bin/arm-v7a/zdtd.sha256" || { echo "::error::arm32 zdtd verify sum missing"; exit 1; }
           test -s "$MODULE_BUILD_DIR/verify_sum/zygisk/arm64-v8a.so.sha256" || { echo "::error::arm64 zygisk verify sum missing"; exit 1; }
-          test -s "$MODULE_BUILD_DIR/verify_sum/zygisk/armeabi-v7a.so.sha256" || { echo "::error::arm32 zygisk verify sum missing"; exit 1; }
 
           pushd "$MODULE_BUILD_DIR" > /dev/null
           zip -qr "../../../$MODULE_ZIP" .
@@ -4938,9 +4756,7 @@ jobs:
 
           ZIP_ENTRIES="$(unzip -Z1 "$MODULE_ZIP" 2>/dev/null)" || { echo "::error::Unable to read raw module zip"; exit 1; }
           printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'prebuilt/bin/arm64-v8a/zdtd' >/dev/null || { echo "::error::arm64 module binaries missing"; exit 1; }
-          printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'prebuilt/bin/arm-v7a/zdtd' >/dev/null || { echo "::error::arm32 module binaries missing"; exit 1; }
           printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'zygisk/arm64-v8a.so' >/dev/null || { echo "::error::arm64 Zygisk binary missing"; exit 1; }
-          printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'zygisk/armeabi-v7a.so' >/dev/null || { echo "::error::arm32 Zygisk binary missing"; exit 1; }
           printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'strategic/lua/zapret-lib.lua' >/dev/null || { echo "::error::zapret2 Lua library missing"; exit 1; }
           printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'strategic/lua/zapret-sni.lua' >/dev/null || { echo "::error::custom zapret-sni.lua missing"; exit 1; }
           printf '%s\n' "$ZIP_ENTRIES" | grep -Fx 'strategic/lua/zapret-wgobfs.lua' >/dev/null || { echo "::error::custom zapret-wgobfs.lua missing"; exit 1; }

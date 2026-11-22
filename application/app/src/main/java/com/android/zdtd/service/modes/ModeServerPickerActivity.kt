@@ -30,7 +30,8 @@ class ModeServerPickerActivity : ComponentActivity() {
       var selected by remember { mutableStateOf("") }
       var autoAvailable by remember { mutableStateOf(false) }
       var autoSelected by remember { mutableStateOf(false) }
-      var checksEnabled by remember { mutableStateOf(true) }
+      var choice by remember { mutableStateOf("") }
+      var updated by remember { mutableStateOf(0L) }
       var search by remember { mutableStateOf("") }
       LaunchedEffect(Unit) {
         try {
@@ -42,11 +43,9 @@ class ModeServerPickerActivity : ComponentActivity() {
           selected = settings.optString("selected_key").ifBlank { settings.optString("last_key") }
           autoAvailable = mode == "white" || settings.optBoolean("auto_enabled")
           autoSelected = autoAvailable && !settings.optBoolean("manual_override")
-          checksEnabled = settings.optBoolean("check_enabled", true)
-          message = if (nodes.isEmpty()) "Нет серверов: включи и обнови подписку" else "Нажми сервер для подключения"
-          if (nodes.any { it.optBoolean("supported") } && status.optString("maintenance_state") !in listOf("pending", "refreshing", "checking")) {
-            ModeClient.maintenance(this@ModeServerPickerActivity, false)
-          }
+          choice = if (autoSelected) "auto" else selected
+          updated = status.optLong("maintenance_last_completed")
+          message = if (nodes.isEmpty()) "Добавь или обнови подписку" else ""
         } catch (e: Exception) { message = e.message ?: "Служба недоступна" }
       }
       LaunchedEffect(Unit) {
@@ -54,15 +53,25 @@ class ModeServerPickerActivity : ComponentActivity() {
           delay(750L)
           val cached = ModeClient.cached(this@ModeServerPickerActivity)
           if (cached.has("maintenance_state")) status = cached
+          val completed = cached.optLong("maintenance_last_completed")
+          if (completed > updated) {
+            updated = completed
+            runCatching {
+              val snapshot = withContext(Dispatchers.IO) { ModeClient.api(this@ModeServerPickerActivity).getJsonData("/api/connection-modes") }
+              val catalog = snapshot.getJSONArray("nodes")
+              nodes = (0 until catalog.length()).map { catalog.getJSONObject(it) }
+            }
+          }
         }
       }
-      fun choose(key: String) {
+      fun choose(key: String, connect: Boolean) {
         busy = true
         scope.launch {
           try {
             val result = withContext(Dispatchers.IO) { ModeClient.api(this@ModeServerPickerActivity).postJsonResult("/api/connection-modes/select-server", JSONObject().put("mode", mode).put("key", key)) }
             check(result.optBoolean("ok")) { result.optString("error", "Не удалось выбрать сервер") }
-            ModeClient.switch(this@ModeServerPickerActivity, mode)
+            withContext(Dispatchers.IO) { runCatching { ModeClient.refresh(this@ModeServerPickerActivity) } }
+            if (connect) ModeClient.switch(this@ModeServerPickerActivity, mode)
             finish()
           } catch (e: Exception) { message = "Ошибка: ${e.message}"; busy = false }
         }
@@ -70,7 +79,7 @@ class ModeServerPickerActivity : ComponentActivity() {
       Surface(Modifier.fillMaxSize()) {
         Column(Modifier.safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
           Text("${ModeState.title(mode)} · выбор сервера", style = MaterialTheme.typography.headlineSmall)
-          Text(message)
+          if (message.isNotBlank()) Text(message)
           val checking = status.optString("maintenance_state") in listOf("pending", "refreshing", "checking")
           if (busy || checking) LinearProgressIndicator(Modifier.fillMaxWidth())
           status.optString("maintenance_message").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -81,14 +90,17 @@ class ModeServerPickerActivity : ComponentActivity() {
             }) { Text("Приложения") }
             TextButton(enabled = !checking && !busy && nodes.any { it.optBoolean("supported") }, onClick = {
               ModeClient.maintenance(this@ModeServerPickerActivity, false)
-            }) { Text("Проверить снова") }
+            }) { Text("Проверить задержку") }
           }
+          TextButton(enabled = !checking && !busy, onClick = {
+            ModeClient.maintenance(this@ModeServerPickerActivity, true, subscriptionOnly = true)
+          }) { Text("Обновить подписки") }
           if (autoAvailable) {
-            Row(Modifier.fillMaxWidth().clickable(enabled = !busy && checksEnabled) { choose("auto") }.padding(vertical = 8.dp)) {
-              RadioButton(autoSelected, onClick = null, enabled = !busy && checksEnabled)
+            Row(Modifier.fillMaxWidth().clickable(enabled = !busy) { choice = "auto" }.padding(vertical = 8.dp)) {
+              RadioButton(choice == "auto", onClick = null, enabled = !busy)
               Column(Modifier.padding(start = 8.dp)) {
                 Text("Авто · сохранённый список серверов")
-                Text(if (checksEnabled) "Подключится к первому прошедшему проверку в текущей группе" else "Включи проверку сайтов в настройках режима", style = MaterialTheme.typography.bodySmall)
+                Text("Последний рабочий сервер или сохранённый замер", style = MaterialTheme.typography.bodySmall)
               }
             }
           }
@@ -98,9 +110,9 @@ class ModeServerPickerActivity : ComponentActivity() {
               val key = node.optString("key")
               val supported = node.optBoolean("supported")
               Row(Modifier.fillMaxWidth().clickable(enabled = supported && !busy) {
-                choose(key)
+                choice = key
               }.padding(vertical = 12.dp)) {
-                RadioButton(!autoSelected && selected == key, onClick = null, enabled = supported && !busy)
+                RadioButton(choice == key, onClick = null, enabled = supported && !busy)
                 Column(Modifier.padding(start = 8.dp)) {
                   ModeNodeLabel(node, status)
                 }
@@ -108,7 +120,13 @@ class ModeServerPickerActivity : ComponentActivity() {
               HorizontalDivider()
             }
           }
-          TextButton(onClick = { finish() }) { Text("Отмена") }
+          val validChoice = choice == "auto" && autoAvailable || nodes.any {
+            it.optString("key") == choice && it.optBoolean("supported")
+          }
+          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(enabled = validChoice && !busy, onClick = { choose(choice, false) }) { Text("Сохранить") }
+            Button(enabled = validChoice && !busy, onClick = { choose(choice, true) }) { Text("Подключить") }
+          }
         }
       }
     } }

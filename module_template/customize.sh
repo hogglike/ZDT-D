@@ -58,7 +58,7 @@ sec "Magisk Module Pre-checks"
 ui_print "## Requirements:"
 ui_print "## - Android 9+ (SDK >= 28)"
 ui_print "## - Officially supported: Android 11+ (SDK >= 30)"
-ui_print "## - arm64-v8a / armeabi-v7a"
+ui_print "## - arm64-v8a"
 hr
 
 
@@ -191,6 +191,7 @@ else
   warn "Unsupported architecture detected"
   fail "arm64-v8a or armeabi-v7a required. Detected ABI64='${ABI64:-unknown}' ABI='${ABI:-unknown}' uname='${UNAME_M:-unknown}'"
 fi
+[ "$ZDT_BIN_ARCH" = "arm64-v8a" ] || fail "This package requires ARM64 (arm64-v8a)."
 export ZDT_BIN_ARCH ZDT_ZYGISK_SO_NAME
 ui_print "## - selected binary arch: $ZDT_BIN_ARCH"
 
@@ -209,11 +210,19 @@ MODULE_ID="$(awk -F= '/^id=/{print $2; exit}' "$MODDIR/module.prop" 2>/dev/null 
 OLD_MODULE_DIR="/data/adb/modules/$MODULE_ID"
 if [ -n "$MODULE_ID" ] && [ -d "$OLD_MODULE_DIR/working_folder" ] && [ "$OLD_MODULE_DIR" != "$MODDIR" ]; then
   ui_print "- Preserving existing working_folder from $OLD_MODULE_DIR"
-  rm -rf "$MODDIR/working_folder" 2>/dev/null || true
-  mkdir -p "$MODDIR/working_folder"
-  cp -a "$OLD_MODULE_DIR/working_folder/." "$MODDIR/working_folder/" 2>/dev/null || {
-    ui_print "! Warning: failed to preserve some working_folder files"
-  }
+  STAGED_PROFILES="$MODDIR/.profile-migration"
+  mkdir -p "$STAGED_PROFILES" || fail "Could not stage existing profiles"
+  cp -a "$OLD_MODULE_DIR/working_folder/." "$STAGED_PROFILES/" ||
+    fail "Could not copy existing profiles; installed module remains available"
+  rm -rf "$MODDIR/working_folder" || fail "Could not clear template profiles"
+  mv "$STAGED_PROFILES" "$MODDIR/working_folder" || fail "Could not install existing profiles"
+
+  for folder in list strategicvar; do
+    if [ -d "$OLD_MODULE_DIR/strategic/$folder" ] && [ -d "$MODDIR/strategic/$folder" ]; then
+      cp -an "$OLD_MODULE_DIR/strategic/$folder/." "$MODDIR/strategic/$folder/" ||
+        fail "Could not copy custom strategy files in $folder"
+    fi
+  done
 fi
 
 ################################################################################
@@ -298,7 +307,7 @@ if [ -f "$ZYGISK_MARKER" ]; then
       [ -e "$zdt_zygisk_so" ] || continue
       chmod 644 "$zdt_zygisk_so" 2>/dev/null || fail "chmod 644 failed: $zdt_zygisk_so"
     done
-    ok "Zygisk $ZDT_ZYGISK_SO_NAME found; keeping both arm64-v8a.so and armeabi-v7a.so when present"
+    ok "Zygisk $ZDT_ZYGISK_SO_NAME found"
   else
     fail_code "ZDTD_ZYGISK_LIBRARY_MISSING" "Zygisk marker exists, but library not found: $ZYGISK_SO"
   fi

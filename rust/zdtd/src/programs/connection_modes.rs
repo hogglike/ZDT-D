@@ -50,14 +50,21 @@ fn add_probe_lanes(cfg: &mut Value, base: u16) {
 }
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static REQUEST: Mutex<Option<(u64, String, bool)>> = Mutex::new(None);
-static MAINTENANCE_REQUEST: Mutex<Option<(u64, bool)>> = Mutex::new(None);
+static ACTIVE_CHECK: AtomicBool = AtomicBool::new(false);
+static MAINTENANCE_REQUEST: Mutex<Option<(u64, bool, bool)>> = Mutex::new(None);
 static MAINTENANCE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MAINTENANCE_BUSY: AtomicBool = AtomicBool::new(false);
 static STATUS: OnceLock<Mutex<Value>> = OnceLock::new();
 fn root() -> PathBuf { crate::settings::working_root_path().join("connection_modes") }
 fn options() -> DpiTunnelOptions { DpiTunnelOptions { port_preference: 0, dpi_ports: "1-52 54-65535".into() } }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
-fn status_lock() -> &'static Mutex<Value> { STATUS.get_or_init(|| Mutex::new(json!({"mode":"", "state":"idle", "message":"Выключено", "pings":{}}))) }
+fn status_lock() -> &'static Mutex<Value> {
+    STATUS.get_or_init(|| {
+        let pings = fs::read_to_string(root().join("pings.json")).ok()
+            .and_then(|data| serde_json::from_str::<Value>(&data).ok()).filter(Value::is_object).unwrap_or(json!({}));
+        Mutex::new(json!({"mode":"","state":"idle","message":"Выключено","pings":pings}))
+    })
+}
 fn write_private(path: &Path, value: &str) -> Result<()> {
     fs::create_dir_all(path.parent().context("missing parent")?)?;
     let tmp = path.with_extension("tmp");
@@ -70,7 +77,7 @@ fn current(g: u64) -> bool { GENERATION.load(Ordering::SeqCst) == g }
 fn update(g: u64, patch: Value) {
     let mut status = status_lock().lock().unwrap_or_else(|e| e.into_inner());
     if !current(g) { return; }
-    let changed = patch.get("state").map(|s| s != &status["state"]).unwrap_or(false);
+    let changed = ["state", "vpn_health"].iter().any(|key| patch.get(*key).is_some_and(|value| value != &status[*key]));
     for (k,v) in patch.as_object().into_iter().flatten() { status[k] = v.clone(); }
     status["updated_at"] = json!(now());
     let _ = write_private(&root().join("status.json"), &status.to_string());
@@ -89,7 +96,7 @@ pub fn widget_status() -> Value {
             let auto=mode_policy::automatic(name,m.auto_enabled,m.manual_override);
             let key=if m.selected_key.is_empty(){&m.last_key}else{&m.selected_key};
             let label=c.catalog.get(key).map(|n|n.name.as_str()).unwrap_or("Сервер не выбран");
-            (name.clone(),json!({"auto":auto,"server":label,"apps":m.apps,"app_policy":m.app_policy}))
+            (name.clone(),json!({"auto":auto,"server":label,"apps":m.apps,"app_policy":m.app_policy,"ready":if auto { !m.node_keys.is_empty() || !m.name_filters.is_empty() } else { c.catalog.contains_key(key) }}))
         }).collect();
         value["mode_summary"]=json!(summary);
     }
@@ -127,7 +134,6 @@ impl ModeSettings {
     fn choose(&mut self, mode:&str, key:&str) -> Result<()> {
         if key=="auto" {
             if mode!="white" && !self.auto_enabled {bail!("Сначала включи «Несколько серверов» в настройках режима");}
-            if !self.check_enabled {bail!("Для автоперебора включи проверку сайтов в настройках режима");}
             self.manual_override=false;
         } else {self.selected_key=key.into();self.manual_override=true;}
         self.preferred_key.clear();
@@ -151,7 +157,7 @@ impl Default for Config {
         for name in MODES { modes.insert(name.into(), ModeSettings::default()); }
         let white = modes.get_mut("white").unwrap();
         white.app_policy = "all".into(); white.name_filters = vec!["LTE".into()];
-        Self { active: String::new(), modes, latency_url:"https://www.gstatic.com/generate_204".into(),latency_timeout_seconds:8, catalog:BTreeMap::new(), refresh_enabled:false, refresh_interval_minutes:60 }
+        Self { active: String::new(), modes, latency_url:"https://www.gstatic.com/generate_204".into(),latency_timeout_seconds:8, catalog:BTreeMap::new(), refresh_enabled:true, refresh_interval_minutes:30 }
     }
 }
 // Private selection metadata contains labels and hashes, never subscription URLs or credentials.
@@ -241,7 +247,7 @@ pub fn save(mut c: Config) -> Result<Config> {
 }
 
 #[derive(Clone)]
-struct Node { key: String, revision:String, name: String, subscription: String, subscription_id: String, protocol: String, outbound: Option<Value> }
+struct Node { key: String, revision:String, name: String, subscription: String, subscription_id: String, protocol: String, transport: String, outbound: Option<Value> }
 fn nodes() -> Result<Vec<Node>> {
     let mut result: Vec<Node> = subscriptions::mode_nodes()?.into_iter().map(|(id, subscription, n)| {
         let key=stable_mode_key(&id,&n.id);
@@ -253,7 +259,7 @@ fn nodes() -> Result<Vec<Node>> {
             subscriptions::singbox_outbound(&n).ok()
         } else { None };
         if let Some(v) = &mut outbound { v["tag"] = json!(key); }
-        Node { key, revision, name:n.name, subscription, subscription_id:id, protocol:n.protocol, outbound }
+        Node { key, revision, name:n.name, subscription, subscription_id:id, protocol:n.protocol, transport:transport.to_owned(), outbound }
     }).collect();
     let mut used=BTreeSet::new();result.retain(|n|used.insert(n.key.clone()));
     Ok(result)
@@ -264,11 +270,18 @@ pub(super) fn proxy_nodes() -> Result<Vec<(String,String,Value)>> {
 }
 pub fn snapshot() -> Result<Value> {
     let (c,removed,stored)=config_with_catalog()?;
-    let mut catalog:Vec<Value>=nodes()?.iter().map(|n|json!({"key":n.key,"revision":n.revision,"name":n.name,"subscription":n.subscription,"subscription_id":n.subscription_id,"protocol":n.protocol,"supported":n.outbound.is_some(),"enabled":true})).collect();
+    let mut catalog:Vec<Value>=nodes()?.iter().map(|n|json!({"key":n.key,"revision":n.revision,"name":n.name,"subscription":n.subscription,"subscription_id":n.subscription_id,"protocol":n.protocol,"transport":n.transport,"supported":n.outbound.is_some(),"enabled":true})).collect();
     for (id,subscription,enabled,n) in &stored {if !enabled {catalog.push(json!({"key":stable_mode_key(id,&n.id),"revision":legacy_mode_key(id,&n.definition),"name":n.name,"subscription":subscription,"subscription_id":id,"protocol":n.protocol,"supported":false,"enabled":false}));}}
     let subscriptions:Vec<Value>=stored.iter().map(|(id,name,enabled,_)|(id,json!({"id":id,"name":name,"enabled":enabled}))).collect::<BTreeMap<_,_>>().into_values().collect();
-    let dns = super::dnsprofiles::load(Path::new(super::dnsprofiles::CONFIG_PATH)).map(|c|super::dnsprofiles::packages(&c)).unwrap_or_default();
-    Ok(json!({"ok":true,"config":c,"status":status(),"nodes":catalog,"subscriptions":subscriptions,"selection_cleanup_count":removed,"dns_apps":dns}))
+    let dns_config = super::dnsprofiles::load(Path::new(super::dnsprofiles::CONFIG_PATH)).ok();
+    let dns = dns_config.as_ref().map(super::dnsprofiles::packages).unwrap_or_default();
+    let mut dns_labels=BTreeMap::new();
+    if let Some(doc)=dns_config {
+        for profile in doc.profiles.values().filter(|p|p.enabled) {
+            for app in &profile.apps { dns_labels.insert(app.clone(),profile.display_name.clone()); }
+        }
+    }
+    Ok(json!({"ok":true,"config":c,"status":status(),"nodes":catalog,"subscriptions":subscriptions,"selection_cleanup_count":removed,"dns_apps":dns,"dns_labels":dns_labels}))
 }
 fn candidates(settings: &ModeSettings, all: &[Node], white: bool) -> Vec<Node> {
     if !mode_policy::automatic(if white {"white"} else {"normal"},settings.auto_enabled,settings.manual_override) {
@@ -422,30 +435,6 @@ fn probe(site:&CheckTarget, timeout:u64, lane:usize) -> ProbeResult {
     if let Err(e)=attempt {result.ok=false;result.error=format!("{e:#}").chars().take(600).collect();}
     result
 }
-struct ProbeReport { delay:Option<u64>, results:Vec<ProbeResult> }
-fn test_node(g: u64, n: &Node, settings: &ModeSettings, lane: usize) -> Result<ProbeReport> {
-    if !current(g) { bail!("Отменено"); }
-    select(&probe_selector(lane), &n.key)?;
-    let sites: Vec<_> = settings.check_sites.iter().filter(|site| site.enabled).collect();
-    let mut results = Vec::with_capacity(sites.len());
-    // Check each server's first three targets together. A slow site must not
-    // multiply the per-server timeout, and advanced lists stay bounded.
-    for batch in sites.chunks(3) {
-        if !current(g) { bail!("Отменено"); }
-        let replies = thread::scope(|scope| {
-            let workers: Vec<_> = batch.iter().map(|&site| scope.spawn(move || {
-                probe(site, settings.timeout_seconds, lane)
-            })).collect();
-            workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>()
-        });
-        results.extend(replies);
-    }
-    let delays: Vec<u64> = results.iter().filter(|r| r.ok).filter_map(|r| r.ms).collect();
-    let delay = if mode_policy::checks_pass(settings.check_enabled, delays.len(), settings.min_success) && !delays.is_empty() {
-        Some(delays.iter().sum::<u64>() / delays.len() as u64)
-    } else { None };
-    Ok(ProbeReport { delay, results })
-}
 fn node_delay(n:&Node,c:&Config,lane:usize) -> (Option<u64>,String) {
     let attempt=(||->Result<u64> {
         // TEST is isolated from MODE. Use the same validated HTTPS transport as
@@ -477,12 +466,14 @@ fn maintenance_update(g:u64,patch:Value) {
             "com.android.zdtd.service.ACTION_MODES_STATUS","-n","com.android.zdtd.service/.modes.ModeStatusReceiver"],Capture::None,Duration::from_secs(4));
     });}
 }
-pub fn request_maintenance(refresh:bool) -> Result<()> {
+pub fn request_maintenance(refresh:bool) -> Result<()> { enqueue_maintenance(refresh, true) }
+pub fn refresh_subscriptions_only() -> Result<()> { enqueue_maintenance(true, false) }
+fn enqueue_maintenance(refresh:bool, measure:bool) -> Result<()> {
     let mut queue=MAINTENANCE_REQUEST.lock().unwrap_or_else(|e|e.into_inner());
     if MAINTENANCE_BUSY.swap(true,Ordering::SeqCst){bail!("Обновление или проверка уже выполняется");}
     let g=MAINTENANCE_GENERATION.fetch_add(1,Ordering::SeqCst)+1;
     maintenance_update(g,json!({"maintenance_state":"pending","maintenance_message":if refresh {"Ожидание обновления подписок…"}else{"Ожидание проверки задержек…"},"maintenance_done":0,"maintenance_total":0}));
-    *queue=Some((g,refresh));
+    *queue=Some((g,refresh,measure));
     Ok(())
 }
 fn maintenance_record() -> Value {
@@ -536,9 +527,9 @@ fn start_latency_core(all:&mut [Node],g:u64) -> Result<Core> {
     }
     bail!("Ядро проверки не ответило за 4 секунды")
 }
-fn run_maintenance(g:u64,refresh:bool) -> Result<()> {
+fn run_maintenance(g:u64,refresh:bool,measure:bool) -> Result<()> {
     let mut record=maintenance_record();
-    if refresh {record["last_attempt"]=json!(now());write_private(&root().join("maintenance.json"),&record.to_string())?;}
+    if refresh && measure {record["last_attempt"]=json!(now());write_private(&root().join("maintenance.json"),&record.to_string())?;}
     let mut failed=0;
     if refresh {
         let list=subscriptions::list_view()?;
@@ -558,7 +549,15 @@ fn run_maintenance(g:u64,refresh:bool) -> Result<()> {
     // Persist alias migration and prune deleted choices only when cached
     // subscription catalogs are complete. Failed refreshes retain their cache.
     {let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());let c=config()?;save_config(&c)?;}
+    if !measure {
+        maintenance_update(g,json!({"maintenance_state":"complete","maintenance_message":if failed==0 {"Подписки обновлены".into()} else {format!("Подписок с ошибкой: {failed}")},"maintenance_last_completed":now()}));
+        return Ok(());
+    }
     let c=config()?;let mut all=nodes()?;
+    if !all.iter().any(|n| n.outbound.is_some()) {
+        maintenance_update(g,json!({"maintenance_state":"complete","maintenance_message":"Нет поддерживаемых серверов","maintenance_last_completed":now()}));
+        return Ok(());
+    }
     maintenance_update(g,json!({"maintenance_state":"checking","maintenance_message":"Подготовка проверки всех серверов…","maintenance_failed_subscriptions":failed}));
     let _core=start_latency_core(&mut all,g)?;
     let total=all.iter().filter(|n|n.outbound.is_some()).count();let mut passed=0;let mut done=0;
@@ -591,6 +590,7 @@ fn run_maintenance(g:u64,refresh:bool) -> Result<()> {
         }
     });
     if maintenance_current(g) {
+        write_private(&root().join("pings.json"),&pings.to_string())?;
         record["last_completed"]=json!(now());write_private(&root().join("maintenance.json"),&record.to_string())?;
         maintenance_update(g,json!({"maintenance_state":"complete","maintenance_message":format!("Проверено {done}: работают {passed}, без ответа {}{}",done-passed,if failed>0{format!(" · не обновились подписки: {failed}; использован сохранённый список")}else{String::new()}),"maintenance_last_completed":now()}));
     }
@@ -607,8 +607,8 @@ fn start_maintenance_worker(state:daemon::SharedState) {
                     if let Ok(c)=config(){if mode_policy::maintenance_due(c.refresh_enabled,c.refresh_interval_minutes,maintenance_record()["last_attempt"].as_u64().unwrap_or(0),now()){let _=request_maintenance(true);}}
                 }
                 let req=MAINTENANCE_REQUEST.lock().unwrap_or_else(|e|e.into_inner()).take();
-                if let Some((g,refresh))=req {
-                    if maintenance_current(g) {if let Err(e)=run_maintenance(g,refresh){maintenance_update(g,json!({"maintenance_state":"error","maintenance_message":e.to_string()}));}}
+                if let Some((g,refresh,measure))=req {
+                    if maintenance_current(g) {if let Err(e)=run_maintenance(g,refresh,measure){maintenance_update(g,json!({"maintenance_state":"error","maintenance_message":e.to_string()}));}}
                     let _=fs::remove_file(root().join("latency.pid"));
                     MAINTENANCE_BUSY.store(false,Ordering::SeqCst);
                 }
@@ -661,57 +661,19 @@ fn retry_if_current(g:u64,mode:&str,reason:&str) {
 fn connect(g:u64,mode:&str,all:&[Node]) -> Result<()> {
     let settings=config()?.modes.get(mode).cloned().context("Mode settings missing")?;
     let list=candidates(&settings,all,mode=="white");
-    if list.is_empty() { bail!("Нет подходящих серверов. Выбери сервер или правило имени в настройках режима"); }
-    let keys:Vec<String>=list.iter().map(|n|n.key.clone()).collect();
     let automatic=mode_policy::automatic(mode,settings.auto_enabled,settings.manual_override);
-    let preferred=if settings.preferred_key.is_empty(){&settings.last_key}else{&settings.preferred_key};
-    let attempts=mode_policy::connection_attempts(&keys,preferred,automatic,settings.check_enabled);
-    for (i, batch) in attempts.chunks(PROBE_LANES).enumerate() {
-        if !current(g) { return Ok(()); }
-        let first = i * PROBE_LANES;
-        update(g, json!({"automatic":automatic,"round":first/list.len()+1,
-            "attempt":first+1,"total":attempts.len(),"message":format!("Проверка серверов {}–{} из {}",first+1,first+batch.len(),attempts.len())}));
-        let connected = thread::scope(|scope| -> Result<bool> {
-            let (send, results) = mpsc::channel();
-            for (lane, key) in batch.iter().enumerate() {
-                let n = list.iter().find(|n| &n.key == key).unwrap();
-                let send = send.clone();
-                let settings = &settings;
-                scope.spawn(move || {
-                    let report = if settings.check_enabled { test_node(g, n, settings, lane).map(Some) } else { Ok(None) };
-                    let _ = send.send((n, report));
-                });
-            }
-            drop(send);
-            for (n, report) in results {
-                if !current(g) { return Ok(false); }
-                let report = match report {
-                    Ok(report) => report,
-                    Err(err) => {
-                        update(g, json!({"last_probe_ok":false,"probe_error":err.to_string()}));
-                        continue;
-                    }
-                };
-                let delay = report.as_ref().and_then(|r| r.delay);
-                if let Some(report) = report {
-                    update(g, json!({"probe_results":report.results,"required_success":settings.min_success,
-                        "last_probe_ok":delay.is_some(),"core_log":if delay.is_none(){safe_core_log(all)}else{String::new()}}));
-                }
-                if delay.is_some() || !settings.check_enabled {
-                    apply_connection(g, mode, &settings, n, delay, automatic)?;
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        })?;
-        if connected || !current(g) { return Ok(()); }
-    }
-    let _=cleanup_routes();
-    bail!("{}",if automatic && settings.check_enabled {"Два круга завершены: рабочий сервер не найден. См. результаты сайтов"} else {"Сервер не прошёл настроенную проверку. См. результаты сайтов или отключи проверку этого режима"})
+    let pings=status()["pings"].clone();
+    let winner=list.iter().find(|n| n.key == settings.preferred_key || n.key == settings.last_key)
+        .or_else(|| list.iter().filter_map(|n| {
+            let p = &pings[&n.key];
+            if p["revision"] != n.revision { return None; }
+            Some((n, p["ms"].as_u64()?))
+        }).min_by_key(|item| item.1).map(|item| item.0))
+        .or_else(|| list.first()).context("Нет подходящих серверов. Выбери сервер в настройках режима")?;
+    apply_connection(g, mode, &settings, winner, automatic)
 }
-fn apply_connection(g: u64, mode: &str, settings: &ModeSettings, n: &Node, delay: Option<u64>, automatic: bool) -> Result<()> {
+fn apply_connection(g:u64, mode:&str, settings:&ModeSettings, n:&Node, automatic:bool) -> Result<()> {
     if !current(g) { return Ok(()); }
-    // Only successful probes may change the traffic selector and app rules.
     select("MODE",&n.key)?;
     let _=cleanup_routes();
     let count=apply_apps(settings)?;
@@ -719,10 +681,29 @@ fn apply_connection(g: u64, mode: &str, settings: &ModeSettings, n: &Node, delay
     { let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());
       if !current(g) { let _=cleanup_routes(); return Ok(()); }
       let mut c=config()?;c.active=mode.into();let saved=c.modes.get_mut(mode).unwrap();saved.last_key=n.key.clone();saved.preferred_key.clear();save_config(&c)?; }
-    // Close this instance's old connections: some sing-box versions do
-    // not interrupt routed selector connections despite the flag.
     let _=Client::builder().no_proxy().timeout(Duration::from_secs(2)).build()?.delete(format!("http://127.0.0.1:{CONTROL_PORT}/connections")).bearer_auth(crate::settings::read_or_create_token()?).send();
-    update(g,json!({"state":"connected","server":n.name,"key":n.key,"delay_ms":delay,"verified":settings.check_enabled,"app_count":count,"message":if let Some(ms)=delay{format!("{}{} · {} мс · приложений {}",if automatic {"Авто · "} else {""},n.name,ms,count)}else{format!("{} · применено без проверки сайтов · приложений {}",n.name,count)}}));
+    update(g,json!({"state":"connected","server":n.name,"key":n.key,"verified":false,"app_count":count,
+        "delay_ms":null,"vpn_health":if settings.check_enabled {"checking"} else {"off"},
+        "message":format!("{}{} · приложений {}",if automatic {"Авто · "} else {""},n.name,count)}));
+    if settings.check_enabled { ACTIVE_CHECK.store(true, Ordering::SeqCst); }
+    Ok(())
+}
+pub fn request_active_check() -> Result<()> {
+    if status()["state"] != "connected" { bail!("Сначала подключи VPN"); }
+    ACTIVE_CHECK.store(true, Ordering::SeqCst);
+    Ok(())
+}
+fn check_active(g:u64, key:&str, settings:&ModeSettings) -> Result<()> {
+    update(g,json!({"vpn_health":"checking","verified":false}));
+    select("TEST",key)?;
+    let sites:Vec<_>=settings.check_sites.iter().filter(|site|site.enabled).take(2).collect();
+    let replies=thread::scope(|scope| {
+        let jobs:Vec<_>=sites.iter().map(|&site|scope.spawn(move || probe(site,3,0))).collect();
+        jobs.into_iter().map(|job|job.join().unwrap()).collect::<Vec<_>>()
+    });
+    let passed=replies.iter().filter(|r|r.ok).count();
+    let health=if replies.is_empty() {"off"} else if passed==replies.len() {"ok"} else if passed>0 {"partial"} else {"fail"};
+    update(g,json!({"vpn_health":health,"verified":health=="ok","probe_results":replies}));
     Ok(())
 }
 fn clear_active() {
@@ -741,6 +722,7 @@ pub fn stop_for_service() {
         if queue.take().is_some(){MAINTENANCE_BUSY.store(false,Ordering::SeqCst);}mg
     };
     maintenance_update(mg,json!({"maintenance_state":"cancelled","maintenance_message":"Обновление/проверка остановлены"}));
+    ACTIVE_CHECK.store(false, Ordering::SeqCst);
     let _=cleanup_routes();clear_active();
     update(g,json!({"mode":"","state":"idle","message":"Выключено"}));
     stop_orphan();
@@ -795,11 +777,22 @@ pub fn start_worker(state:daemon::SharedState) {
                 if let Err(e)=result {if current(g){let _=cleanup_routes();clear_active();update(g,json!({"state":"error","message":e.to_string(),"core_log":safe_core_log(&nodes().unwrap_or_default())}));}}
                 last_check=Instant::now();last_network=physical_network();
             }
+            if ACTIVE_CHECK.swap(false, Ordering::SeqCst) {
+                let g=GENERATION.load(Ordering::SeqCst);
+                let current_status=status();
+                if current_status["state"]=="connected" {
+                    let key=current_status["key"].as_str().unwrap_or("");
+                    let mode=current_status["mode"].as_str().unwrap_or("");
+                    if let Some(settings)=config().ok().and_then(|c|c.modes.get(mode).cloned()) {
+                        if let Err(error)=check_active(g,key,&settings) {
+                            update(g,json!({"vpn_health":"fail","verified":false,"probe_error":error.to_string()}));
+                        }
+                    }
+                }
+            }
             if last_check.elapsed()>=Duration::from_secs(60) && status()["state"]=="connected" {
                 last_check=Instant::now();
                 let g=GENERATION.load(Ordering::SeqCst);
-                let all=nodes().unwrap_or_default();let key=status()["key"].as_str().unwrap_or("").to_owned();
-                let changed=core.as_ref().map(|c|c.fingerprint!=core_fingerprint(&all)).unwrap_or(true);
                 let network=physical_network();
                 let network_changed=match (&last_network,&network) {(Some(old),Some(new))=>old!=new,_=>false};
                 if network.is_some() {last_network=network;}
@@ -807,11 +800,8 @@ pub fn start_worker(state:daemon::SharedState) {
                 // a core that still contains bootstrap addresses from the old network.
                 if network_changed {if let Some(c)=core.as_mut(){c.fingerprint.clear();}}
                 let mode=status()["mode"].as_str().unwrap_or("").to_owned();
-                let settings=config().ok().and_then(|c|c.modes.get(&mode).cloned());
                 let core_alive=core.as_mut().map(Core::alive).unwrap_or(false);
-                let check_enabled=settings.as_ref().map(|s|s.check_enabled).unwrap_or(false);
-                let probe_ok=if check_enabled && !changed && !network_changed && core_alive {settings.as_ref().and_then(|s|all.iter().find(|n|n.key==key).and_then(|n|test_node(g,n,s,0).ok().and_then(|r|r.delay))).is_some()}else{false};
-                let reason=mode_policy::refresh_reason(changed,network_changed,core_alive,check_enabled,probe_ok);
+                let reason=mode_policy::refresh_reason(false,network_changed,core_alive,false,true);
                 if let Some(reason)=reason {if current(g)&&!mode.is_empty(){retry_if_current(g,&mode,reason);}}
             }
             thread::sleep(Duration::from_secs(1));

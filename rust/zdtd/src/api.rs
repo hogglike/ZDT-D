@@ -7225,7 +7225,12 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
                 ("GET", "/api/connection-modes/diagnostics") => modes::diagnostics(),
                 ("POST", "/api/connection-modes/refresh-servers") => {
                     if !services_running || start_in_progress || stop_in_progress {anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска");}
-                    modes::request_maintenance(true)?;
+                    let input:serde_json::Value=serde_json::from_slice(&body).unwrap_or_default();
+                    if input["only"].as_bool()==Some(true) { modes::refresh_subscriptions_only()?; } else { modes::request_maintenance(true)?; }
+                    Ok(json!({"ok":true}))
+                },
+                ("POST", "/api/connection-modes/check-active") => {
+                    modes::request_active_check()?;
                     Ok(json!({"ok":true}))
                 },
                 ("POST", "/api/connection-modes/select-server") => {
@@ -7241,7 +7246,7 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> Result<()> {
                     let input: serde_json::Value=serde_json::from_slice(&body)?;
                     let mode=input["mode"].as_str().unwrap_or("");
                     let ping=path.ends_with("/ping");
-                    if !ping && mode.is_empty() { modes::stop_for_service(); }
+                    if !ping && mode.is_empty() { modes::request("", false)?; }
                     else {
                         if !services_running || start_in_progress || stop_in_progress { anyhow::bail!("Сначала запусти ZDT-D и дождись завершения запуска"); }
                         modes::request(mode,ping)?;

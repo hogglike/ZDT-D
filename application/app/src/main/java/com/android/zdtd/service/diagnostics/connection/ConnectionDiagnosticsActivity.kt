@@ -60,7 +60,9 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
       MaterialTheme {
         var tick by remember { mutableStateOf(0) }
         LaunchedEffect(Unit) { while (isActive) { delay(750); tick++ } }
+        var editTargets by remember { mutableStateOf(false) }
         val prefs = ConnectionHealth.preferences(this)
+        if (editTargets) CheckTargetsEditor(this) { editTargets = false }
         @Suppress("UNUSED_VARIABLE") val refresh = tick
         val report = ConnectionHealth.read(this)
         val now = System.currentTimeMillis()
@@ -73,7 +75,8 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.safeDrawingPadding().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Проверка соединения", style = MaterialTheme.typography.headlineSmall)
-            Text("Интернет · DNS · YouTube · VPN")
+            Text("Напрямую · VPN · DNS · YouTube")
+            OutlinedButton(onClick = { editTargets = true }) { Text("Сайты и таймаут") }
             Button(onClick = { start("CHECK") }, enabled = !checking && !capture) { Text(if (checking) "Проверка…" else "Проверить сейчас") }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
               Switch(checked = prefs.getBoolean("automatic", false), onCheckedChange = {
@@ -125,4 +128,41 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
       }
     }
   }
+}
+
+@Composable
+private fun CheckTargetsEditor(context: android.content.Context, close: () -> Unit) {
+  var targets by remember { mutableStateOf(ConnectionHealth.targets(context)) }
+  var timeout by remember { mutableStateOf(ConnectionHealth.preferences(context).getInt("target_timeout", 4).toString()) }
+  AlertDialog(onDismissRequest = close, title = { Text("Сайты для проверки напрямую") }, text = {
+    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      OutlinedTextField(timeout, { timeout = it.filter(Char::isDigit).take(2) }, label = { Text("Таймаут · 2–15 с") }, singleLine = true)
+      targets.forEachIndexed { index, target ->
+        fun edit(next: ConnectionHealth.Target) { targets = targets.mapIndexed { i, item -> if (i == index) next else item } }
+        HorizontalDivider()
+        Row {
+          Checkbox(target.enabled, onCheckedChange = { edit(target.copy(enabled = it)) })
+          FilterChip(selected = target.group == "ru", onClick = { edit(target.copy(group = "ru")) }, label = { Text("РФ") })
+          Spacer(Modifier.width(6.dp))
+          FilterChip(selected = target.group == "world", onClick = { edit(target.copy(group = "world")) }, label = { Text("Зарубежные") })
+        }
+        OutlinedTextField(target.name, { edit(target.copy(name = it.take(60))) }, label = { Text("Название") }, singleLine = true)
+        OutlinedTextField(target.url, { edit(target.copy(url = it.trim().take(2000))) }, label = { Text("HTTPS-адрес") }, singleLine = true)
+        OutlinedTextField(if (target.expected == 0) "" else target.expected.toString(),
+          { edit(target.copy(expected = it.filter(Char::isDigit).take(3).toIntOrNull() ?: 0)) },
+          label = { Text("HTTP-код · пусто = 2xx") }, singleLine = true)
+        TextButton(onClick = { targets = targets.filterIndexed { i, _ -> i != index } }) { Text("Удалить") }
+      }
+      TextButton(enabled = targets.size < 12, onClick = {
+        targets = targets + ConnectionHealth.Target("", "https://", "world", 0)
+      }) { Text("Добавить сайт") }
+      TextButton(onClick = { targets = ConnectionHealth.defaults; timeout = "4" }) { Text("Вернуть стандартные") }
+    }
+  }, confirmButton = {
+    val seconds = timeout.toIntOrNull()
+    TextButton(enabled = seconds != null && seconds in 2..15 && targets.all(ConnectionHealth::validTarget), onClick = {
+      ConnectionHealth.saveTargets(context, targets, seconds ?: 4)
+      close()
+    }) { Text("Сохранить") }
+  }, dismissButton = { TextButton(onClick = close) { Text("Отмена") } })
 }

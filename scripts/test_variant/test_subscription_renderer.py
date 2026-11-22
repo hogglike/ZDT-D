@@ -36,7 +36,7 @@ fn main() {
  assert_eq!(clash["enabled"],true);assert_eq!(clash["utls"]["fingerprint"],"chrome");
  let raw=tls_json(&json!({"tls":{"server_name":"localhost","reality":{"enabled":true,"public_key":public}}}),false).unwrap();assert_eq!(raw["enabled"],true);assert_eq!(raw["utls"]["enabled"],true);
  let old:Config=serde_json::from_str(r#"{"active":"","modes":{"browser":{"apps":["org.browser"],"app_policy":"selected"}}}"#).unwrap();
- assert_eq!(old.modes["browser"].check_sites.len(),3);assert!(old.modes["browser"].check_enabled);assert_eq!(old.latency_timeout_seconds,8);assert!(!old.refresh_enabled);assert_eq!(old.refresh_interval_minutes,60);
+ assert_eq!(old.modes["browser"].check_sites.len(),3);assert!(old.modes["browser"].check_enabled);assert_eq!(old.latency_timeout_seconds,8);assert!(old.refresh_enabled);assert_eq!(old.refresh_interval_minutes,30);
  let mut schedule=old.clone();schedule.refresh_enabled=true;schedule.refresh_interval_minutes=120;let schedule:Config=serde_json::from_str(&serde_json::to_string(&schedule).unwrap()).unwrap();assert!(schedule.refresh_enabled);assert_eq!(schedule.refresh_interval_minutes,120);
  let mut disabled=old.modes["browser"].clone();disabled.check_enabled=false;disabled.check_sites[0].enabled=false;
  let saved=serde_json::to_string(&disabled).unwrap();let reread:ModeSettings=serde_json::from_str(&saved).unwrap();assert!(!reread.check_enabled);assert!(!reread.check_sites[0].enabled);
@@ -46,7 +46,7 @@ fn main() {
   settings.choose(mode,"outside-list").unwrap();assert!(settings.manual_override);assert_eq!(settings.selected_key,"outside-list");
   let raw=serde_json::to_string(&settings).unwrap();let mut settings:ModeSettings=serde_json::from_str(&raw).unwrap();
   settings.choose(mode,"auto").unwrap();assert!(!settings.manual_override);assert_eq!(settings.node_keys,["first","second"]);assert_eq!(settings.name_filters,["LTE"]);
-  settings.check_enabled=false;assert!(settings.choose(mode,"auto").is_err());
+  settings.check_enabled=false;settings.choose(mode,"auto").unwrap();
  }
  assert!(ModeSettings::default().choose("browser","auto").is_err());
  let mut rotated=node.clone();rotated.id="generated".into();rotated.definition["server"]=json!("new.fixture");

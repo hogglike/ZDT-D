@@ -8,8 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
 import com.android.zdtd.service.R
-import com.android.zdtd.service.modes.ModeActionService
-import com.android.zdtd.service.modes.ModeClient
+import com.android.zdtd.service.modes.bindVpnWidget
 import com.android.zdtd.service.modes.ModeStatusReceiver
 import java.text.DateFormat
 import java.util.Date
@@ -29,8 +28,9 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
       val ids = manager.getAppWidgetIds(ComponentName(context, ConnectionWidgetProvider::class.java))
       if (ids.isEmpty()) return
       ids.forEach { id ->
-        val views = RemoteViews(context.packageName, R.layout.widget_connection_health)
+        val views = RemoteViews(context.packageName, R.layout.widget_connection_modes)
         bind(context, views)
+        bindVpnWidget(context, views)
         manager.updateAppWidget(id, views)
       }
     }
@@ -63,36 +63,19 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
         "fail" -> "!"
         else -> "·"
       }
-      val internet = listOf("Яндекс", "VK", "Google", "Cloudflare").map(::checkState)
-      val internetState = when {
-        "ok" in internet && "fail" in internet -> "частично"
-        "ok" in internet -> "доступен"
-        "fail" in internet -> "нет ответа"
-        else -> "—"
+      fun groupMark(group: String, legacy: List<String>): String {
+        if (expired) return "—"
+        val values = (0 until (rows?.length() ?: 0)).mapNotNull { rows?.optJSONObject(it) }
+          .filter { it.optString("group") == group || (!it.has("group") && it.optString("name") in legacy) }
+          .map { it.optString("state") }
+        val ok = values.count { it == "ok" }
+        return if (values.isEmpty()) "—" else if (ok == 0) "✕" else if (ok == values.size) "✓" else "~"
       }
-      val vpn = ModeClient.cached(context)
-      val vpnMode = vpn.optString("mode")
-      val vpnState = vpn.optString("state")
-      val vpnLabel = when {
-        vpnState == "connecting" -> "подключается"
-        vpnState == "connected" && vpn.optBoolean("verified") -> "проверен"
-        vpnState == "connected" -> "подключён"
-        vpnState == "error" -> "ошибка"
-        vpnState == "off" || vpnState == "idle" -> "выкл."
-        else -> "—"
-      }
-      val vpnActive = vpnMode in ModeClient.modes && vpnState in listOf("connecting", "connected")
       views.setTextViewText(R.id.health_time, timestamp)
-      views.setTextViewText(R.id.health_results, "Интернет ${if (expired) "—" else internetState}\n" +
-        "DNS-профили ${if (expired) "·" else mark(checkState("DNS-профили"))}     " +
-        "YouTube HTTPS ${if (expired) "·" else mark(checkState("YouTube (HTTPS)"))}\n" +
-        "VPN · $vpnLabel")
+      views.setTextViewText(R.id.health_results,
+        "РФ ${groupMark("ru",listOf("Яндекс","VK"))}   Зарубежные ${groupMark("world",listOf("Google","Cloudflare"))}   DNS ${if (expired) "·" else mark(checkState("DNS-профили"))}   YouTube ${if (expired) "·" else mark(checkState("YouTube (HTTPS)"))}")
       views.setTextViewText(R.id.health_check, if (running) "Проверка…" else "Проверить")
       views.setBoolean(R.id.health_check, "setEnabled", !running)
-      views.setTextViewText(R.id.health_vpn, if (vpnActive) "VPN выкл." else "VPN вкл.")
-      views.setOnClickPendingIntent(R.id.health_vpn, PendingIntent.getForegroundService(
-        context, 2385, Intent(context, ModeActionService::class.java).putExtra("mode", if (vpnActive) "" else "normal"), FLAGS,
-      ))
       views.setOnClickPendingIntent(R.id.health_check, PendingIntent.getForegroundService(
         context, 2384, Intent(context, DiagnosticService::class.java).setAction("CHECK"), FLAGS,
       ))

@@ -34,6 +34,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
   val ui by uiStateFlow.collectAsStateWithLifecycle()
   var page by rememberSaveable { mutableStateOf(NetworkPage.HOME) }
   var profile by rememberSaveable { mutableStateOf("") }
+  var zapretEngine by rememberSaveable { mutableStateOf("nfqws2") }
   val snackbar = remember { SnackbarHostState() }
 
   fun up() {
@@ -105,17 +106,24 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
         NetworkPage.DNS -> DnsProfilesScreen(actions)
         NetworkPage.ZAPRET -> Column(Modifier.fillMaxSize()) {
           Text(
-            "В профиле Zapret2 выбери YouTube или ReVanced.",
+            "В профиле выбери YouTube или ReVanced. Старые профили видны на вкладке Zapret 1.",
             Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             style = MaterialTheme.typography.bodyMedium,
           )
+          Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("nfqws2" to "Zapret2", "nfqws" to "Zapret 1").forEach { (id, label) ->
+              val count = ui.programs.firstOrNull { it.id == id }?.profiles?.size ?: 0
+              FilterChip(selected = zapretEngine == id, onClick = { zapretEngine = id },
+                label = { Text(if (count > 0) "$label · $count" else label) })
+            }
+          }
           TextButton(onClick = { page = NetworkPage.TESTER }, modifier = Modifier.padding(horizontal = 12.dp)) {
             Text("Проверить стратегию")
           }
           Box(Modifier.weight(1f)) {
             ProgramScreen(
               programs = ui.programs,
-              programId = "nfqws2",
+              programId = zapretEngine,
               onOpenProfile = { _, name ->
                 profile = name
                 page = NetworkPage.STRATEGY
@@ -125,7 +133,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
             )
           }
         }
-        NetworkPage.STRATEGY -> ProfileScreen(ui.programs, "nfqws2", profile, actions, snackbar)
+        NetworkPage.STRATEGY -> ProfileScreen(ui.programs, zapretEngine, profile, actions, snackbar)
         NetworkPage.TESTER -> NfqwsTesterScreen(uiStateFlow = uiStateFlow, actions = actions)
         NetworkPage.SUBSCRIPTIONS -> SubscriptionsScreen(actions = actions, snackHost = snackbar)
       }
