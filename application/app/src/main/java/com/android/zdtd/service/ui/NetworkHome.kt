@@ -81,7 +81,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
               )
             }
           }
-          NetworkEntry("DNS для приложений", "DoH-профили и выбор приложений") {
+          NetworkEntry("DNS для приложений", "DoH и DoT для выбранных приложений") {
             page = NetworkPage.DNS
           }
           NetworkEntry("Zapret для YouTube", "Приложения и стратегия Zapret2") {

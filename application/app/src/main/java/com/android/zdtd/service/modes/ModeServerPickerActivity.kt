@@ -1,6 +1,7 @@
 package com.android.zdtd.service.modes
 
 import android.os.Bundle
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -42,8 +43,18 @@ class ModeServerPickerActivity : ComponentActivity() {
           autoAvailable = mode == "white" || settings.optBoolean("auto_enabled")
           autoSelected = autoAvailable && !settings.optBoolean("manual_override")
           checksEnabled = settings.optBoolean("check_enabled", true)
-          message = if (nodes.isEmpty()) "Нет серверов: включи и обнови подписку" else "Нажми сервер, чтобы выбрать его и включить режим"
+          message = if (nodes.isEmpty()) "Нет серверов: включи и обнови подписку" else "Нажми сервер для подключения"
+          if (nodes.any { it.optBoolean("supported") } && status.optString("maintenance_state") !in listOf("pending", "refreshing", "checking")) {
+            ModeClient.maintenance(this@ModeServerPickerActivity, false)
+          }
         } catch (e: Exception) { message = e.message ?: "Служба недоступна" }
+      }
+      LaunchedEffect(Unit) {
+        while (isActive) {
+          delay(750L)
+          val cached = ModeClient.cached(this@ModeServerPickerActivity)
+          if (cached.has("maintenance_state")) status = cached
+        }
       }
       fun choose(key: String) {
         busy = true
@@ -60,13 +71,24 @@ class ModeServerPickerActivity : ComponentActivity() {
         Column(Modifier.safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
           Text("${ModeState.title(mode)} · выбор сервера", style = MaterialTheme.typography.headlineSmall)
           Text(message)
-          if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+          val checking = status.optString("maintenance_state") in listOf("pending", "refreshing", "checking")
+          if (busy || checking) LinearProgressIndicator(Modifier.fillMaxWidth())
+          status.optString("maintenance_message").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = {
+              startActivity(Intent(this@ModeServerPickerActivity, ConnectionModesActivity::class.java).putExtra("mode", mode).putExtra("open_apps", true))
+              finish()
+            }) { Text("Приложения") }
+            TextButton(enabled = !checking && !busy && nodes.any { it.optBoolean("supported") }, onClick = {
+              ModeClient.maintenance(this@ModeServerPickerActivity, false)
+            }) { Text("Проверить снова") }
+          }
           if (autoAvailable) {
             Row(Modifier.fillMaxWidth().clickable(enabled = !busy && checksEnabled) { choose("auto") }.padding(vertical = 8.dp)) {
               RadioButton(autoSelected, onClick = null, enabled = !busy && checksEnabled)
               Column(Modifier.padding(start = 8.dp)) {
                 Text("Авто · сохранённый список серверов")
-                Text(if (checksEnabled) "Два круга по кандидатам; ручной выбор список не удаляет" else "Включи проверку сайтов в настройках режима", style = MaterialTheme.typography.bodySmall)
+                Text(if (checksEnabled) "Подключится к первому прошедшему проверку в текущей группе" else "Включи проверку сайтов в настройках режима", style = MaterialTheme.typography.bodySmall)
               }
             }
           }

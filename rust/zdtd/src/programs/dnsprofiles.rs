@@ -159,21 +159,7 @@ pub fn validate(document: &ProfileDocument) -> Result<()> {
         if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
             bail!("invalid_display_name: {id}");
         }
-        if profile.endpoint.len() > 2048 || profile.endpoint.chars().any(char::is_whitespace) {
-            bail!("invalid_doh_endpoint: {id}");
-        }
-        let url = reqwest::Url::parse(&profile.endpoint).context("invalid_doh_endpoint")?;
-        if url.scheme() != "https"
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
-            bail!("invalid_doh_endpoint: {id}: HTTPS without credentials or fragment required");
-        }
-        if url.port() == Some(0) {
-            bail!("invalid_doh_port: {id}");
-        }
+        parse_endpoint(&profile.endpoint).with_context(|| format!("invalid_dns_endpoint: {id}"))?;
         if !(250..=30000).contains(&profile.timeout_ms) {
             bail!("invalid_timeout: {id}");
         }
@@ -433,24 +419,29 @@ fn build_plan(id: &str, profile: &DnsProfile, all_names: &[String]) -> Result<Ru
     })
 }
 
-fn doh_parts(profile: &DnsProfile) -> Result<(String, u16, String, bool)> {
-    let url = reqwest::Url::parse(&profile.endpoint).context("invalid_doh_endpoint")?;
-    let host = url
-        .host_str()
-        .map(str::to_string)
-        .context("invalid_doh_endpoint: host missing")?;
-    let port = url.port_or_known_default().unwrap_or(443);
-    let mut path = if url.path().is_empty() { "/".to_string() } else { url.path().to_string() };
-    if let Some(query) = url.query() {
-        path.push('?');
-        path.push_str(query);
+fn parse_endpoint(endpoint: &str) -> Result<reqwest::Url> {
+    if endpoint.len() > 2048 || endpoint.chars().any(char::is_whitespace) {
+        bail!("Invalid DNS endpoint");
     }
-    let host_is_ip = host.parse::<std::net::IpAddr>().is_ok();
-    Ok((host, port, path, host_is_ip))
+    let url = reqwest::Url::parse(endpoint)?;
+    if url.host_str().is_none() || !url.username().is_empty() || url.password().is_some()
+        || url.fragment().is_some() || url.port() == Some(0)
+    {
+        bail!("DNS endpoint must have a host and no credentials or fragment");
+    }
+    match url.scheme() {
+        "https" => Ok(url),
+        "tls" if (url.path().is_empty() || url.path() == "/") && url.query().is_none() => Ok(url),
+        _ => bail!("Use https://host/path for DoH or tls://host[:port] for DoT"),
+    }
 }
 
 fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
-    let (host, port, path, host_is_ip) = doh_parts(&plan.profile)?;
+    let url = parse_endpoint(&plan.profile.endpoint)?;
+    let dot = url.scheme() == "tls";
+    let host = url.host_str().context("DNS endpoint host missing")?
+        .trim_start_matches('[').trim_end_matches(']');
+    let port = url.port().unwrap_or(if dot { 853 } else { 443 });
     let bootstrap = plan
         .profile
         .bootstrap
@@ -460,8 +451,25 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
 
     let mut tls = serde_json::Map::new();
     tls.insert("enabled".to_string(), Value::Bool(true));
-    if !host_is_ip {
-        tls.insert("server_name".to_string(), Value::String(host.clone()));
+    if host.parse::<std::net::IpAddr>().is_err() {
+        tls.insert("server_name".to_string(), Value::String(host.to_owned()));
+    }
+    let mut upstream = json!({
+        "type": if dot { "tls" } else { "https" },
+        "tag": "profile-upstream",
+        "server": host,
+        "server_port": port,
+        "domain_resolver": {"server": "bootstrap", "strategy": "ipv4_only"},
+        "tls": Value::Object(tls),
+        "connect_timeout": format!("{}ms", plan.profile.timeout_ms)
+    });
+    if !dot {
+        let mut path = url.path().to_owned();
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        upstream["path"] = json!(path);
     }
 
     Ok(json!({
@@ -469,15 +477,9 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
         "dns": {
             "servers": [
                 {"type": "udp", "tag": "bootstrap", "server": bootstrap},
-                {
-                    "type": "https", "tag": "profile-doh", "server": host,
-                    "server_port": port, "path": path,
-                    "domain_resolver": {"server": "bootstrap", "strategy": "ipv4_only"},
-                    "tls": Value::Object(tls),
-                    "connect_timeout": format!("{}ms", plan.profile.timeout_ms)
-                }
+                upstream
             ],
-            "final": "profile-doh",
+            "final": "profile-upstream",
             "strategy": "ipv4_only",
             "independent_cache": true
         },
@@ -494,7 +496,7 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
         "outbounds": [{"type": "direct", "tag": "direct"}],
         "route": {
             "auto_detect_interface": true,
-            "default_domain_resolver": {"server": "profile-doh", "strategy": "ipv4_only"},
+            "default_domain_resolver": {"server": "profile-upstream", "strategy": "ipv4_only"},
             "rules": [
                 {"inbound": ["dns-profile-dns"], "action": "hijack-dns"},
                 {"port": [53], "action": "hijack-dns"}
@@ -885,7 +887,7 @@ fn wait_dns_ready(plan: &RuntimePlan) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(500));
     }
-    bail!("dnsprofiles: DoH readiness failed for {} via {}", plan.id, plan.profile.endpoint)
+    bail!("dnsprofiles: upstream DNS readiness failed for {} via {}", plan.id, plan.profile.endpoint)
 }
 
 fn start_plan(plan: &RuntimePlan) -> Result<()> {
@@ -910,7 +912,7 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
     let start_result = (|| -> Result<()> {
         wait_tcp_ready(plan.proxy_port, TUN_WAIT)?;
         install_dns_port_redirects(plan)?;
-        // Verify the local DNS listener and upstream DoH before handing the TUN
+        // Verify the local DNS listener and encrypted upstream before handing the TUN
         // to Android netd.
         wait_dns_ready(plan)?;
         let tun_pid = spawn_tun2socks(plan)?;
@@ -1238,7 +1240,7 @@ pub fn preview(document: &ProfileDocument) -> Result<Value> {
             "primary_android_user_only",
             "app_owned_doh_not_overridden",
             "global_dnscrypt_must_be_disabled",
-            "one_doh_upstream_per_profile",
+            "one_encrypted_upstream_per_profile",
             "changes_apply_after_zdtd_restart"
         ]
     }))
@@ -1285,6 +1287,21 @@ mod tests {
         validate(&doc).unwrap();
     }
     #[test]
+    fn dot_config_uses_tls_with_default_or_explicit_port() {
+        for (endpoint, port) in [("tls://dns.example", 853), ("tls://dns.example:8853", 8853)] {
+            let mut doc = fixture();
+            doc.profiles.get_mut("xbox").unwrap().endpoint = endpoint.into();
+            validate(&doc).unwrap();
+            let plan = build_plan("xbox", &doc.profiles["xbox"], &["xbox".into()]).unwrap();
+            let cfg = build_singbox_config(&plan).unwrap();
+            let server = &cfg["dns"]["servers"][1];
+            assert_eq!(server["type"], "tls");
+            assert_eq!(server["server_port"].as_u64(), Some(port));
+            assert_eq!(server["tls"]["server_name"], "dns.example");
+            assert!(server.get("path").is_none());
+        }
+    }
+    #[test]
     fn enabled_profile_requires_apps() {
         let mut doc = fixture();
         let p = doc.profiles.get_mut("xbox").unwrap();
@@ -1312,6 +1329,10 @@ mod tests {
     fn rejects_unsafe_or_ambiguous_urls() {
         for endpoint in [
             "http://dns.example/dns-query",
+            "tls://dns.example/dns-query",
+            "tls://dns.example?key=value",
+            "tls://u:p@dns.example",
+            "tls://dns.example:0",
             "https://u:p@dns.example/",
             "https://dns.example/#x",
             "https://dns.example:0/",

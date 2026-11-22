@@ -23,7 +23,7 @@ private const val DnsValidatePath = "/api/programs/dnsprofiles/validate"
 private const val DnsStatusPath = "/api/programs/dnsprofiles/status"
 private const val DnsDiagnosePath = "/api/programs/dnsprofiles/diagnose"
 
-/** Per-app DoH profile editor. Runtime changes take effect after a normal ZDT-D restart. */
+/** Per-app encrypted DNS profile editor. Runtime changes take effect after a normal ZDT-D restart. */
 @Composable
 fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottomContentPadding: Dp = 0.dp) {
   val diagnosticContext = LocalContext.current
@@ -110,7 +110,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
               com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity::class.java))
           }) { Text("Проверка соединения и ошибки раздачи") }
           Text(
-            "Отдельный DoH для выбранных приложений. Профиль использует полноценный маршрут, совместимый с рабочей схемой Build 15.",
+            "Частный DNS по HTTPS или TLS для выбранных приложений.",
             style = MaterialTheme.typography.bodyMedium,
           )
           Row(
@@ -218,7 +218,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
             Column(Modifier.weight(1f)) {
               Text(profile.optString("display_name"), style = MaterialTheme.typography.titleLarge)
               Text(
-                "DoH · приложений: ${profile.optJSONArray("apps")?.length() ?: 0}",
+                "${if (profile.optString("endpoint").startsWith("tls://", true)) "DoT" else "DoH"} · приложений: ${profile.optJSONArray("apps")?.length() ?: 0}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -320,14 +320,22 @@ private fun DnsProfileEditor(
   var id by remember(originalId) { mutableStateOf(originalId.ifEmpty { "xbox" }) }
   var name by remember(originalId) { mutableStateOf(original?.optString("display_name") ?: "Xbox DNS") }
   var endpoint by remember(originalId) { mutableStateOf(original?.optString("endpoint") ?: "https://xbox-dns.ru/dns-query") }
+  var dot by remember(originalId) { mutableStateOf(endpoint.startsWith("tls://", true)) }
   var bootstrap by remember(originalId) { mutableStateOf(original?.optJSONArray("bootstrap")?.strings()?.joinToString(", ") ?: "1.1.1.1, 9.9.9.9") }
   var timeout by remember(originalId) { mutableStateOf(original?.optInt("timeout_ms")?.toString() ?: "7000") }
   var selected by remember(originalId) { mutableStateOf(original?.optJSONArray("apps")?.strings()?.toSet() ?: emptySet()) }
   var enabled by remember(originalId) { mutableStateOf(original?.optBoolean("enabled") ?: false) }
   var showApps by remember { mutableStateOf(false) }
-  fun payload() = JSONObject().put("display_name", name.trim()).put("endpoint", endpoint.trim())
-    .put("bootstrap", JSONArray(bootstrap.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }))
-    .put("timeout_ms", timeout.toIntOrNull() ?: 0).put("apps", JSONArray(selected.sorted())).put("enabled", enabled)
+  val address = endpoint.trim()
+  val validProtocol = if (dot) !address.contains("://") || address.startsWith("tls://", true)
+    else address.startsWith("https://", true)
+
+  fun payload(): JSONObject {
+    val url = if (dot && !address.contains("://")) "tls://$address" else address
+    return JSONObject().put("display_name", name.trim()).put("endpoint", url)
+      .put("bootstrap", JSONArray(bootstrap.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }))
+      .put("timeout_ms", timeout.toIntOrNull() ?: 0).put("apps", JSONArray(selected.sorted())).put("enabled", enabled)
+  }
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -336,8 +344,21 @@ private fun DnsProfileEditor(
       Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(id, { id = it }, label = { Text("ID: латиница, цифры, _ и -") }, enabled = !busy && originalId.isEmpty(), singleLine = true)
         OutlinedTextField(name, { name = it }, label = { Text("Название") }, enabled = !busy, singleLine = true)
-        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Адрес DNS over HTTPS") }, supportingText = { Text("Полный URL от провайдера, например https://xbox-dns.ru/dns-query") }, enabled = !busy, singleLine = true)
-        OutlinedTextField(bootstrap, { bootstrap = it }, label = { Text("DNS для поиска адреса DoH-сервера") }, supportingText = { Text("IPv4 DNS-серверов через запятую. Используются при подключении к DoH; запросы приложений идут к адресу выше.") }, enabled = !busy)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          FilterChip(selected = !dot, onClick = {
+            if (dot) { dot = false; endpoint = "" }
+          }, label = { Text("DoH") })
+          FilterChip(selected = dot, onClick = {
+            if (!dot) { dot = true; endpoint = "" }
+          }, label = { Text("DoT") })
+        }
+        OutlinedTextField(
+          endpoint, { endpoint = it },
+          label = { Text(if (dot) "Адрес DNS over TLS" else "Адрес DNS over HTTPS") },
+          supportingText = { Text(if (dot) "Например, dns.google или tls://dns.google:853" else "Полный URL, например https://xbox-dns.ru/dns-query") },
+          enabled = !busy, singleLine = true,
+        )
+        OutlinedTextField(bootstrap, { bootstrap = it }, label = { Text("DNS для поиска адреса DNS-сервера") }, supportingText = { Text("IPv4 DNS-серверов через запятую. Используются при подключении к частному DNS; запросы приложений идут к адресу выше.") }, enabled = !busy)
         OutlinedTextField(timeout, { timeout = it }, label = { Text("Таймаут, мс (250–30000)") }, enabled = !busy, singleLine = true)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
           Column(Modifier.weight(1f)) { Text("Включить профиль"); Text("Применится после перезапуска ZDT-D", style = MaterialTheme.typography.bodySmall) }
@@ -345,9 +366,9 @@ private fun DnsProfileEditor(
         }
         OutlinedButton(onClick = { showApps = true }, enabled = !busy) { Text("Приложения: ${selected.size}") }
         if (selected.isNotEmpty()) TextButton(onClick = { selected = emptySet(); enabled = false }, enabled = !busy) { Text("Очистить назначения") }
-        Text("Один DoH upstream. Выбранное приложение использует профильный TUN. Для системной точки доступа можно приостановить все DNS-профили главным переключателем. Встроенный DoH самого приложения этот профиль не переопределяет.")
-        OutlinedButton(onClick = { onSubmit(id.trim(), payload(), false) }, enabled = !busy) { Text("Проверить настройки и UID") }
-        Text("Проверка валидирует настройки/UID и показывает будущие netId/TUN. Реальный DoH проверяется при запуске профиля.")
+        Text("Один DNS-сервер на профиль. Выбранное приложение использует профильный TUN. Для системной точки доступа можно приостановить все DNS-профили главным переключателем. Встроенный DoH самого приложения этот профиль не переопределяет.")
+        OutlinedButton(onClick = { onSubmit(id.trim(), payload(), false) }, enabled = !busy && validProtocol && address.isNotBlank()) { Text("Проверить настройки и UID") }
+        Text("Проверка валидирует настройки/UID и показывает будущие netId/TUN. Доступность DNS-сервера проверяется при запуске профиля.")
         diagnostics?.let {
           TextButton(onClick = onToggleDiagnostics) {
             Text(if (showDiagnostics) "Скрыть технические данные" else "Показать технические данные")
@@ -364,7 +385,7 @@ private fun DnsProfileEditor(
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
       }
     },
-    confirmButton = { TextButton(enabled = !busy, onClick = { onSubmit(id.trim(), payload(), true) }) { Text("Сохранить") } },
+    confirmButton = { TextButton(enabled = !busy && validProtocol && address.isNotBlank(), onClick = { onSubmit(id.trim(), payload(), true) }) { Text("Сохранить") } },
     dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
   )
   if (showApps) DnsProfileAppPicker(selected, onDismiss = { showApps = false }, onSave = { selected = it; showApps = false })

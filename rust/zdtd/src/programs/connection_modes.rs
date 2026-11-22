@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs, io::Read, os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Mutex, OnceLock,
+    path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{mpsc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering}}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use crate::{daemon, iptables::{iptables_port::{DpiTunnelOptions, ProtoChoice}, iptables_tproxy}, shell::{self, Capture}};
 use super::{mihomo_subscription as subscriptions, mode_policy};
@@ -17,7 +17,37 @@ const CONTROL_PORT: u16 = 19973;
 const LATENCY_CONTROL_PORT: u16 = 19975;
 const LATENCY_PORT: u16 = 19976;
 const BIN: &str = "/data/adb/modules/ZDT-D/bin/sing-box";
-const MODES: [&str; 3] = ["white", "normal", "browser"];
+const MODES: [&str; 4] = ["white", "normal", "normal2", "browser"];
+const PROBE_LANES: usize = 6;
+
+fn probe_port(base: u16, lane: usize) -> u16 {
+    if lane == 0 { base } else if base == TEST_PORT { 20120 + lane as u16 } else { 20130 + lane as u16 }
+}
+
+fn probe_selector(lane: usize) -> String {
+    if lane == 0 { "TEST".into() } else { format!("TEST-{lane}") }
+}
+
+// Each lane owns its ingress and selector while a probe is in flight.
+fn add_probe_lanes(cfg: &mut Value, base: u16) {
+    let secret = cfg["experimental"]["clash_api"]["secret"].clone();
+    let template = cfg["outbounds"].as_array().unwrap().last().unwrap().clone();
+    for lane in 1..PROBE_LANES {
+        let tag = format!("mode-test-{lane}");
+        let selector_name = probe_selector(lane);
+        let mut selector = template.clone();
+        selector["tag"] = json!(selector_name);
+        cfg["outbounds"].as_array_mut().unwrap().push(selector);
+        cfg["inbounds"].as_array_mut().unwrap().push(json!({
+            "type": "mixed", "tag": tag, "listen": "127.0.0.1", "listen_port": probe_port(base, lane),
+            "users": [{"username": "probe", "password": secret}]
+        }));
+        if !cfg["route"]["rules"].is_array() { cfg["route"]["rules"] = json!([]); }
+        cfg["route"]["rules"].as_array_mut().unwrap().push(json!({
+            "inbound": [tag], "action": "route", "outbound": selector_name
+        }));
+    }
+}
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static REQUEST: Mutex<Option<(u64, String, bool)>> = Mutex::new(None);
 static MAINTENANCE_REQUEST: Mutex<Option<(u64, bool)>> = Mutex::new(None);
@@ -107,6 +137,14 @@ impl ModeSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config { pub active: String, pub modes: BTreeMap<String, ModeSettings>, pub latency_url:String, pub latency_timeout_seconds:u64, pub catalog:BTreeMap<String, SavedNode>, pub refresh_enabled:bool, pub refresh_interval_minutes:u64 }
+impl Config {
+    fn add_missing_modes(&mut self) {
+        let defaults = Config::default();
+        for (name, mode) in defaults.modes {
+            self.modes.entry(name).or_insert(mode);
+        }
+    }
+}
 impl Default for Config {
     fn default() -> Self {
         let mut modes = BTreeMap::new();
@@ -157,6 +195,7 @@ static REJECTED_NODES: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 fn config_with_catalog() -> Result<(Config,usize,Vec<(String,String,bool,subscriptions::SubscriptionNode)>)> {
     let path=root().join("config.json");
     let mut c:Config=if path.exists(){serde_json::from_str(&fs::read_to_string(path)?).context("read mode settings")?}else{Config::default()};
+    c.add_missing_modes();
     let (stored,ready)=subscriptions::mode_selection_catalog()?;
     let catalog=stored.iter().map(|(id,_,_,n)|(stable_mode_key(id,&n.id),SavedNode{subscription_id:id.clone(),node_id:n.id.clone(),name:n.name.clone(),protocol:n.protocol.clone(),legacy_key:legacy_mode_key(id,&n.definition)})).collect();
     let removed=c.reconcile(&catalog,ready);
@@ -301,7 +340,9 @@ fn render_core(all:&[Node]) -> Result<Value> {
     Ok(cfg)
 }
 fn check_core(all:&[Node],path:&Path) -> Result<bool> {
-    write_private(path,&render_core(all)?.to_string())?;
+    let mut cfg = render_core(all)?;
+    add_probe_lanes(&mut cfg, TEST_PORT);
+    write_private(path,&cfg.to_string())?;
     let (code,diagnostic)=shell::run_timeout(BIN,&["check","-c",path.to_str().context("config path")?],Capture::Both,Duration::from_secs(8))?;
     if code!=0 { let _=write_private(&root().join("sing-box.log"),&diagnostic); }
     Ok(code==0)
@@ -356,11 +397,18 @@ fn validate_url(raw:&str) -> Result<()> {
 }
 #[derive(Serialize)]
 struct ProbeResult { url:String, ok:bool, http_status:Option<u16>, ms:Option<u64>, error:String }
-fn probe(site:&CheckTarget, timeout:u64) -> ProbeResult {
+fn probe_proxy(base: u16, lane: usize) -> Result<Proxy> {
+    let port = probe_port(base, lane);
+    let proxy = Proxy::all(format!("http://127.0.0.1:{port}"))?;
+    if lane == 0 { return Ok(proxy); }
+    Ok(proxy.basic_auth("probe", &crate::settings::read_or_create_token()?))
+}
+
+fn probe(site:&CheckTarget, timeout:u64, lane:usize) -> ProbeResult {
     let start=Instant::now();
     let mut result=ProbeResult{url:site.url.clone(),ok:false,http_status:None,ms:None,error:String::new()};
     let attempt=(||->Result<()> {
-        let client=Client::builder().no_proxy().proxy(Proxy::all(format!("http://127.0.0.1:{TEST_PORT}"))?)
+        let client=Client::builder().no_proxy().proxy(probe_proxy(TEST_PORT, lane)?)
             .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(timeout.min(8))).timeout(Duration::from_secs(timeout))
             .pool_max_idle_per_host(0).build()?;
         let mut response=client.get(&site.url).header("cache-control","no-cache").send()?;
@@ -375,24 +423,36 @@ fn probe(site:&CheckTarget, timeout:u64) -> ProbeResult {
     result
 }
 struct ProbeReport { delay:Option<u64>, results:Vec<ProbeResult> }
-fn test_node(g:u64,n:&Node,settings:&ModeSettings) -> Result<ProbeReport> {
-    select("TEST",&n.key)?;
-    let mut results=Vec::new();
-    for site in settings.check_sites.iter().filter(|s|s.enabled) {
+fn test_node(g: u64, n: &Node, settings: &ModeSettings, lane: usize) -> Result<ProbeReport> {
+    if !current(g) { bail!("Отменено"); }
+    select(&probe_selector(lane), &n.key)?;
+    let sites: Vec<_> = settings.check_sites.iter().filter(|site| site.enabled).collect();
+    let mut results = Vec::with_capacity(sites.len());
+    // Check each server's first three targets together. A slow site must not
+    // multiply the per-server timeout, and advanced lists stay bounded.
+    for batch in sites.chunks(3) {
         if !current(g) { bail!("Отменено"); }
-        results.push(probe(site,settings.timeout_seconds));
+        let replies = thread::scope(|scope| {
+            let workers: Vec<_> = batch.iter().map(|&site| scope.spawn(move || {
+                probe(site, settings.timeout_seconds, lane)
+            })).collect();
+            workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>()
+        });
+        results.extend(replies);
     }
-    let delays:Vec<u64>=results.iter().filter(|r|r.ok).filter_map(|r|r.ms).collect();
-    let delay=if mode_policy::checks_pass(settings.check_enabled,delays.len(),settings.min_success) && !delays.is_empty() {Some(delays.iter().sum::<u64>()/delays.len() as u64)}else{None};
-    Ok(ProbeReport{delay,results})
+    let delays: Vec<u64> = results.iter().filter(|r| r.ok).filter_map(|r| r.ms).collect();
+    let delay = if mode_policy::checks_pass(settings.check_enabled, delays.len(), settings.min_success) && !delays.is_empty() {
+        Some(delays.iter().sum::<u64>() / delays.len() as u64)
+    } else { None };
+    Ok(ProbeReport { delay, results })
 }
-fn node_delay(n:&Node,c:&Config) -> (Option<u64>,String) {
+fn node_delay(n:&Node,c:&Config,lane:usize) -> (Option<u64>,String) {
     let attempt=(||->Result<u64> {
         // TEST is isolated from MODE. Use the same validated HTTPS transport as
         // mode checks: Clash API's delay handler loses the certificate context.
-        select_at(LATENCY_CONTROL_PORT,"TEST",&n.key)?;
+        select_at(LATENCY_CONTROL_PORT,&probe_selector(lane),&n.key)?;
         let start=Instant::now();
-        let client=Client::builder().no_proxy().proxy(Proxy::all(format!("http://127.0.0.1:{LATENCY_PORT}"))?)
+        let client=Client::builder().no_proxy().proxy(probe_proxy(LATENCY_PORT, lane)?)
             .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(c.latency_timeout_seconds.min(8)))
             .timeout(Duration::from_secs(c.latency_timeout_seconds)).pool_max_idle_per_host(0).build()?;
         let response=client.head(&c.latency_url).header("cache-control","no-cache").send()?;
@@ -445,7 +505,10 @@ fn start_latency_core(all:&mut [Node],g:u64) -> Result<Core> {
     let mut resolved=outbounds.into_iter();
     for n in all.iter_mut().filter(|n|n.outbound.is_some()){n.outbound=resolved.next();}
     fn validate(all:&[Node],path:&Path) -> Result<bool> {
-        let cfg=latency_layout(render_core(all)?,LATENCY_PORT,LATENCY_CONTROL_PORT);
+        let mut cfg=latency_layout(render_core(all)?,LATENCY_PORT,LATENCY_CONTROL_PORT);
+        // The template only routes the traffic core's TEST inbound.
+        cfg["route"]["rules"] = json!([]);
+        add_probe_lanes(&mut cfg, LATENCY_PORT);
         write_private(path,&cfg.to_string())?;
         let (code,_) =shell::run_timeout(BIN,&["check","-c",path.to_str().context("latency config path")?],Capture::Both,Duration::from_secs(8))?;
         Ok(code==0)
@@ -504,12 +567,29 @@ fn run_maintenance(g:u64,refresh:bool) -> Result<()> {
     let mut pings=status()["pings"].clone();if !pings.is_object(){pings=json!({});}
     pings.as_object_mut().unwrap().retain(|key,v|all.iter().any(|n|&n.key==key && v["revision"]==n.revision));
     maintenance_update(g,json!({"pings":pings,"maintenance_total":total}));
-    for n in all.iter().filter(|n|n.outbound.is_some()) {
-        if !maintenance_current(g){return Ok(());}
-        let (delay,error)=node_delay(n,&c);done+=1;if delay.is_some(){passed+=1;}
-        pings[&n.key]=json!({"ms":delay,"time":now(),"error":error,"revision":n.revision,"url":c.latency_url});
-        maintenance_update(g,json!({"pings":pings,"maintenance_done":done,"maintenance_passed":passed,"maintenance_message":format!("Проверено {done}/{total} · {}",n.name)}));
-    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let servers: Vec<_> = all.iter().filter(|n| n.outbound.is_some()).collect();
+    thread::scope(|scope| {
+        let (send, results) = mpsc::channel();
+        for lane in 0..PROBE_LANES.min(total) {
+            let send = send.clone();
+            let (next, servers, c) = (&next, &servers, &c);
+            scope.spawn(move || {
+                while maintenance_current(g) {
+                    let Some(&n) = servers.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                    if send.send((n, node_delay(n, c, lane))).is_err() { break; }
+                }
+            });
+        }
+        drop(send);
+        for (n, (delay, error)) in results {
+            if !maintenance_current(g) { break; }
+            done += 1;
+            if delay.is_some() { passed += 1; }
+            pings[&n.key] = json!({"ms":delay,"time":now(),"error":error,"revision":n.revision,"url":c.latency_url});
+            maintenance_update(g,json!({"pings":pings,"maintenance_done":done,"maintenance_passed":passed,"maintenance_message":format!("Проверено {done}/{total} · {}",n.name)}));
+        }
+    });
     if maintenance_current(g) {
         record["last_completed"]=json!(now());write_private(&root().join("maintenance.json"),&record.to_string())?;
         maintenance_update(g,json!({"maintenance_state":"complete","maintenance_message":format!("Проверено {done}: работают {passed}, без ответа {}{}",done-passed,if failed>0{format!(" · не обновились подписки: {failed}; использован сохранённый список")}else{String::new()}),"maintenance_last_completed":now()}));
@@ -586,33 +666,64 @@ fn connect(g:u64,mode:&str,all:&[Node]) -> Result<()> {
     let automatic=mode_policy::automatic(mode,settings.auto_enabled,settings.manual_override);
     let preferred=if settings.preferred_key.is_empty(){&settings.last_key}else{&settings.preferred_key};
     let attempts=mode_policy::connection_attempts(&keys,preferred,automatic,settings.check_enabled);
-    for (i,key) in attempts.iter().enumerate() {
+    for (i, batch) in attempts.chunks(PROBE_LANES).enumerate() {
         if !current(g) { return Ok(()); }
-        let n=list.iter().find(|n|&n.key==key).unwrap();
-        update(g,json!({"server":n.name,"key":n.key,"automatic":automatic,"round":i/list.len()+1,"attempt":i+1,"total":attempts.len(),"message":format!("Проверка {} · круг {}",n.name,i/list.len()+1)}));
-        let report=if settings.check_enabled {Some(test_node(g,n,&settings)?)}else{None};
-        let delay=report.as_ref().and_then(|r|r.delay);
-        if let Some(report)=&report {update(g,json!({"probe_results":report.results,"required_success":settings.min_success,"core_log":if delay.is_none(){safe_core_log(all)}else{String::new()}}));}
-        if !current(g) { return Ok(()); }
-        update(g,json!({"last_probe_ok":delay.is_some()}));
-        if delay.is_some() || !settings.check_enabled {
-            // Only successful probes may change the traffic selector and app rules.
-            select("MODE",&n.key)?;
-            let _=cleanup_routes();
-            let count=apply_apps(&settings)?;
-            if !current(g) { let _=cleanup_routes(); return Ok(()); }
-            { let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-              if !current(g) { let _=cleanup_routes(); return Ok(()); }
-              let mut c=config()?;c.active=mode.into();let saved=c.modes.get_mut(mode).unwrap();saved.last_key=n.key.clone();saved.preferred_key.clear();save_config(&c)?; }
-            // Close this instance's old connections: some sing-box versions do
-            // not interrupt routed selector connections despite the flag.
-            let _=Client::builder().no_proxy().timeout(Duration::from_secs(2)).build()?.delete(format!("http://127.0.0.1:{CONTROL_PORT}/connections")).bearer_auth(crate::settings::read_or_create_token()?).send();
-            update(g,json!({"state":"connected","server":n.name,"key":n.key,"delay_ms":delay,"verified":settings.check_enabled,"app_count":count,"message":if let Some(ms)=delay{format!("{}{} · {} мс · приложений {}",if automatic {"Авто · "} else {""},n.name,ms,count)}else{format!("{} · применено без проверки сайтов · приложений {}",n.name,count)}}));
-            return Ok(());
-        }
+        let first = i * PROBE_LANES;
+        update(g, json!({"automatic":automatic,"round":first/list.len()+1,
+            "attempt":first+1,"total":attempts.len(),"message":format!("Проверка серверов {}–{} из {}",first+1,first+batch.len(),attempts.len())}));
+        let connected = thread::scope(|scope| -> Result<bool> {
+            let (send, results) = mpsc::channel();
+            for (lane, key) in batch.iter().enumerate() {
+                let n = list.iter().find(|n| &n.key == key).unwrap();
+                let send = send.clone();
+                let settings = &settings;
+                scope.spawn(move || {
+                    let report = if settings.check_enabled { test_node(g, n, settings, lane).map(Some) } else { Ok(None) };
+                    let _ = send.send((n, report));
+                });
+            }
+            drop(send);
+            for (n, report) in results {
+                if !current(g) { return Ok(false); }
+                let report = match report {
+                    Ok(report) => report,
+                    Err(err) => {
+                        update(g, json!({"last_probe_ok":false,"probe_error":err.to_string()}));
+                        continue;
+                    }
+                };
+                let delay = report.as_ref().and_then(|r| r.delay);
+                if let Some(report) = report {
+                    update(g, json!({"probe_results":report.results,"required_success":settings.min_success,
+                        "last_probe_ok":delay.is_some(),"core_log":if delay.is_none(){safe_core_log(all)}else{String::new()}}));
+                }
+                if delay.is_some() || !settings.check_enabled {
+                    apply_connection(g, mode, &settings, n, delay, automatic)?;
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?;
+        if connected || !current(g) { return Ok(()); }
     }
     let _=cleanup_routes();
     bail!("{}",if automatic && settings.check_enabled {"Два круга завершены: рабочий сервер не найден. См. результаты сайтов"} else {"Сервер не прошёл настроенную проверку. См. результаты сайтов или отключи проверку этого режима"})
+}
+fn apply_connection(g: u64, mode: &str, settings: &ModeSettings, n: &Node, delay: Option<u64>, automatic: bool) -> Result<()> {
+    if !current(g) { return Ok(()); }
+    // Only successful probes may change the traffic selector and app rules.
+    select("MODE",&n.key)?;
+    let _=cleanup_routes();
+    let count=apply_apps(settings)?;
+    if !current(g) { let _=cleanup_routes(); return Ok(()); }
+    { let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+      if !current(g) { let _=cleanup_routes(); return Ok(()); }
+      let mut c=config()?;c.active=mode.into();let saved=c.modes.get_mut(mode).unwrap();saved.last_key=n.key.clone();saved.preferred_key.clear();save_config(&c)?; }
+    // Close this instance's old connections: some sing-box versions do
+    // not interrupt routed selector connections despite the flag.
+    let _=Client::builder().no_proxy().timeout(Duration::from_secs(2)).build()?.delete(format!("http://127.0.0.1:{CONTROL_PORT}/connections")).bearer_auth(crate::settings::read_or_create_token()?).send();
+    update(g,json!({"state":"connected","server":n.name,"key":n.key,"delay_ms":delay,"verified":settings.check_enabled,"app_count":count,"message":if let Some(ms)=delay{format!("{}{} · {} мс · приложений {}",if automatic {"Авто · "} else {""},n.name,ms,count)}else{format!("{} · применено без проверки сайтов · приложений {}",n.name,count)}}));
+    Ok(())
 }
 fn clear_active() {
     let _guard=CONFIG_LOCK.lock().unwrap_or_else(|e|e.into_inner());
@@ -699,11 +810,50 @@ pub fn start_worker(state:daemon::SharedState) {
                 let settings=config().ok().and_then(|c|c.modes.get(&mode).cloned());
                 let core_alive=core.as_mut().map(Core::alive).unwrap_or(false);
                 let check_enabled=settings.as_ref().map(|s|s.check_enabled).unwrap_or(false);
-                let probe_ok=if check_enabled && !changed && !network_changed && core_alive {settings.as_ref().and_then(|s|all.iter().find(|n|n.key==key).and_then(|n|test_node(g,n,s).ok().and_then(|r|r.delay))).is_some()}else{false};
+                let probe_ok=if check_enabled && !changed && !network_changed && core_alive {settings.as_ref().and_then(|s|all.iter().find(|n|n.key==key).and_then(|n|test_node(g,n,s,0).ok().and_then(|r|r.delay))).is_some()}else{false};
                 let reason=mode_policy::refresh_reason(changed,network_changed,core_alive,check_enabled,probe_ok);
                 if let Some(reason)=reason {if current(g)&&!mode.is_empty(){retry_if_current(g,&mode,reason);}}
             }
             thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_keep_existing_profiles_and_gain_normal2() {
+        let mut config = Config::default();
+        config.modes.remove("normal2");
+        config.modes.get_mut("normal").unwrap().apps.push("example.app".into());
+        config.active = "normal".into();
+        let mut config: Config = serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+        config.add_missing_modes();
+        assert_eq!(config.modes.len(), 4);
+        assert!(config.modes["normal2"].apps.is_empty());
+        assert_eq!(config.modes["normal"].apps, vec![String::from("example.app")]);
+        assert_eq!(config.active, "normal");
+    }
+
+    #[test]
+    fn each_probe_lane_has_its_own_authenticated_route() {
+        let mut config: Value = serde_json::from_str(include_str!("mode_core.json")).unwrap();
+        config["outbounds"] = json!([{"type":"selector","tag":"TEST","outbounds":["server"]}]);
+        config["experimental"]["clash_api"]["secret"] = json!("fixture");
+        add_probe_lanes(&mut config, TEST_PORT);
+        let inbounds = config["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), PROBE_LANES + 1);
+        assert_eq!(config["route"]["final"], "MODE");
+        for lane in 1..PROBE_LANES {
+            let inbound = &inbounds[lane + 1];
+            let rule = &config["route"]["rules"][lane];
+            assert_eq!(rule["inbound"][0], inbound["tag"]);
+            assert_eq!(rule["outbound"].as_str(), Some(probe_selector(lane).as_str()));
+            assert_eq!(inbound["listen_port"].as_u64(), Some(u64::from(probe_port(TEST_PORT, lane))));
+            assert_eq!(inbound["users"][0]["password"], "fixture");
+            assert_ne!(probe_port(TEST_PORT, lane), probe_port(LATENCY_PORT, lane));
+        }
+    }
 }

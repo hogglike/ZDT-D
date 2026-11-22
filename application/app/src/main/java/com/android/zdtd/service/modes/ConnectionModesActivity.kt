@@ -39,17 +39,6 @@ private fun pickedApps(settings: JSONObject?, apps: List<ModeApp>, dns: List<Str
     else -> settings.optJSONArray("apps").strings()
   }
 }
-private fun normalizePolicies(config: JSONObject, apps: List<ModeApp>, dns: List<String>): JSONObject {
-  val copy = JSONObject(config.toString())
-  ModeClient.modes.forEach { mode ->
-    val settings = copy.optJSONObject("modes")?.optJSONObject(mode)
-    if (settings != null && settings.optString("app_policy") in listOf("all", "except_dns")) {
-      settings.put("apps", JSONArray(pickedApps(settings, apps, dns))).put("app_policy", "selected")
-    }
-  }
-  return copy
-}
-
 class ConnectionModesActivity : ComponentActivity() {
   private val refreshTick = mutableIntStateOf(0)
   override fun onResume() { super.onResume(); refreshTick.intValue++ }
@@ -65,10 +54,11 @@ class ConnectionModesActivity : ComponentActivity() {
     var snapshot by remember { mutableStateOf(JSONObject()) }
     var draft by remember { mutableStateOf(JSONObject()) }
     var status by remember { mutableStateOf(ModeClient.cached(this)) }
-    val editMode = "normal"
+    var editMode by remember { mutableStateOf(intent.getStringExtra("mode")?.takeIf { it in ModeClient.modes } ?: "normal") }
     var message by remember { mutableStateOf("Загрузка настроек…") }
     var dirty by remember { mutableStateOf(false) }
     var appDialog by remember { mutableStateOf(false) }
+    var openApps by remember { mutableStateOf(intent.getBooleanExtra("open_apps", false)) }
     var nodeDialog by remember { mutableStateOf(false) }
     var page by remember { mutableIntStateOf(0) }
     var serverSearch by remember { mutableStateOf("") }
@@ -113,10 +103,16 @@ class ConnectionModesActivity : ComponentActivity() {
     val nodes = snapshot.optJSONArray("nodes").objects()
     val selectedApps = pickedApps(settings, apps, snapshot.optJSONArray("dns_apps").strings())
     val multiple = editMode == "white" || settings?.optBoolean("auto_enabled") == true
+    LaunchedEffect(settings, apps) {
+      if (openApps && settings != null && apps.isNotEmpty()) {
+        openApps = false
+        appDialog = settings.optString("app_policy") in listOf("selected", "blacklist")
+      }
+    }
     Scaffold(bottomBar = {
       if (dirty) Surface(tonalElevation = 4.dp) {
         Button(onClick = {
-          val value = normalizePolicies(draft, apps, snapshot.optJSONArray("dns_apps").strings())
+          val value = JSONObject(draft.toString())
           scope.launch {
             try {
               withContext(Dispatchers.IO) { check(ModeClient.api(this@ConnectionModesActivity).putJsonData("/api/connection-modes", value)) }
@@ -128,9 +124,17 @@ class ConnectionModesActivity : ComponentActivity() {
     }) { contentPadding ->
       Column(Modifier.padding(contentPadding).safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("VPN", style = MaterialTheme.typography.headlineSmall)
+        ModeClient.modes.chunked(2).forEach { row ->
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            row.forEach { mode ->
+              FilterChip(selected = editMode == mode, onClick = { editMode = mode },
+                label = { Text(ModeState.title(mode)) })
+            }
+          }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           Button(
-            enabled = settings != null && !dirty && status.optString("state") !in listOf("connecting", "connected"),
+            enabled = settings != null && !dirty && (status.optString("mode") != editMode || status.optString("state") !in listOf("connecting", "connected")),
             onClick = { ModeClient.switch(this@ConnectionModesActivity, editMode) },
           ) { Text("Подключить") }
           OutlinedButton(
@@ -178,7 +182,9 @@ class ConnectionModesActivity : ComponentActivity() {
               if (selectedApps.isEmpty()) Text("Приложения не выбраны", style = MaterialTheme.typography.bodySmall)
               apps.filter { it.packageName in selectedApps }.take(6).forEach { Text(it.label, style = MaterialTheme.typography.bodySmall) }
               if (selectedApps.size > 6) Text("Ещё ${selectedApps.size - 6} · открой список", style = MaterialTheme.typography.bodySmall)
+              if (settings.optString("app_policy") in listOf("selected", "blacklist")) {
               OutlinedButton(onClick = { appDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("Изменить приложения") }
+            }
             }
           }
           if (editMode != "white") {
@@ -195,7 +201,7 @@ class ConnectionModesActivity : ComponentActivity() {
               })
             }
           }
-          Text(if (multiple) "Авто: два круга, последний рабочий сервер — первым. Ручной выбор сохраняет список." else "Один сервер для выбранных приложений.", style = MaterialTheme.typography.bodySmall)
+          Text(if (multiple) "Авто: до шести кандидатов одновременно. Ручной выбор сохраняет список." else "Один сервер для выбранных приложений.", style = MaterialTheme.typography.bodySmall)
           if (multiple) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               FilterChip(selected = !settings.optBoolean("manual_override"), onClick = { change("manual_override", false); change("check_enabled", true) }, label = { Text("Авто") })
@@ -206,14 +212,18 @@ class ConnectionModesActivity : ComponentActivity() {
               if (dirty) message = "Сначала сохрани настройки" else ModeClient.pickServer(this@ConnectionModesActivity, editMode)
             }) { Text("Выбрать ручной сервер") }
           }
-          val policies = listOf("selected" to "Только выбранные приложения", "blacklist" to "Чёрный список: все, кроме выбранных")
+          val policies = listOf(
+            "selected" to "Только выбранные приложения",
+            "blacklist" to "Все, кроме выбранных",
+            "all" to "Все приложения",
+            "except_dns" to "Все, кроме приложений с DNS-профилями",
+          )
           policies.forEach { (policy, label) ->
             Row(Modifier.fillMaxWidth().clickable { change("apps", JSONArray(selectedApps)); change("app_policy", policy) }) {
-              RadioButton((if (settings.optString("app_policy") == "blacklist") "blacklist" else "selected") == policy, onClick = { change("apps", JSONArray(selectedApps)); change("app_policy", policy) })
+              RadioButton(settings.optString("app_policy") == policy, onClick = { change("apps", JSONArray(selectedApps)); change("app_policy", policy) })
               Text(label, Modifier.padding(top = 12.dp))
             }
           }
-          Text(if (settings.optString("app_policy") == "blacklist") "Отмеченные приложения исключены из VPN-режима." else "Через VPN работают только отмеченные приложения.", style = MaterialTheme.typography.bodySmall)
           if (editMode == "browser") OutlinedButton(onClick = {
             @Suppress("DEPRECATION")
             val browsers = packageManager.queryIntentActivities(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).addCategory(Intent.CATEGORY_BROWSABLE), PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }.distinct()

@@ -20,7 +20,7 @@ import kotlinx.coroutines.*
 import org.json.JSONObject
 
 object ModeClient {
-  val modes = listOf("white", "normal", "browser")
+  val modes = listOf("white", "normal", "normal2", "browser")
   fun api(context: Context): ApiClient {
     val root = RootConfigManager(context.applicationContext)
     return ApiClient(rootManager = root, baseUrlProvider = { "http://127.0.0.1:1006" }, tokenProvider = { root.readApiToken() })
@@ -32,9 +32,11 @@ object ModeClient {
     prefs(context).edit().putString("status", status.toString()).apply()
     if (old.optString("mode") != status.optString("mode") ||
       old.optString("state") != status.optString("state") ||
-      old.optBoolean("verified") != status.optBoolean("verified")
+      old.optBoolean("verified") != status.optBoolean("verified") ||
+      old.optString("server") != status.optString("server")
     ) {
       ConnectionWidgetProvider.render(context)
+      ModeWidgetProvider.render(context)
     }
   }
   fun refresh(context: Context): JSONObject {
@@ -171,86 +173,40 @@ class ModeWidgetProvider : android.appwidget.AppWidgetProvider() {
         bind(context, views)
         manager.updateAppWidget(id, views)
       }
-      renderCombined(context)
     }
-    fun bind(context: Context, views: RemoteViews) {
+    private fun bind(context: Context, views: RemoteViews) {
       val status = ModeClient.cached(context)
       val active = status.optString("mode")
       val state = status.optString("state")
-      val connected = state == "connected"
-      val summary = status.optJSONObject("mode_summary") ?: JSONObject()
-      views.setTextViewText(R.id.mode_title, if (active in ModeClient.modes) "VPN · ${ModeState.title(active)}" else "ZDT-D · VPN выключен")
+      val isActive = active in ModeClient.modes && state in listOf("connecting", "connected")
+      val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      val buttons = listOf(R.id.mode_white, R.id.mode_normal, R.id.mode_normal2, R.id.mode_browser)
+      ModeClient.modes.forEachIndexed { index, mode ->
+        val intent = Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode)
+        views.setOnClickPendingIntent(buttons[index], PendingIntent.getActivity(context, 20200 + index, intent, flags))
+        views.setInt(buttons[index], "setBackgroundColor", when {
+          active != mode -> 0xFF22413A.toInt()
+          state == "connecting" -> 0xFF6A5D27.toInt()
+          state == "connected" && status.optBoolean("verified") -> 0xFF25684F.toInt()
+          state == "connected" -> 0xFF426055.toInt()
+          state == "error" -> 0xFF703940.toInt()
+          else -> 0xFF22413A.toInt()
+        })
+      }
       views.setTextViewText(R.id.mode_status, when {
-        state == "connecting" -> "Подключение…"
-        connected && status.optBoolean("verified") -> "✓ Проверен · ${status.optString("server")}"
-        connected -> "Без проверки · ${status.optString("server")}"
-        state == "error" -> "Ошибка · нажми «Повторить»"
-        else -> "Выбери режим ниже"
+        state == "connecting" -> "${ModeState.title(active)} · подключается"
+        state == "connected" -> "${ModeState.title(active)} · ${status.optString("server")}"
+        state == "error" -> "Ошибка VPN · открой настройки"
+        else -> "VPN выключен"
       })
-      val editMode = active.takeIf { it in ModeClient.modes } ?: "normal"
-      val details = summary.optJSONObject(editMode) ?: JSONObject()
-      val packages = details.optJSONArray("apps")
-      val labels = (0 until (packages?.length() ?: 0)).take(3).map { index ->
-        val pkg = packages!!.optString(index)
-        runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
-      }
-      val policy = details.optString("app_policy")
-      val appTitle = when (policy) { "blacklist" -> "Исключены"; "all" -> "Все приложения"; "except_dns" -> "Все кроме DNS"; else -> "Приложения" }
-      views.setTextViewText(R.id.mode_apps, "$appTitle${if (labels.isNotEmpty()) ": " + labels.joinToString(", ") else ""}${if ((packages?.length() ?: 0) > 3) " +${packages!!.length() - 3}" else ""} ▸")
-      views.setOnClickPendingIntent(R.id.mode_apps, PendingIntent.getActivity(context, 19983,
-        Intent(context, ConnectionModesActivity::class.java).putExtra("mode", editMode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-      views.setTextViewText(R.id.mode_retry, "Повторить")
-      views.setBoolean(R.id.mode_retry, "setEnabled", active in ModeClient.modes && state != "connecting")
-      views.setOnClickPendingIntent(R.id.mode_retry, PendingIntent.getForegroundService(context, 19984,
-        Intent(context, ModeActionService::class.java).putExtra("mode", active), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-      views.setTextViewText(R.id.mode_stop, if (state == "connecting") "Отменить" else "Отключить")
-      views.setBoolean(R.id.mode_stop, "setEnabled", active in ModeClient.modes)
-        views.setTextViewText(R.id.mode_message, status.optString("message", "Открой настройки режимов"))
-        val buttons = listOf(R.id.mode_white, R.id.mode_normal, R.id.mode_browser)
-        val pickers = listOf(R.id.pick_white, R.id.pick_normal, R.id.pick_browser)
-        ModeClient.modes.forEachIndexed { index, mode ->
-          val m = summary.optJSONObject(mode)
-          views.setTextViewText(pickers[index], when { m == null -> "Сервер ▾"; m.optBoolean("auto") -> "Авто ▾"; else -> m.optString("server", "Сервер") + " ▾" })
-          views.setBoolean(buttons[index], "setEnabled", !(mode == active && state in listOf("connected", "connecting")))
-          views.setOnClickPendingIntent(pickers[index], PendingIntent.getActivity(context, 20100 + index,
-            Intent(context, ModeServerPickerActivity::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-          views.setInt(buttons[index], "setBackgroundColor", ModeState.color(mode, status.optString("mode"), status.optString("state"), status.optBoolean("verified")))
-          val launch = if (mode == "white") PendingIntent.getActivity(context, 19972 + index,
-            ModeClient.confirmation(context, mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-          else PendingIntent.getForegroundService(context, 19972 + index,
-            Intent(context, ModeActionService::class.java).putExtra("mode", mode), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-          views.setOnClickPendingIntent(buttons[index], launch)
-        }
-        views.setOnClickPendingIntent(R.id.mode_settings, PendingIntent.getActivity(context, 19980,
-          Intent(context, ConnectionModesActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-        val working = status.optString("maintenance_state") in listOf("pending", "refreshing", "checking")
-        views.setTextViewText(R.id.mode_refresh, if (working) "Обновляется…" else "Обновить серверы")
-        views.setBoolean(R.id.mode_refresh, "setEnabled", !working)
-        views.setInt(R.id.mode_refresh, "setBackgroundColor", if (working) 0xFFFFE082.toInt() else 0xFFFFFFFF.toInt())
-        views.setOnClickPendingIntent(R.id.mode_refresh, PendingIntent.getForegroundService(context, 19981,
-          Intent(context, ModeActionService::class.java).putExtra("refresh_servers", true), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-        views.setOnClickPendingIntent(R.id.mode_stop, PendingIntent.getForegroundService(context, 19982,
-          Intent(context, ModeActionService::class.java).putExtra("mode", ""), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-        views.setTextViewText(R.id.mode_maintenance, status.optString("maintenance_message"))
+      val settings = Intent(context, ConnectionModesActivity::class.java)
+        .putExtra("mode", active.takeIf { it in ModeClient.modes } ?: "normal")
+      views.setOnClickPendingIntent(R.id.mode_settings, PendingIntent.getActivity(context, 20204, settings, flags))
+      views.setBoolean(R.id.mode_stop, "setEnabled", isActive)
+      views.setTextColor(R.id.mode_stop, if (isActive) 0xFFA9F2D7.toInt() else 0xFF9DACAA.toInt())
+      val stop = Intent(context, ModeActionService::class.java).putExtra("mode", "")
+      views.setOnClickPendingIntent(R.id.mode_stop, PendingIntent.getForegroundService(context, 20205, stop, flags))
     }
-    fun renderCombined(context: Context) {
-      val manager = AppWidgetManager.getInstance(context)
-      manager.getAppWidgetIds(ComponentName(context, CombinedModeWidgetProvider::class.java)).forEach { id ->
-        val views = RemoteViews(context.packageName, R.layout.widget_connection_combined)
-        bind(context, views)
-        ConnectionWidgetProvider.bind(context, views)
-        manager.updateAppWidget(id, views)
-      }
-    }
-  }
-}
-
-class CombinedModeWidgetProvider : android.appwidget.AppWidgetProvider() {
-  override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-    ModeWidgetProvider.renderCombined(context)
-    context.sendBroadcast(Intent(context, ModeStatusReceiver::class.java))
-    com.android.zdtd.service.diagnostics.connection.ConnectionHealthJobService.schedule(context,
-      com.android.zdtd.service.diagnostics.connection.ConnectionHealth.preferences(context).getBoolean("automatic", false))
   }
 }
 
