@@ -112,7 +112,7 @@ fun ZapretAutoCard(
       }
       if (!prefs.getString("backup", "").isNullOrBlank()) TextButton(onClick = {
         backup = prefs.getString("backup", "")
-        if (backup.isNullOrBlank()) { message = "Резервной копии пока нет: она появится после применения стратегии"; return@OutlinedButton }
+        if (backup.isNullOrBlank()) { message = "Резервной копии пока нет: она появится после применения стратегии"; return@TextButton }
         scope.launch {
           restoring = true
           try {
