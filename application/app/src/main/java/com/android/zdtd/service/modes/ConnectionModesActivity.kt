@@ -2,6 +2,8 @@ package com.android.zdtd.service.modes
 
 import com.android.zdtd.service.RootConfigManager
 import com.android.zdtd.service.ui.theme.ZdtdTheme
+import com.android.zdtd.service.ui.theme.NetworkBackdrop
+import com.android.zdtd.service.ui.theme.NetworkPanel
 import com.android.zdtd.service.ui.theme.ZdtdThemeMode
 import com.android.zdtd.service.BuildConfig
 import android.content.Intent
@@ -68,6 +70,9 @@ class ConnectionModesActivity : ComponentActivity() {
     var appDialog by remember { mutableStateOf(false) }
     var openApps by remember { mutableStateOf(intent.getBooleanExtra("open_apps", false)) }
     var nodeDialog by remember { mutableStateOf(false) }
+    var editNodeOrder by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var advanced by remember(editMode) { mutableStateOf(false) }
     var page by remember { mutableIntStateOf(0) }
     var serverSearch by remember { mutableStateOf("") }
     var diagnosticsExpanded by remember { mutableStateOf(false) }
@@ -117,20 +122,54 @@ class ConnectionModesActivity : ComponentActivity() {
         appDialog = true
       }
     }
+    fun saveDraft(connect: Boolean) {
+      if (saving) return
+      val value = JSONObject(draft.toString())
+      val mode = editMode
+      saving = true
+      scope.launch {
+        try {
+          withContext(Dispatchers.IO) {
+            check(ModeClient.api(this@ConnectionModesActivity).putJsonData("/api/connection-modes", value))
+          }
+          if (draft.toString() == value.toString()) {
+            dirty = false
+            load(true)
+            message = "Сохранено"
+            if (connect) ModeClient.switch(this@ConnectionModesActivity, mode)
+          } else {
+            message = "Есть новые изменения. Сохрани их перед подключением."
+          }
+        } catch (e: Exception) {
+          message = "Не удалось сохранить настройки. ${e.message.orEmpty()}"
+        } finally {
+          saving = false
+        }
+      }
+    }
     Scaffold(bottomBar = {
       if (dirty) Surface(tonalElevation = 4.dp) {
-        Button(onClick = {
-          val value = JSONObject(draft.toString())
-          scope.launch {
-            try {
-              withContext(Dispatchers.IO) { check(ModeClient.api(this@ConnectionModesActivity).putJsonData("/api/connection-modes", value)) }
-              dirty = false; load(true); message = "Сохранено"
-            } catch (e: Exception) { message = "Не сохранено: ${e.message}" }
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
+          if (saving) LinearProgressIndicator(Modifier.fillMaxWidth())
+          if (page != 0) {
+            Button(onClick = { saveDraft(false) }, enabled = !saving, modifier = Modifier.fillMaxWidth()) {
+              Text("Сохранить изменения")
+            }
+          } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(onClick = { saveDraft(false) }, enabled = !saving, modifier = Modifier.weight(1f)) {
+                Text("Сохранить")
+              }
+              Button(onClick = { saveDraft(true) }, enabled = !saving && settings != null, modifier = Modifier.weight(1.4f)) {
+                Text("Сохранить и подключить")
+              }
+            }
           }
-        }, enabled = apps.isNotEmpty(), modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp)) { Text("Сохранить изменения") }
+        }
       }
     }) { contentPadding ->
-      Column(Modifier.padding(contentPadding).safeDrawingPadding().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Column(NetworkBackdrop(Modifier.fillMaxSize()).padding(contentPadding).safeDrawingPadding()
+        .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("VPN", style = MaterialTheme.typography.headlineSmall)
         ModeClient.modes.chunked(2).forEach { row ->
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -139,16 +178,6 @@ class ConnectionModesActivity : ComponentActivity() {
                 label = { Text(ModeState.title(mode)) })
             }
           }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          Button(
-            enabled = settings != null && !dirty && (status.optString("mode") != editMode || status.optString("state") !in listOf("connecting", "connected")),
-            onClick = { ModeClient.switch(this@ConnectionModesActivity, editMode) },
-          ) { Text("Подключить") }
-          OutlinedButton(
-            enabled = settings != null && !dirty,
-            onClick = { ModeClient.pickServer(this@ConnectionModesActivity, editMode) },
-          ) { Text("Сервер") }
         }
         val vpnHealth = when (status.optString("vpn_health")) {
           "fail" -> "VPN включён, проверка не прошла"
@@ -180,7 +209,9 @@ class ConnectionModesActivity : ComponentActivity() {
         }) { Text("Скопировать диагностику подключения") }
         }
         if (status.optInt("total") > 0 && status.optString("state") == "connecting") Text("Попытка ${status.optInt("attempt")} из ${status.optInt("total")} · круг ${status.optInt("round")}")
-        OutlinedButton(onClick = { ModeClient.switch(this@ConnectionModesActivity, "") }, modifier = Modifier.fillMaxWidth()) { Text("Отключить VPN") }
+        if (status.optString("state") in listOf("connecting", "connected")) {
+          TextButton(onClick = { ModeClient.switch(this@ConnectionModesActivity, "") }) { Text("Отключить VPN") }
+        }
         HorizontalDivider()
         if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
         TabRow(selectedTabIndex = page) {
@@ -190,111 +221,137 @@ class ConnectionModesActivity : ComponentActivity() {
         }
         if (page == 0) {
         if (settings != null) {
-          val blacklist = settings.optString("app_policy") == "blacklist"
-          Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), shape = MaterialTheme.shapes.medium) {
-            Column(Modifier.fillMaxWidth().padding(12.dp)) {
-              Text(if (blacklist) "Исключены из VPN · ${selectedApps.size}" else "Приложения VPN · ${selectedApps.size}", style = MaterialTheme.typography.titleSmall)
-              if (selectedApps.isEmpty()) Text("Приложения не выбраны", style = MaterialTheme.typography.bodySmall)
-              apps.filter { it.packageName in selectedApps }.take(6).forEach { Text(it.label, style = MaterialTheme.typography.bodySmall) }
-              if (selectedApps.size > 6) Text("Ещё ${selectedApps.size - 6} · открой список", style = MaterialTheme.typography.bodySmall)
-              OutlinedButton(onClick = { appDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("Изменить приложения") }
+          val appSummary = when (settings.optString("app_policy")) {
+            "all" -> "Все приложения"
+            "except_dns" -> "Все, кроме DNS-профилей"
+            "blacklist" -> "Все, кроме выбранных · ${selectedApps.size}"
+            else -> if (selectedApps.isEmpty()) "Выбери приложения" else "Выбрано · ${selectedApps.size}"
+          }
+          val key = settings.optString("selected_key").ifBlank { settings.optString("last_key") }
+          val selectedNode = nodes.firstOrNull { it.optString("key") == key }
+          val serverName = selectedNode?.optString("name") ?: "Выбери сервер"
+          val serverSummary = if (multiple && !settings.optBoolean("manual_override")) {
+            "Авто · ${settings.optJSONArray("node_keys").strings().size} в списке"
+          } else {
+            val ping = selectedNode?.let { modePing(it, status) }
+            if (ping != null && !ping.isNull("ms")) "$serverName · ${ping.optInt("ms")} мс" else serverName
+          }
+          NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              ListItem(
+                modifier = Modifier.clickable(enabled = !saving) { appDialog = true },
+                headlineContent = { Text("Приложения") },
+                supportingContent = { Text(appSummary) },
+                trailingContent = { Text("›") },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+              )
+              HorizontalDivider()
+              ListItem(
+                modifier = Modifier.clickable(enabled = !saving) {
+                  if (dirty) { editNodeOrder = false; nodeDialog = true }
+                  else ModeClient.pickServer(this@ConnectionModesActivity, editMode)
+                },
+                headlineContent = { Text("Сервер") },
+                supportingContent = { Text(serverSummary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                trailingContent = { Text("›") },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+              )
+              val active = status.optString("mode") == editMode &&
+                status.optString("state") in listOf("connecting", "connected")
+              if (!dirty) Button(
+                onClick = { ModeClient.switch(this@ConnectionModesActivity, editMode) },
+                enabled = !active,
+                modifier = Modifier.fillMaxWidth(),
+              ) { Text(if (active) "Режим активен" else "Подключить") }
             }
           }
-          if (editMode != "white") {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-              Text("Несколько серверов · автоперебор", Modifier.weight(1f).padding(top = 10.dp))
-              Checkbox(settings.optBoolean("auto_enabled"), onCheckedChange = {
-                change("auto_enabled", it); change("manual_override", !it)
-                if (it) {
-                  val keys = settings.optJSONArray("node_keys").strings()
-                  val selected = settings.optString("selected_key")
-                  if (keys.isEmpty() && selected.isNotBlank()) change("node_keys", JSONArray(listOf(selected)))
-                  change("check_enabled", true)
-                }
-              })
-            }
+          TextButton(onClick = { advanced = !advanced }) {
+            Text(if (advanced) "Скрыть дополнительные настройки" else "Дополнительно")
           }
-          Text(if (multiple) "Авто использует сохранённый сервер и замеры." else "Один сервер для выбранных приложений.", style = MaterialTheme.typography.bodySmall)
-          if (multiple) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              FilterChip(selected = !settings.optBoolean("manual_override"), onClick = { change("manual_override", false); change("check_enabled", true) }, label = { Text("Авто") })
-              FilterChip(selected = settings.optBoolean("manual_override"), onClick = { change("manual_override", true) }, label = { Text("Вручную") })
+          if (advanced) {
+            if (editMode != "white") {
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Несколько серверов · автоперебор", Modifier.weight(1f).padding(top = 10.dp))
+                Checkbox(settings.optBoolean("auto_enabled"), onCheckedChange = {
+                  change("auto_enabled", it); change("manual_override", !it)
+                  if (it) {
+                    val keys = settings.optJSONArray("node_keys").strings()
+                    val selected = settings.optString("selected_key")
+                    if (keys.isEmpty() && selected.isNotBlank()) change("node_keys", JSONArray(listOf(selected)))
+                    change("check_enabled", true)
+                  }
+                })
+              }
             }
-            if (settings.optBoolean("manual_override")) Text("Ручной сервер: ${nodes.find { it.optString("key") == settings.optString("selected_key").ifBlank { settings.optString("last_key") } }?.optString("name") ?: "не выбран"}")
-            if (settings.optBoolean("manual_override")) OutlinedButton(onClick = {
-              if (dirty) message = "Сначала сохрани настройки" else ModeClient.pickServer(this@ConnectionModesActivity, editMode)
-            }) { Text("Выбрать ручной сервер") }
-          }
-          if (editMode == "browser") OutlinedButton(onClick = {
-            @Suppress("DEPRECATION")
-            val browsers = packageManager.queryIntentActivities(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).addCategory(Intent.CATEGORY_BROWSABLE), PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }.distinct()
-            change("apps", JSONArray(browsers)); change("app_policy", "selected")
-            message = "Найдено браузеров: ${browsers.size}. Проверь список перед сохранением."
-          }) { Text("Выбрать установленные браузеры") }
-          OutlinedButton(onClick = { nodeDialog = true }, modifier = Modifier.fillMaxWidth()) { Text(if (multiple) "Выбрать серверы и порядок" else "Выбрать сервер") }
-          if (multiple) {
-            val keys = settings.optJSONArray("node_keys").strings()
-            Text("Выбрано: ${keys.size}", style = MaterialTheme.typography.titleSmall)
-            keys.take(3).forEachIndexed { index, key ->
-              val node = nodes.find { it.optString("key") == key }
-              Text("${index + 1}. ${node?.optString("name") ?: "Временно недоступен"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (multiple) "Авто использует сохранённый сервер и замеры." else "Один сервер для выбранных приложений.", style = MaterialTheme.typography.bodySmall)
+            if (multiple) {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !settings.optBoolean("manual_override"), onClick = { change("manual_override", false); change("check_enabled", true) }, label = { Text("Авто") })
+                FilterChip(selected = settings.optBoolean("manual_override"), onClick = { change("manual_override", true) }, label = { Text("Вручную") })
+              }
             }
-            if (keys.size > 3) Text("Ещё ${keys.size - 3} · полный порядок в выборе серверов", style = MaterialTheme.typography.bodySmall)
-            val filters = settings.optJSONArray("name_filters").strings().filter { it.isNotBlank() }
-            TextButton(onClick = { rulesExpanded = !rulesExpanded }) {
-              Text("Добавлять новые серверы по имени${if (filters.isEmpty()) "" else " · ${filters.joinToString()}"} ${if (rulesExpanded) "▴" else "▾"}")
-            }
-            if (rulesExpanded) {
-              Text("Необязательно. Например, LTE добавит LTE 1, LTE 2 и LTE AUTO после выбранных серверов.", style = MaterialTheme.typography.bodySmall)
-              OutlinedTextField(value = settings.optJSONArray("name_filters").strings().joinToString("\n"), onValueChange = { change("name_filters", JSONArray(it.lines())) }, label = { Text("Часть имени · одна на строку") }, modifier = Modifier.fillMaxWidth())
-              Text("Где искать совпадения по имени:", style = MaterialTheme.typography.titleSmall)
-              Text("Пустой выбор — во всех включённых подписках. Галочки ниже ограничивают только поиск по имени.", style = MaterialTheme.typography.bodySmall)
-              val subscriptions = snapshot.optJSONArray("subscriptions").objects().ifEmpty { nodes.distinctBy { it.optString("subscription_id") }.map { JSONObject().put("id", it.optString("subscription_id")).put("name", it.optString("subscription")) } }
-              val ids = settings.optJSONArray("subscription_ids").strings()
-              TextButton(onClick = { change("subscription_ids", JSONArray()) }) { Text(if (ids.isEmpty()) "✓ Все включённые подписки" else "Искать во всех подписках") }
-              subscriptions.forEach { subscription ->
-                val id = subscription.optString("id")
-                Row(Modifier.fillMaxWidth().clickable { change("subscription_ids", JSONArray(if (id in ids) ids - id else ids + id)) }) {
-                  Checkbox(id in ids, onCheckedChange = { checked -> change("subscription_ids", JSONArray(if (checked) ids + id else ids - id)) })
-                  Text("Искать в ${subscription.optString("name")}", Modifier.padding(top = 12.dp))
+            if (multiple) OutlinedButton(onClick = { editNodeOrder = true; nodeDialog = true },
+              modifier = Modifier.fillMaxWidth()) { Text("Серверы и порядок для Авто") }
+            if (multiple) {
+              val keys = settings.optJSONArray("node_keys").strings()
+              Text("Выбрано: ${keys.size}", style = MaterialTheme.typography.titleSmall)
+              keys.take(3).forEachIndexed { index, key ->
+                val node = nodes.find { it.optString("key") == key }
+                Text("${index + 1}. ${node?.optString("name") ?: "Временно недоступен"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+              }
+              if (keys.size > 3) Text("Ещё ${keys.size - 3} · полный порядок в выборе серверов", style = MaterialTheme.typography.bodySmall)
+              val filters = settings.optJSONArray("name_filters").strings().filter { it.isNotBlank() }
+              TextButton(onClick = { rulesExpanded = !rulesExpanded }) {
+                Text("Добавлять новые серверы по имени${if (filters.isEmpty()) "" else " · ${filters.joinToString()}"} ${if (rulesExpanded) "▴" else "▾"}")
+              }
+              if (rulesExpanded) {
+                Text("Необязательно. Например, LTE добавит LTE 1, LTE 2 и LTE AUTO после выбранных серверов.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = settings.optJSONArray("name_filters").strings().joinToString("\n"), onValueChange = { change("name_filters", JSONArray(it.lines())) }, label = { Text("Часть имени · одна на строку") }, modifier = Modifier.fillMaxWidth())
+                Text("Где искать совпадения по имени:", style = MaterialTheme.typography.titleSmall)
+                Text("Пустой выбор — во всех включённых подписках. Галочки ниже ограничивают только поиск по имени.", style = MaterialTheme.typography.bodySmall)
+                val subscriptions = snapshot.optJSONArray("subscriptions").objects().ifEmpty { nodes.distinctBy { it.optString("subscription_id") }.map { JSONObject().put("id", it.optString("subscription_id")).put("name", it.optString("subscription")) } }
+                val ids = settings.optJSONArray("subscription_ids").strings()
+                TextButton(onClick = { change("subscription_ids", JSONArray()) }) { Text(if (ids.isEmpty()) "✓ Все включённые подписки" else "Искать во всех подписках") }
+                subscriptions.forEach { subscription ->
+                  val id = subscription.optString("id")
+                  Row(Modifier.fillMaxWidth().clickable { change("subscription_ids", JSONArray(if (id in ids) ids - id else ids + id)) }) {
+                    Checkbox(id in ids, onCheckedChange = { checked -> change("subscription_ids", JSONArray(if (checked) ids + id else ids - id)) })
+                    Text("Искать в ${subscription.optString("name")}", Modifier.padding(top = 12.dp))
+                  }
                 }
               }
             }
-          } else {
-            val key = settings.optString("selected_key").ifBlank { settings.optString("last_key") }
-            Text("Сервер: ${nodes.find { it.optString("key") == key }?.optString("name") ?: "не выбран"}")
-          }
-          TextButton(onClick = { checksExpanded = !checksExpanded }) { Text("Проверка соединения · ${if (settings.optBoolean("check_enabled", true)) "включена" else "выключена"} ${if (checksExpanded) "▴" else "▾"}") }
-          if (checksExpanded) {
-          HorizontalDivider()
-          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Проверять выбранный VPN после подключения", Modifier.weight(1f).padding(top = 10.dp))
-            Switch(settings.optBoolean("check_enabled", true), onCheckedChange = { change("check_enabled", it) })
-          }
-          Text("До двух включённых HTTPS-целей проверяются параллельно. При ошибке VPN остаётся включён.", style = MaterialTheme.typography.bodySmall)
-          TextButton(enabled = status.optString("state") == "connected" && status.optString("mode") == editMode, onClick = {
-            scope.launch {
-              val result = withContext(Dispatchers.IO) { runCatching { ModeClient.api(this@ConnectionModesActivity).postJsonResult("/api/connection-modes/check-active", JSONObject()) } }
-              message = if (result.getOrNull()?.optBoolean("ok") == true) "Проверка запущена" else "Не удалось запустить проверку"
+            TextButton(onClick = { checksExpanded = !checksExpanded }) { Text("Проверка соединения · ${if (settings.optBoolean("check_enabled", true)) "включена" else "выключена"} ${if (checksExpanded) "▴" else "▾"}") }
+            if (checksExpanded) {
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+              Text("Проверять выбранный VPN после подключения", Modifier.weight(1f).padding(top = 10.dp))
+              Switch(settings.optBoolean("check_enabled", true), onCheckedChange = { change("check_enabled", it) })
             }
-          }) { Text("Повторить проверку VPN") }
-          val sites = settings.optJSONArray("check_sites").objects()
-          sites.forEachIndexed { index, site ->
-            fun editSite(field: String, value: Any) {
-              val copy = JSONArray(settings.optJSONArray("check_sites").toString())
-              copy.getJSONObject(index).put(field, value); change("check_sites", copy)
+            Text("До двух включённых HTTPS-целей проверяются параллельно. При ошибке VPN остаётся включён.", style = MaterialTheme.typography.bodySmall)
+            TextButton(enabled = status.optString("state") == "connected" && status.optString("mode") == editMode, onClick = {
+              scope.launch {
+                val result = withContext(Dispatchers.IO) { runCatching { ModeClient.api(this@ConnectionModesActivity).postJsonResult("/api/connection-modes/check-active", JSONObject()) } }
+                message = if (result.getOrNull()?.optBoolean("ok") == true) "Проверка запущена" else "Не удалось запустить проверку"
+              }
+            }) { Text("Повторить проверку VPN") }
+            val sites = settings.optJSONArray("check_sites").objects()
+            sites.forEachIndexed { index, site ->
+              fun editSite(field: String, value: Any) {
+                val copy = JSONArray(settings.optJSONArray("check_sites").toString())
+                copy.getJSONObject(index).put(field, value); change("check_sites", copy)
+              }
+              Row(Modifier.fillMaxWidth()) {
+                Checkbox(site.optBoolean("enabled", true), onCheckedChange = { editSite("enabled", it) })
+                OutlinedTextField(site.optString("url"), onValueChange = { editSite("url", it) }, label = { Text("HTTPS-адрес ${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
+                TextButton(onClick = { change("check_sites", JSONArray(sites.filterIndexed { i, _ -> i != index })) }) { Text("×") }
+              }
+              OutlinedTextField(site.optInt("expected_status").toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) editSite("expected_status", it.toIntOrNull() ?: 0) }, label = { Text("HTTP-код · 0 = автоматически") }, singleLine = true)
             }
-            Row(Modifier.fillMaxWidth()) {
-              Checkbox(site.optBoolean("enabled", true), onCheckedChange = { editSite("enabled", it) })
-              OutlinedTextField(site.optString("url"), onValueChange = { editSite("url", it) }, label = { Text("HTTPS-адрес ${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
-              TextButton(onClick = { change("check_sites", JSONArray(sites.filterIndexed { i, _ -> i != index })) }) { Text("×") }
+            TextButton(enabled = sites.size < 12, onClick = { change("check_sites", JSONArray(sites + JSONObject().put("url", "https://example.com/").put("enabled", true).put("expected_status", 0))) }) { Text("Добавить сайт") }
+            HorizontalDivider()
             }
-            OutlinedTextField(site.optInt("expected_status").toString(), onValueChange = { if (it.isEmpty() || it.all(Char::isDigit)) editSite("expected_status", it.toIntOrNull() ?: 0) }, label = { Text("HTTP-код · 0 = автоматически") }, singleLine = true)
           }
-          TextButton(enabled = sites.size < 12, onClick = { change("check_sites", JSONArray(sites + JSONObject().put("url", "https://example.com/").put("enabled", true).put("expected_status", 0))) }) { Text("Добавить сайт") }
-          HorizontalDivider()
-          }
-
         }
         } else {
         Text("Серверы и задержка", style = MaterialTheme.typography.titleMedium)
@@ -348,6 +405,7 @@ class ConnectionModesActivity : ComponentActivity() {
     if (appDialog && settings != null) {
       var search by remember { mutableStateOf("") }
       var showSystem by remember { mutableStateOf(false) }
+      var onlySelected by remember { mutableStateOf(false) }
       var copyMenu by remember { mutableStateOf(false) }
       var policy by remember { mutableStateOf(settings.optString("app_policy", "selected")) }
       var picked by remember { mutableStateOf(settings.optJSONArray("apps").strings().toSet()) }
@@ -357,19 +415,26 @@ class ConnectionModesActivity : ComponentActivity() {
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("${ModeState.title(editMode)} · приложения", style = MaterialTheme.typography.headlineSmall)
-            listOf("selected" to "Только выбранные", "all" to "Все приложения",
-              "blacklist" to "Все, кроме выбранных", "except_dns" to "Все, кроме DNS-профилей").forEach { (key, label) ->
-              Row(Modifier.fillMaxWidth().clickable { policy = key }) {
-                RadioButton(policy == key, onClick = { policy = key })
-                Text(label, Modifier.padding(top = 12.dp))
+            var policiesExpanded by remember { mutableStateOf(false) }
+            val policies = listOf("selected" to "Только выбранные", "all" to "Все приложения",
+              "blacklist" to "Все, кроме выбранных", "except_dns" to "Все, кроме DNS-профилей")
+            Box {
+              OutlinedButton(onClick = { policiesExpanded = true }) {
+                Text(policies.firstOrNull { it.first == policy }?.second ?: policies.first().second)
+              }
+              DropdownMenu(policiesExpanded, onDismissRequest = { policiesExpanded = false }) {
+                policies.forEach { (key, label) ->
+                  DropdownMenuItem(text = { Text(label) }, onClick = { policy = key; policiesExpanded = false })
+                }
               }
             }
             if (selectable) {
               OutlinedTextField(search, { search = it }, label = { Text("Поиск приложений") }, singleLine = true, modifier = Modifier.fillMaxWidth())
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = onlySelected, onClick = { onlySelected = !onlySelected }, label = { Text("Выбрано · ${picked.size}") })
                 FilterChip(selected = showSystem, onClick = { showSystem = !showSystem }, label = { Text("Системные") })
                 Box {
-                  TextButton(onClick = { copyMenu = true }) { Text("Скопировать из режима") }
+                  TextButton(onClick = { copyMenu = true }) { Text("Из режима") }
                   DropdownMenu(expanded = copyMenu, onDismissRequest = { copyMenu = false }) {
                     ModeClient.modes.filter { it != editMode }.forEach { source ->
                       DropdownMenuItem(text = { Text(ModeState.title(source)) }, onClick = {
@@ -390,7 +455,8 @@ class ConnectionModesActivity : ComponentActivity() {
                 }) { Text("Добавить все браузеры") }
               }
               LazyColumn(Modifier.weight(1f)) {
-                val filtered = apps.filter { (showSystem || !it.system || it.packageName in picked) &&
+                val filtered = apps.filter { (!onlySelected || it.packageName in picked) &&
+                  (showSystem || !it.system || it.packageName in picked) &&
                   (it.label.contains(search, true) || it.packageName.contains(search, true)) }
                 items(filtered.sortedBy { it.packageName !in picked }, key = { it.packageName }) { app ->
                   fun toggle() { picked = if (app.packageName in picked) picked - app.packageName else picked + app.packageName }
@@ -425,19 +491,23 @@ class ConnectionModesActivity : ComponentActivity() {
     if (nodeDialog && settings != null) {
       var search by remember { mutableStateOf("") }
       var onlyPicked by remember { mutableStateOf(false) }
-      var picked by remember { mutableStateOf((if (multiple) settings.optJSONArray("node_keys").strings() else listOf(settings.optString("selected_key"))).filter { key -> nodes.any { it.optString("key") == key } }.distinct()) }
+      var picked by remember { mutableStateOf((if (editNodeOrder) settings.optJSONArray("node_keys").strings() else listOf(settings.optString("selected_key"))).filter { key -> nodes.any { it.optString("key") == key } }.distinct()) }
       fun toggle(node: JSONObject) {
         val key = node.optString("key")
-        if (key in picked && multiple) picked = picked - key
-        else if (node.optBoolean("supported")) picked = if (multiple) picked + key else listOf(key)
+        if (key in picked && editNodeOrder) picked = picked - key
+        else if (node.optBoolean("supported")) picked = if (editNodeOrder) picked + key else listOf(key)
       }
       Dialog(onDismissRequest = { nodeDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
           Column(Modifier.safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("${ModeState.title(editMode)} · ${if (multiple) "серверы для Авто" else "сервер"}", style = MaterialTheme.typography.headlineSmall)
-            Text(if (multiple) "Отметь серверы. В «Выбранных» стрелки меняют порядок перебора." else "Выбери один сервер.", style = MaterialTheme.typography.bodySmall)
+            Text("${ModeState.title(editMode)} · ${if (editNodeOrder) "серверы для Авто" else "сервер"}", style = MaterialTheme.typography.headlineSmall)
+            Text(if (editNodeOrder) "Отметь серверы. В «Выбранных» стрелки меняют порядок перебора." else "Выбери один сервер.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(search, { search = it }, label = { Text("Поиск сервера или подписки") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            if (multiple) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!editNodeOrder && multiple) TextButton(onClick = {
+              change("manual_override", false)
+              nodeDialog = false
+            }) { Text("Использовать Авто") }
+            if (editNodeOrder) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               FilterChip(!onlyPicked, onClick = { onlyPicked = false }, label = { Text("Все") })
               FilterChip(onlyPicked, onClick = { onlyPicked = true }, label = { Text("Выбранные · ${picked.size}") })
               TextButton(onClick = { picked = emptyList() }) { Text("Снять") }
@@ -447,14 +517,14 @@ class ConnectionModesActivity : ComponentActivity() {
               items(ordered.filter { it.optString("name").contains(search, true) || it.optString("subscription").contains(search, true) }, key = { it.optString("key") }) { node ->
                 val key = node.optString("key"); val selected = key in picked
                 val index = picked.indexOf(key)
-                Row(Modifier.fillMaxWidth().clickable(enabled = node.optBoolean("supported") || (multiple && selected)) { toggle(node) }.padding(vertical = 8.dp)) {
-                  if (multiple) Checkbox(selected, enabled = node.optBoolean("supported") || selected, onCheckedChange = { toggle(node) })
+                Row(Modifier.fillMaxWidth().clickable(enabled = node.optBoolean("supported") || (editNodeOrder && selected)) { toggle(node) }.padding(vertical = 8.dp)) {
+                  if (editNodeOrder) Checkbox(selected, enabled = node.optBoolean("supported") || selected, onCheckedChange = { toggle(node) })
                   else RadioButton(selected, enabled = node.optBoolean("supported"), onClick = { toggle(node) })
                   Column(Modifier.weight(1f).padding(top = 8.dp)) {
-                    if (multiple && selected) Text("${index + 1} в списке", style = MaterialTheme.typography.labelSmall)
+                    if (editNodeOrder && selected) Text("${index + 1} в списке", style = MaterialTheme.typography.labelSmall)
                     ModeNodeLabel(node, status)
                   }
-                  if (multiple && onlyPicked) Column {
+                  if (editNodeOrder && onlyPicked) Column {
                     TextButton(enabled = index > 0, onClick = { val list = picked.toMutableList(); java.util.Collections.swap(list, index, index - 1); picked = list }) { Text("↑") }
                     TextButton(enabled = index < picked.lastIndex, onClick = { val list = picked.toMutableList(); java.util.Collections.swap(list, index, index + 1); picked = list }) { Text("↓") }
                   }
@@ -465,9 +535,9 @@ class ConnectionModesActivity : ComponentActivity() {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               OutlinedButton(onClick = { nodeDialog = false }, modifier = Modifier.weight(1f)) { Text("Отмена") }
               Button(onClick = {
-                if (multiple) change("node_keys", JSONArray(picked)) else { change("selected_key", picked.firstOrNull().orEmpty()); change("manual_override", true) }
+                if (editNodeOrder) change("node_keys", JSONArray(picked)) else { change("selected_key", picked.firstOrNull().orEmpty()); change("manual_override", true) }
                 nodeDialog = false
-              }, enabled = multiple || picked.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Применить") }
+              }, enabled = editNodeOrder || picked.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Применить") }
             }
           }
         }

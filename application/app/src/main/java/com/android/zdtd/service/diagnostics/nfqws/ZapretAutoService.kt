@@ -13,7 +13,16 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 import java.net.Proxy
 import java.net.URL
 import java.util.concurrent.atomic.AtomicReference
@@ -40,6 +49,10 @@ class ZapretAutoService : Service() {
   private var job: Job? = null
   private var owns = false
   private var wake: PowerManager.WakeLock? = null
+  private val probeClient = OkHttpClient.Builder().proxy(Proxy.NO_PROXY)
+    .callTimeout(5, TimeUnit.SECONDS).retryOnConnectionFailure(false)
+    .followRedirects(false).followSslRedirects(false)
+    .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS)).build()
   override fun onBind(intent: Intent?) = null
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == "stop") { job?.cancel(); return START_NOT_STICKY }
@@ -64,7 +77,7 @@ class ZapretAutoService : Service() {
     var nativeOwned = false
     try {
       require(program in listOf("nfqws", "nfqws2")) { "Неизвестное ядро" }
-      require(urls.size in 1..4 && urls.all { u -> runCatching { val url = URL(u); url.protocol == "https" && url.host.isNotBlank() && url.userInfo == null && url.port in listOf(-1, 443) }.getOrDefault(false) }) { "Нужны 1–4 HTTPS-адреса без пароля, порт 443" }
+      require(urls.size in 1..4 && urls.all { u -> runCatching { val url = URL(u); url.protocol == "https" && url.host.isNotBlank() && url.userInfo == null && url.port in listOf(-1, 443) && u.toHttpUrlOrNull() != null }.getOrDefault(false) }) { "Нужны 1–4 HTTPS-адреса без пароля, порт 443" }
       val cm = getSystemService(ConnectivityManager::class.java)
       val network = cm.activeNetwork ?: error("Нет подключения к сети")
       val caps = cm.getNetworkCapabilities(network) ?: error("Сеть недоступна")
@@ -85,6 +98,9 @@ class ZapretAutoService : Service() {
       publish("Проверка без стратегии…")
       val baseline = probeRound(urls)
       report.put("baseline", baseline)
+      val baselineFailed = (0 until baseline.length()).map { baseline.getJSONObject(it) }
+        .filterNot { it.optBoolean("ok") }.map { it.optString("url") }.toSet()
+      report.put("baseline_failed_urls", JSONArray(baselineFailed.sorted()))
       val strategies = runner.listStrategies(program).take(limit)
       check(strategies.isNotEmpty()) { "Нет стратегий в модуле для $program" }
       report.put("total", strategies.size)
@@ -109,7 +125,11 @@ class ZapretAutoService : Service() {
       }
       val results = report.getJSONArray("results")
       val passed = (0 until results.length()).count { results.getJSONObject(it).optBoolean("passed") }
-      publish(if (passed > 0) "Готово: устойчивых вариантов $passed. Выбери стратегию и профиль для применения" else "Устойчивый вариант не найден. Проверь адреса или расширь список стратегий")
+      publish(when {
+        baselineFailed.isEmpty() -> "Все адреса ответили без стратегии. По этим замерам нельзя определить, помогает ли Zapret."
+        passed > 0 -> "Устойчивых вариантов · $passed. Выбери стратегию и профиль для применения."
+        else -> "Устойчивый вариант не найден. Можно проверить больше стратегий."
+      })
     } catch (e: CancellationException) { publish("Остановлено. Завершённые результаты сохранены") }
     catch (e: Exception) { publish(e.message ?: "Ошибка автоподбора") }
     finally {
@@ -120,26 +140,38 @@ class ZapretAutoService : Service() {
       stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
     }
   }
-  private suspend fun probeRound(urls: List<String>): JSONArray {
+  private suspend fun probeRound(urls: List<String>): JSONArray = coroutineScope {
     val results = JSONArray()
     repeat(2) { attempt ->
-      for (url in urls) {
-        currentCoroutineContext().ensureActive()
-        val start = System.nanoTime(); val row = JSONObject().put("url", url).put("attempt", attempt + 1)
-        var connection: HttpURLConnection? = null
-        try {
-          connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
-          connection.connectTimeout = 5000; connection.readTimeout = 5000; connection.useCaches = false; connection.instanceFollowRedirects = false
-          connection.setRequestProperty("Connection", "close")
-          val code = connection.responseCode
+      urls.map { url -> async { probe(url, attempt + 1) } }.awaitAll().forEach { results.put(it) }
+    }
+    results
+  }
+
+  private suspend fun probe(url: String, attempt: Int): JSONObject = suspendCancellableCoroutine { continuation ->
+    val start = android.os.SystemClock.elapsedRealtime()
+    val row = JSONObject().put("url", url).put("attempt", attempt)
+    val call = probeClient.newCall(Request.Builder().url(url).header("Connection", "close").build())
+    continuation.invokeOnCancellation { call.cancel() }
+    fun complete() {
+      row.put("elapsed_ms", android.os.SystemClock.elapsedRealtime() - start)
+      if (continuation.isActive) continuation.resume(row)
+    }
+    call.enqueue(object : Callback {
+      override fun onFailure(call: Call, error: IOException) {
+        row.put("ok", false).put("error", error.javaClass.simpleName)
+        complete()
+      }
+
+      override fun onResponse(call: Call, response: Response) {
+        response.use {
+          val code = it.code
           row.put("status", code).put("ok", code in 200..399)
           if (code !in 200..399) row.put("error", "HTTP $code")
-        } catch (e: Exception) { row.put("ok", false).put("error", e.javaClass.simpleName) }
-        finally { connection?.disconnect() }
-        row.put("elapsed_ms", (System.nanoTime() - start) / 1_000_000); results.put(row)
+        }
+        complete()
       }
-    }
-    return results
+    })
   }
   override fun onDestroy() { job?.cancel(); super.onDestroy() /* finally owns cleanup; native guard covers process death */ }
   companion object {

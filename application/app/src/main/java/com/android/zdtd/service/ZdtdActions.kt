@@ -156,6 +156,7 @@ interface ZdtdActions {
   fun openRemoteSetup()
   fun exitRemoteControl()
   fun toggleService()
+  fun restartService(onlyIfRunning: Boolean = false, onDone: (Boolean) -> Unit = {})
   fun refreshStatus()
   fun refreshPrograms()
   fun refreshOptionalTools()

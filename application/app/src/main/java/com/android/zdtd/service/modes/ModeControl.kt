@@ -166,7 +166,7 @@ class ModeStatusReceiver : BroadcastReceiver() {
   }
 }
 
-internal fun bindVpnWidget(context: Context, views: RemoteViews) {
+internal fun bindVpnWidget(context: Context, views: RemoteViews, graphite: Boolean) {
   val status = ModeClient.cached(context)
   val state = status.optString("state")
   val mode = status.optString("mode")
@@ -209,9 +209,10 @@ internal fun bindVpnWidget(context: Context, views: RemoteViews) {
   views.setOnClickPendingIntent(R.id.mode_settings, PendingIntent.getActivity(context, 20204, settings, flags))
   views.setOnClickPendingIntent(R.id.mode_server, PendingIntent.getActivity(context, 20206, picker, flags))
   views.setBoolean(R.id.mode_stop, "setEnabled", active)
-  views.setTextColor(R.id.mode_stop, context.getColor(
-    if (active) R.color.widget_network_accent else R.color.widget_network_muted,
-  ))
+  views.setTextColor(R.id.mode_stop,
+    if (graphite) android.graphics.Color.parseColor(if (active) "#FFBDC4" else "#C5B8BE")
+    else context.getColor(if (active) R.color.widget_network_accent else R.color.widget_network_muted),
+  )
   val stop = Intent(context, ModeActionService::class.java).putExtra("mode", "")
   views.setOnClickPendingIntent(R.id.mode_stop, PendingIntent.getForegroundService(context, 20205, stop, flags))
 }

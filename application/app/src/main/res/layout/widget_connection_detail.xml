@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/detail_widget" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="12dp" android:background="@drawable/widget_detail_glass">
+
+    <LinearLayout android:id="@id/health_root" android:layout_width="match_parent"
+        android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical">
+        <TextView android:id="@+id/detail_title" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Связь подробно" android:textSize="16sp"
+            android:textStyle="bold" android:textColor="#2B171B" />
+        <TextView android:id="@id/health_time" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:textSize="11sp" android:maxLines="1"
+            android:ellipsize="end" android:textColor="#2B171B" />
+        <LinearLayout android:id="@+id/detail_rows" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="3dp" android:orientation="vertical" />
+        <TextView android:id="@id/health_results" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:textSize="11sp" android:maxLines="1"
+            android:ellipsize="end" android:textColor="#2B171B" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="42dp" android:orientation="horizontal">
+        <TextView android:id="@id/health_check" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="match_parent" android:gravity="center" android:text="Проверить"
+            android:textColor="#9E1525" android:textSize="13sp" android:textStyle="bold" />
+        <TextView android:id="@+id/detail_settings" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="match_parent" android:gravity="center" android:text="Настройки"
+            android:textColor="#9E1525" android:textSize="13sp" android:textStyle="bold" />
+    </LinearLayout>
+</LinearLayout>

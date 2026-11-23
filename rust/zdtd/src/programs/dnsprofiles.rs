@@ -9,6 +9,7 @@
 //! No loopback alias, PREROUTING, forwarding or system DNS setting is changed.
 //! Selected apps retain the proven full-route netd VPN policy.
 pub mod diagnostics;
+pub mod google_filter;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -61,6 +62,8 @@ pub struct DnsProfile {
     pub timeout_ms: u32,
     pub apps: Vec<String>,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub google_filter: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,6 +187,9 @@ pub fn validate(document: &ProfileDocument) -> Result<()> {
         }
         if profile.enabled && profile.apps.is_empty() {
             bail!("enabled_profile_has_no_apps: {id}");
+        }
+        if profile.google_filter && profile.apps.iter().any(|pkg| !google_filter::PACKAGES.contains(&pkg.as_str())) {
+            bail!("gemini_filter_google_apps_only: {id}");
         }
         for package in &profile.apps {
             if !valid_package(package) {
@@ -474,7 +480,7 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
         upstream["path"] = json!(path);
     }
 
-    Ok(json!({
+    let mut config = json!({
         "log": {"level": "info", "timestamp": true},
         "dns": {
             "servers": [
@@ -505,7 +511,23 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
             ],
             "final": "direct"
         }
-    }))
+    });
+    if plan.profile.google_filter {
+        config["dns"]["servers"].as_array_mut().context("missing DNS servers")?.push(json!({
+            "type": "hosts", "tag": "gemini-filter", "path": [google_filter::path()]
+        }));
+        config["dns"]["rules"] = json!([
+            {
+                "query_type": ["A"], "preferred_by": "gemini-filter",
+                "action": "route", "server": "gemini-filter", "disable_cache": true, "rewrite_ttl": 60
+            },
+            {
+                "query_type": ["AAAA", "HTTPS", "SVCB"], "preferred_by": "gemini-filter",
+                "action": "predefined", "rcode": "NOERROR"
+            }
+        ]);
+    }
+    Ok(config)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -519,6 +541,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn prepare_plan_files(plan: &RuntimePlan) -> Result<()> {
+    if plan.profile.google_filter {
+        google_filter::ensure_cache()?;
+    }
     fs::create_dir_all(&plan.root).with_context(|| format!("mkdir {}", plan.root.display()))?;
     let config = serde_json::to_vec_pretty(&build_singbox_config(plan)?)?;
     write_atomic(&plan.config, &config)?;
@@ -1265,6 +1290,7 @@ mod tests {
                     timeout_ms: 7000,
                     apps: vec!["com.google.android.youtube".into()],
                     enabled: false,
+                    google_filter: false,
                 },
             )]),
             ..ProfileDocument::default()
@@ -1410,6 +1436,25 @@ mod tests {
         assert_ne!(a.cidr, b.cidr);
         assert_ne!(a.dns, b.dns);
     }
+    #[test]
+    fn gemini_filter_does_not_change_another_profiles_resolver() {
+        let mut doc = fixture();
+        let mut google = doc.profiles["xbox"].clone();
+        google.google_filter = true;
+        google.apps = vec!["com.openai.chatgpt".into()];
+        doc.profiles.insert("google".into(), google);
+        assert!(validate(&doc).is_err());
+        doc.profiles.get_mut("google").unwrap().apps = vec!["com.google.android.apps.bard".into()];
+        assert!(validate(&doc).is_ok());
+        let names = doc.profiles.keys().cloned().collect::<Vec<_>>();
+        for id in &names {
+            let plan = build_plan(id, &doc.profiles[id], &names).unwrap();
+            let config = build_singbox_config(&plan).unwrap();
+            assert_eq!(config["dns"]["rules"].is_array(), id == "google");
+            assert_eq!(config["dns"]["final"], "profile-upstream");
+        }
+    }
+
     #[test]
     fn generated_singbox_config_has_tun_hijack_and_tls_doh() {
         let doc = fixture();

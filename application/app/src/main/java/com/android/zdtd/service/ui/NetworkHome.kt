@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
@@ -27,9 +28,13 @@ import com.android.zdtd.service.UiState
 import com.android.zdtd.service.ZdtdActions
 import com.android.zdtd.service.api.ApiModels
 import com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity
+import com.android.zdtd.service.diagnostics.connection.ConnectionWidgetProvider
 import com.android.zdtd.service.modes.ConnectionModesActivity
 import com.android.zdtd.service.ui.theme.NetworkBackdrop
 import com.android.zdtd.service.ui.theme.NetworkPanel
+import com.android.zdtd.service.ui.theme.LocalNetworkAppearance
+import com.android.zdtd.service.ui.theme.NetworkAppearance
+import com.android.zdtd.service.ui.theme.appearancePreferences
 import kotlinx.coroutines.flow.StateFlow
 
 private enum class NetworkPage(val title: String) {
@@ -46,6 +51,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
   val context = LocalContext.current
   val ui by uiStateFlow.collectAsStateWithLifecycle()
   var page by rememberSaveable { mutableStateOf(NetworkPage.HOME) }
+  var choosingAppearance by rememberSaveable { mutableStateOf(false) }
   var profile by rememberSaveable { mutableStateOf("") }
   var zapretEngine by rememberSaveable { mutableStateOf("nfqws2") }
   val snackbar = remember { SnackbarHostState() }
@@ -64,6 +70,24 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
     if (page == NetworkPage.ZAPRET) actions.refreshPrograms()
   }
 
+  if (choosingAppearance) AlertDialog(
+    onDismissRequest = { choosingAppearance = false },
+    title = { Text("Оформление ZDT-D") },
+    text = {
+      Column {
+        for (style in NetworkAppearance.entries) {
+          Row(Modifier.fillMaxWidth().clickable {
+            appearancePreferences(context).edit().putString("style", style.key).apply()
+            ConnectionWidgetProvider.render(context)
+          }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = LocalNetworkAppearance.current == style, onClick = null, modifier = Modifier.padding(12.dp))
+            Text(style.label)
+          }
+        }
+      }
+    },
+    confirmButton = { TextButton(onClick = { choosingAppearance = false }) { Text("Готово") } },
+  )
   Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
     Column(NetworkBackdrop(Modifier.fillMaxSize()).padding(padding)) {
       Row(
@@ -75,20 +99,26 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
         }
         Text(page.title, Modifier.padding(vertical = 10.dp), style = MaterialTheme.typography.headlineSmall)
       }
+      val applySection = when (page) {
+        NetworkPage.DNS -> "dns"
+        NetworkPage.ZAPRET, NetworkPage.STRATEGY -> "zapret"
+        else -> null
+      }
+      if (applySection != null) NetworkApplyControls(ui, actions, applySection)
       when (page) {
         NetworkPage.HOME -> Column(
           Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           val running = ApiModels.isServiceOn(ui.status)
-          val applying = ui.status?.let { it.startInProgress || it.stopInProgress } == true
+          val applying = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true
           NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
               Column(Modifier.weight(1f)) {
                 Text("Модуль ZDT-D", style = MaterialTheme.typography.labelLarge)
                 Text(when {
                   !ui.daemonOnline -> "Нет связи со службой"
-                  applying -> "Применяются настройки"
+                  applying -> ui.restartPhase ?: "Применяются настройки…"
                   running -> "Модуль работает"
                   else -> "Модуль выключен"
                 }, style = MaterialTheme.typography.titleLarge)
@@ -100,6 +130,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
               )
             }
           }
+          NetworkApplyControls(ui, actions)
           NetworkEntry(Icons.Default.Dns, "DNS для приложений", "Профили DoH и DoT") {
             page = NetworkPage.DNS
           }
@@ -125,9 +156,12 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
           NetworkEntry(Icons.Default.NetworkCheck, "Проверка связи", "Интернет, DNS, YouTube и VPN") {
             context.startActivity(Intent(context, ConnectionDiagnosticsActivity::class.java))
           }
+          NetworkEntry(Icons.Default.Palette, "Оформление", LocalNetworkAppearance.current.label) {
+            choosingAppearance = true
+          }
           Spacer(Modifier.height(6.dp))
         }
-        NetworkPage.DNS -> DnsProfilesScreen(actions)
+        NetworkPage.DNS -> DnsProfilesScreen(actions, applying = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true)
         NetworkPage.ZAPRET -> Column(Modifier.fillMaxSize()) {
           NetworkPanel(Modifier.fillMaxWidth().padding(horizontal = 16.dp), accent = true) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -186,5 +220,41 @@ private fun NetworkEntry(icon: ImageVector, title: String, detail: String, open:
 private fun NetworkIcon(icon: ImageVector) {
   Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
     Icon(icon, null, Modifier.padding(9.dp).size(22.dp))
+  }
+}
+
+@Composable
+private fun NetworkApplyControls(ui: UiState, actions: ZdtdActions, section: String? = null) {
+  val context = LocalContext.current
+  val prefs = remember(context) { context.getSharedPreferences("network_apply", android.content.Context.MODE_PRIVATE) }
+  var automatic by remember(section) { mutableStateOf(section?.let { prefs.getBoolean(it, false) } ?: false) }
+  val working = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true
+  Column(Modifier.fillMaxWidth().padding(horizontal = if (section == null) 0.dp else 16.dp)) {
+    if (working) {
+      LinearProgressIndicator(Modifier.fillMaxWidth())
+      if (section != null) Text(ui.restartPhase ?: "Применяются настройки…", style = MaterialTheme.typography.bodySmall)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      TextButton(
+        onClick = { actions.restartService(onlyIfRunning = true) },
+        enabled = ui.daemonOnline && !working && ApiModels.isServiceOn(ui.status),
+      ) { Text(if (section == null) "Перезапустить ZDT-D" else "Применить и перезапустить") }
+    }
+    if (section != null) {
+      Row(
+        Modifier.fillMaxWidth().padding(start = 12.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(Modifier.weight(1f)) {
+          Text("Перезапускать при сохранении", style = MaterialTheme.typography.labelLarge)
+          Text("ZDT-D кратковременно прерывает обработку трафика", style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = automatic, onCheckedChange = {
+          automatic = it
+          prefs.edit().putBoolean(section, it).apply()
+        })
+      }
+    }
   }
 }

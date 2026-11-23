@@ -395,6 +395,11 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
         "enabled": plan.profile.enabled, "suspended_for_tethering": suspended,
         "global_dnscrypt_enabled": global_dnscrypt_enabled(), "android_private_dns": private_dns_mode(),
         "bootstrap": bootstrap, "upstream": upstream, "listener": listener, "redirect": redirect,
+        "gemini_filter": plan.profile.google_filter.then(|| {
+            let mut filter = super::google_filter::status();
+            filter["matches_domain"] = json!(super::google_filter::has_cached_rule(domain));
+            filter
+        }),
         "runtime": {
             "sing_box": sing_box, "tun2socks": tun2socks, "netd": netd.is_some(),
             "netd_snapshot_available": snapshot.is_ok(), "uid_lookup_ok": uids.is_ok(),

@@ -3,6 +3,7 @@ package com.android.zdtd.service.ui.theme
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.SharedPreferences
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,9 +12,16 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
@@ -170,7 +178,17 @@ fun ZdtdTheme(
   themeMode: ZdtdThemeMode = ZdtdThemeMode.SYSTEM,
   content: @Composable () -> Unit,
 ) {
-  val useDark = when (themeMode) {
+  val context = LocalContext.current
+  val prefs = remember(context) { appearancePreferences(context) }
+  var appearance by remember(prefs) { mutableStateOf(NetworkAppearance.fromKey(prefs.getString("style", null))) }
+  DisposableEffect(prefs) {
+    val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+      if (key == "style") appearance = NetworkAppearance.fromKey(prefs.getString("style", null))
+    }
+    prefs.registerOnSharedPreferenceChangeListener(listener)
+    onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+  }
+  val useDark = appearance == NetworkAppearance.GRAPHITE || when (themeMode) {
     ZdtdThemeMode.SYSTEM -> isSystemInDarkTheme()
     ZdtdThemeMode.LIGHT -> false
     ZdtdThemeMode.DARK -> true
@@ -190,12 +208,21 @@ fun ZdtdTheme(
     }
   }
 
-  MaterialTheme(
-    colorScheme = if (useDark) DarkScheme else LightScheme,
-    typography = MaterialTheme.typography,
-    shapes = ZdtdShapes,
-    content = content,
-  )
+  val scheme = when {
+    appearance == NetworkAppearance.GRAPHITE -> DarkScheme.copy(
+      background = Color(0xFF1B191D), surface = Color(0xFF242126),
+      primary = Color(0xFFFFB9C1), primaryContainer = Color(0xFF61323C),
+    )
+    useDark -> DarkScheme
+    appearance == NetworkAppearance.GLASS -> LightScheme.copy(
+      background = Color(0xFFFFF8FA), surface = Color(0xFFFFFBFC),
+      surfaceVariant = Color(0xFFF3E9ED), onSurfaceVariant = Color(0xFF52444A),
+    )
+    else -> LightScheme
+  }
+  CompositionLocalProvider(LocalNetworkAppearance provides appearance) {
+    MaterialTheme(colorScheme = scheme, typography = MaterialTheme.typography, shapes = ZdtdShapes, content = content)
+  }
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

@@ -6,10 +6,13 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.widget.RemoteViews
 import com.android.zdtd.service.R
 import com.android.zdtd.service.modes.bindVpnWidget
 import com.android.zdtd.service.modes.ModeStatusReceiver
+import com.android.zdtd.service.ui.theme.NetworkAppearance
+import com.android.zdtd.service.ui.theme.appearancePreferences
 import java.text.DateFormat
 import java.util.Date
 
@@ -26,11 +29,25 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
     fun render(context: Context) {
       val manager = AppWidgetManager.getInstance(context)
       val ids = manager.getAppWidgetIds(ComponentName(context, ConnectionWidgetProvider::class.java))
-      if (ids.isEmpty()) return
+      ConnectionDetailWidgetProvider.renderAll(context, manager)
       ids.forEach { id ->
         val views = RemoteViews(context.packageName, R.layout.widget_connection_modes)
         bind(context, views)
-        bindVpnWidget(context, views)
+        val appearance = NetworkAppearance.fromKey(appearancePreferences(context).getString("style", null))
+        val graphite = appearance == NetworkAppearance.GRAPHITE
+        val background = when (appearance) {
+          NetworkAppearance.RED -> R.drawable.widget_detail_red
+          NetworkAppearance.GLASS -> R.drawable.widget_network_background
+          NetworkAppearance.GRAPHITE -> R.drawable.widget_detail_graphite
+        }
+        views.setInt(R.id.connection_modes_widget, "setBackgroundResource", background)
+        if (graphite) {
+          val light = Color.parseColor("#F8F2F4")
+          val accent = Color.parseColor("#FFBDC4")
+          listOf(R.id.health_time, R.id.health_results, R.id.mode_status).forEach { views.setTextColor(it, light) }
+          listOf(R.id.mode_server, R.id.mode_settings).forEach { views.setTextColor(it, accent) }
+        }
+        bindVpnWidget(context, views, graphite)
         manager.updateAppWidget(id, views)
       }
     }

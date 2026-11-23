@@ -104,6 +104,7 @@ pub fn run(_cfg: &Config) -> Result<()> {
         start: start.clone(),
     }));
     crate::programs::connection_modes::start_worker(state.clone());
+    crate::programs::dnsprofiles::google_filter::start_worker();
     crate::programs::telegram_bridge::start_worker(state.clone());
     api_status::write_off();
     energy_saver::unfreeze_all_best_effort();
@@ -172,64 +173,73 @@ pub fn handle_start_async(state: &SharedState) -> Result<bool> {
     logging::info("start requested -> scheduling start_full in background");
 
     let st_arc = state.clone();
-    std::thread::spawn(move || {
-        let outcome = panic::catch_unwind(AssertUnwindSafe(|| runtime::start_full().context("start_full")));
-        match outcome {
-            Ok(res) => match res {
-                Ok(()) => {
-                    let start_now = settings::read_start_settings().unwrap_or_default();
-                    let partial = runtime::last_start_partial();
-                    {
-                        let mut st = lock_state(&st_arc);
-                        st.services_running = true;
-                        st.services_partial = partial;
-                        st.start = start_now;
-                    }
-                    api_status::write_on(partial);
+    std::thread::spawn(move || start_services(&st_arc));
+    Ok(true)
+}
 
-                    protector::activate();
-                    energy_saver::refresh(true);
+fn start_services(state: &SharedState) {
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| runtime::start_full().context("start_full")));
+    match outcome {
+        Ok(res) => match res {
+            Ok(()) => {
+                let start_now = settings::read_start_settings().unwrap_or_default();
+                let partial = runtime::last_start_partial();
+                {
+                    let mut st = lock_state(state);
+                    st.services_running = true;
+                    st.services_partial = partial;
+                    st.start = start_now;
+                }
+                api_status::write_on(partial);
 
-                    // Notify the Android app (app-owned notification).
-                    let _ = crate::android::notification::send_app_state(true);
-                }
-                Err(e) => {
-                    logging::warn(&format!("start_full failed: {e:#}"));
-                    crate::scan_detector::stop();
-                    api_status::write_error_off(&format!("start_full failed: {e:#}"));
-                    let mut st = lock_state(&st_arc);
-                    st.services_running = false;
-                    st.services_partial = false;
-                }
-            },
-            Err(_) => {
-                logging::warn("start thread panicked");
-                crate::logging::user_error("Ошибка запуска: внутренний сбой потока");
+                protector::activate();
+                energy_saver::refresh(true);
+
+                // Notify the Android app (app-owned notification).
+                let _ = crate::android::notification::send_app_state(true);
+            }
+            Err(e) => {
+                logging::warn(&format!("start_full failed: {e:#}"));
                 crate::scan_detector::stop();
-                api_status::write_error_off("start thread panicked");
-                let mut st = lock_state(&st_arc);
+                api_status::write_error_off(&format!("start_full failed: {e:#}"));
+                let mut st = lock_state(state);
                 st.services_running = false;
                 st.services_partial = false;
             }
+        },
+        Err(_) => {
+            logging::warn("start thread panicked");
+            crate::logging::user_error("Ошибка запуска: внутренний сбой потока");
+            crate::scan_detector::stop();
+            api_status::write_error_off("start thread panicked");
+            let mut st = lock_state(state);
+            st.services_running = false;
+            st.services_partial = false;
         }
-        let mut st = lock_state(&st_arc);
-        st.start_in_progress = false;
-    });
-
-    Ok(true)
+    }
+    let mut st = lock_state(state);
+    st.start_in_progress = false;
 }
 
 /// Schedule stop in background and return immediately.
 ///
 /// If a stop is already running, this is a no-op.
 pub fn handle_stop_async(state: &SharedState) -> Result<bool> {
+    stop_services_async(state, false)
+}
+
+pub fn handle_restart_async(state: &SharedState) -> Result<bool> {
+    stop_services_async(state, true)
+}
+
+fn stop_services_async(state: &SharedState, restart: bool) -> Result<bool> {
     {
         let mut st = lock_state(state);
         // Do not allow start/stop to overlap. If a start is waiting for
         // internet, a Stop request from the app is used as an explicit skip.
         // The app may send Stop here because its button already represents
         // the pending/running service state.
-        if st.start_in_progress && !st.stop_in_progress && crate::internet_wait::request_skip() {
+        if !restart && st.start_in_progress && !st.stop_in_progress && crate::internet_wait::request_skip() {
             logging::info("stop request accepted: internet wait skipped");
             return Ok(true);
         }
@@ -237,6 +247,12 @@ pub fn handle_stop_async(state: &SharedState) -> Result<bool> {
         if st.stop_in_progress || st.start_in_progress {
             logging::info("stop ignored: another operation is in progress");
             return Ok(false);
+        }
+        if restart && !st.services_running {
+            return Ok(false);
+        }
+        if restart && nfqws_tester_active() {
+            return Err(anyhow::anyhow!("Сначала останови проверку стратегий Zapret"));
         }
         // Do NOT rely solely on in-memory flags to decide whether we should stop.
         // The daemon can be restarted while services are still running, or a previous
@@ -248,19 +264,22 @@ pub fn handle_stop_async(state: &SharedState) -> Result<bool> {
         st.stop_in_progress = true;
     }
 
-    // Persist enabled=false.
-    // Important: if the stop request is ignored, we must NOT touch settings.
-    let mut start = settings::read_start_settings().unwrap_or_default();
-    start.enabled = false;
-    if let Err(e) = settings::write_start_settings(&start) {
-        let mut st = lock_state(state);
-        st.stop_in_progress = false;
-        api_status::write_error_off(&format!("stop prepare failed: {e:#}"));
-        return Err(e);
-    }
-    {
-        let mut st = lock_state(state);
-        st.start = start.clone();
+    // A restart preserves the startup preference even if Android closes the app.
+    if !restart {
+        // Persist enabled=false.
+        // Important: if the stop request is ignored, we must NOT touch settings.
+        let mut start = settings::read_start_settings().unwrap_or_default();
+        start.enabled = false;
+        if let Err(e) = settings::write_start_settings(&start) {
+            let mut st = lock_state(state);
+            st.stop_in_progress = false;
+            api_status::write_error_off(&format!("stop prepare failed: {e:#}"));
+            return Err(e);
+        }
+        {
+            let mut st = lock_state(state);
+            st.start = start.clone();
+        }
     }
     api_status::write_stopping();
 
@@ -281,12 +300,21 @@ pub fn handle_stop_async(state: &SharedState) -> Result<bool> {
                         st.services_running = false;
                         st.services_partial = false;
                     }
-                    api_status::write_off();
                     protector::deactivate();
                     energy_saver::stop_monitor();
                     crate::scan_detector::stop();
 
-                    // Notify the Android app (app-owned notification).
+                    if restart {
+                        {
+                            let mut st = lock_state(&st_arc);
+                            st.start_in_progress = true;
+                            st.stop_in_progress = false;
+                        }
+                        api_status::write_starting();
+                        start_services(&st_arc);
+                        return;
+                    }
+                    api_status::write_off();
                     let _ = crate::android::notification::send_app_state(false);
                 }
                 Err(e) => {

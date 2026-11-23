@@ -22,6 +22,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.zdtd.service.ZdtdActions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -29,12 +30,25 @@ import org.json.JSONObject
 private const val DnsConfigPath = "/api/programs/dnsprofiles/config"
 private const val DnsValidatePath = "/api/programs/dnsprofiles/validate"
 private const val DnsStatusPath = "/api/programs/dnsprofiles/status"
+private const val GeminiFilterPath = "/api/programs/dnsprofiles/gemini-filter"
+private val GeminiPackages = setOf(
+  "com.google.android.apps.bard", "com.google.android.googlequicksearchbox",
+  "com.google.android.gms", "com.android.vending",
+)
 
 @Composable
-fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottomContentPadding: Dp = 0.dp) {
+fun DnsProfilesScreen(
+  actions: ZdtdActions,
+  topContentPadding: Dp = 0.dp,
+  bottomContentPadding: Dp = 0.dp,
+  applying: Boolean = false,
+) {
   val context = LocalContext.current
   var document by remember { mutableStateOf<JSONObject?>(null) }
   var status by remember { mutableStateOf<JSONObject?>(null) }
+  var filterStatus by remember { mutableStateOf<JSONObject?>(null) }
+  var refreshRequested by remember { mutableStateOf(false) }
+  var filterMessage by remember { mutableStateOf<String?>(null) }
   var loading by remember { mutableStateOf(true) }
   var saving by remember { mutableStateOf(false) }
   var message by remember { mutableStateOf<String?>(null) }
@@ -87,7 +101,10 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
             editId = null
             deleteId = null
             reports.clear()
-            message = "Сохранено. Чтобы применить настройки, выключи и включи модуль на экране «Сеть»."
+            val automatic = context.getSharedPreferences("network_apply", android.content.Context.MODE_PRIVATE)
+              .getBoolean("dns", false)
+            message = if (automatic) "Настройки сохранены. Если модуль выключен, они применятся при запуске."
+              else "Настройки сохранены. Для применения нажми «Применить и перезапустить»."
             reload()
           } else {
             error = "Не удалось сохранить настройки. Обнови список и повтори."
@@ -103,6 +120,17 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
     compareByDescending<String> { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
       .thenBy { profiles?.optJSONObject(it)?.optString("display_name").orEmpty().lowercase() }
   )
+  val filterEnabled = ids.any { id ->
+    val candidate = profiles?.optJSONObject(id)
+    candidate?.optBoolean("google_filter") == true && candidate.optBoolean("enabled")
+  }
+  LaunchedEffect(filterEnabled) {
+    while (filterEnabled) {
+      actions.loadJsonData(GeminiFilterPath) { filterStatus = it }
+      delay(2_500)
+    }
+  }
+  LaunchedEffect(applying) { if (!applying) refreshStatus() }
   val suspended = current?.optBoolean("suspend_for_tethering") == true
   val runtime = status?.optJSONObject("profiles")
   val enabled = ids.count { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
@@ -126,7 +154,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
           Text(if (status == null) "— / $enabled" else "$active / $enabled",
             style = MaterialTheme.typography.headlineMedium)
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { editId = ""; error = null; validation = null }, enabled = current != null && !saving && !loading && ids.size < 16) {
+            Button(onClick = { editId = ""; error = null; validation = null }, enabled = current != null && !saving && !loading && !applying && ids.size < 16) {
               Text("Новый профиль")
             }
             TextButton(onClick = { reload() }, enabled = !saving && !loading) { Text("Обновить") }
@@ -149,10 +177,41 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
     if (status?.optString("private_dns_mode") == "hostname") item {
       Text("Для применения профилей отключи строгий режим «Частный DNS» в Android.", color = MaterialTheme.colorScheme.error)
     }
+    if (filterEnabled) item {
+      val updated = filterStatus?.optLong("updated_at") ?: 0L
+      val refreshing = refreshRequested || filterStatus?.optBoolean("updating") == true
+      val lastError = filterStatus?.optString("last_error").orEmpty().takeUnless { it == "null" }.orEmpty()
+      OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text("Подписка Gemini", style = MaterialTheme.typography.titleSmall)
+          Text(
+            if (updated > 0) "Обновлено " + java.text.DateFormat.getDateTimeInstance(
+              java.text.DateFormat.SHORT, java.text.DateFormat.SHORT
+            ).format(java.util.Date(updated * 1000))
+            else "Ожидаем первую загрузку списка",
+            style = MaterialTheme.typography.bodySmall,
+          )
+          if (lastError.isNotBlank()) Text(lastError, color = MaterialTheme.colorScheme.error)
+          filterMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+          if (refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
+          TextButton(enabled = !refreshing, onClick = {
+            refreshRequested = true
+            filterMessage = null
+            actions.postJsonResult(GeminiFilterPath, JSONObject()) {
+              filterMessage = if (it?.optBoolean("accepted") == true) "Запрошено обновление" else "Обновление не запустилось"
+              actions.loadJsonData(GeminiFilterPath) { result ->
+                filterStatus = result
+                refreshRequested = false
+              }
+            }
+          }) { Text("Обновить список Gemini") }
+        }
+      }
+    }
     items(ids, key = { it }) { id ->
       val profile = profiles?.optJSONObject(id) ?: JSONObject()
       DnsProfileCard(
-        profile, runtime?.optJSONObject(id), reports[id], appLabels, suspended, !saving && !loading,
+        profile, runtime?.optJSONObject(id), reports[id], appLabels, suspended, !saving && !loading && !applying,
         onSwitch = { checked ->
           val candidate = JSONObject(current.toString())
           candidate.getJSONObject("profiles").getJSONObject(id).put("enabled", checked)
@@ -176,7 +235,7 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
           supportingContent = { Text("Приостановить все DNS-профили после перезапуска модуля.") },
           trailingContent = {
             Switch(
-              checked = suspended, enabled = !saving && !loading,
+              checked = suspended, enabled = !saving && !loading && !applying,
               onCheckedChange = { submit(JSONObject(current.toString()).put("suspend_for_tethering", it)) },
             )
           },
@@ -270,6 +329,7 @@ private fun DnsProfileCard(
         enabled && !suspended && runtime != null -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurfaceVariant
       })
+      if (profile.optBoolean("google_filter")) Text("Подписка Gemini", style = MaterialTheme.typography.labelMedium)
       HorizontalDivider(Modifier.padding(top = 2.dp, bottom = 4.dp))
       Text(if (apps.isEmpty()) "Приложения не выбраны" else "Приложения · ${apps.size}",
         style = MaterialTheme.typography.labelMedium)
@@ -307,19 +367,22 @@ private fun DnsProfileEditor(
   var timeout by remember(originalId) { mutableStateOf(original?.optInt("timeout_ms")?.toString() ?: "7000") }
   var selected by remember(originalId) { mutableStateOf(original?.optJSONArray("apps")?.strings()?.toSet() ?: emptySet()) }
   var enabled by remember(originalId) { mutableStateOf(original?.optBoolean("enabled") ?: false) }
+  var googleFilter by remember(originalId) { mutableStateOf(original?.optBoolean("google_filter") == true) }
+  val unrelatedApps = googleFilter && selected.any { it !in GeminiPackages }
   var showApps by remember { mutableStateOf(false) }
   var advanced by remember { mutableStateOf(false) }
   val address = endpoint.trim()
   val validProtocol = if (dot) !address.contains("://") || address.startsWith("tls://", true)
     else address.startsWith("https://", true)
 
-  val canSubmit = !busy && name.isNotBlank() && validProtocol && address.isNotBlank()
+  val canSubmit = !busy && !unrelatedApps && name.isNotBlank() && validProtocol && address.isNotBlank()
 
   fun payload(): JSONObject {
     val url = if (dot && !address.contains("://")) "tls://$address" else address
     return JSONObject().put("display_name", name.trim()).put("endpoint", url)
       .put("bootstrap", JSONArray(bootstrap.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }))
       .put("timeout_ms", timeout.toIntOrNull() ?: 0).put("apps", JSONArray(selected.sorted())).put("enabled", enabled)
+      .put("google_filter", googleFilter)
   }
 
   AlertDialog(
@@ -359,6 +422,19 @@ private fun DnsProfileEditor(
               enabled = !busy && (selected.isNotEmpty() || enabled))
           },
         )
+        ListItem(
+          headlineContent = { Text("Подписка Gemini") },
+          supportingContent = { Text("Обновляет DNS-правила Gemini каждый час. Только для Gemini, Google, Google Play и сервисов Google Play.") },
+          trailingContent = { Switch(checked = googleFilter, enabled = !busy, onCheckedChange = { googleFilter = it }) },
+        )
+        if (unrelatedApps) {
+          Text("В профиле есть приложения вне списка Google. Убери их для подключения подписки.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+          TextButton(enabled = !busy, onClick = {
+            selected = selected.intersect(GeminiPackages)
+            if (selected.isEmpty()) enabled = false
+          }) { Text("Оставить выбранные приложения Google") }
+        }
         TextButton(onClick = { advanced = !advanced }) {
           Text(if (advanced) "Скрыть дополнительные настройки" else "Дополнительные настройки")
         }
@@ -388,14 +464,18 @@ private fun DnsProfileEditor(
     confirmButton = { TextButton(enabled = canSubmit, onClick = { onSubmit(id.trim(), payload(), true) }) { Text("Сохранить") } },
     dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
   )
-  if (showApps) DnsProfileAppPicker(selected, onDismiss = { showApps = false }, onSave = { selected = it; if (it.isEmpty()) enabled = false; showApps = false })
+  if (showApps) DnsProfileAppPicker(
+    selected, allowed = GeminiPackages.takeIf { googleFilter },
+    onDismiss = { showApps = false },
+    onSave = { selected = it; if (it.isEmpty()) enabled = false; showApps = false },
+  )
 }
 
 
 private fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }
 
 @Composable
-private fun DnsProfileAppPicker(initial: Set<String>, onDismiss: () -> Unit, onSave: (Set<String>) -> Unit) {
+private fun DnsProfileAppPicker(initial: Set<String>, allowed: Set<String>?, onDismiss: () -> Unit, onSave: (Set<String>) -> Unit) {
   val context = LocalContext.current
   var apps by remember { mutableStateOf<List<InstalledApp>?>(null) }
   var selected by remember { mutableStateOf(initial) }
@@ -413,7 +493,8 @@ private fun DnsProfileAppPicker(initial: Set<String>, onDismiss: () -> Unit, onS
   val visible = (known + (selected - installed).map { InstalledApp(it, it, false) })
     .filter { app ->
       val picked = app.packageName in selected
-      (!onlySelected || picked) && (!app.isSystem || system || picked) &&
+      (allowed == null || app.packageName in allowed || picked) &&
+        (!onlySelected || picked) && (!app.isSystem || system || picked || allowed != null) &&
         (app.label.contains(query.trim(), true) || app.packageName.contains(query.trim(), true))
     }
     .sortedWith(compareByDescending<InstalledApp> { it.packageName in selected }.thenBy { it.sortKey })
@@ -434,7 +515,7 @@ private fun DnsProfileAppPicker(initial: Set<String>, onDismiss: () -> Unit, onS
           items(visible, key = { it.packageName }) { app ->
             val checked = app.packageName in selected
             Row(
-              Modifier.fillMaxWidth().toggleable(checked, role = Role.Checkbox) {
+              Modifier.fillMaxWidth().toggleable(checked, enabled = checked || allowed == null || app.packageName in allowed, role = Role.Checkbox) {
                 selected = if (it) selected + app.packageName else selected - app.packageName
               }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
             ) {

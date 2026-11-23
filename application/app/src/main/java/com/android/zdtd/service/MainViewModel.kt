@@ -40,6 +40,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -225,6 +226,7 @@ data class UiState(
   val daemonUnavailableVisible: Boolean = false,
   val programs: List<ApiModels.Program> = emptyList(),
   val busy: Boolean = false,
+  val restartPhase: String? = null,
   val daemonLogTail: String = "",
   val daemonLogDetailedTail: String = "",
   val tgWsProxy: TgWsProxyComponentState = TgWsProxyComponentState(),
@@ -6814,6 +6816,61 @@ private fun shQuote(s: String): String {
     }
   }
 
+  override fun restartService(onlyIfRunning: Boolean, onDone: (Boolean) -> Unit) {
+    if (_uiState.value.busy) {
+      onDone(false)
+      return
+    }
+    _uiState.update { it.copy(busy = true, restartPhase = "Проверяем состояние модуля…") }
+    launchIO {
+      var ok = false
+      try {
+        val initial = api.getJsonData("/api/status").optString("actual_runtime_state")
+        if (initial in setOf("stopped", "error") && onlyIfRunning) return@launchIO
+        check(initial in setOf("running", "partial")) { "Перезапуск доступен, когда модуль работает" }
+        check(api.postJsonResult("/api/restart", JSONObject()).optBoolean("accepted")) {
+          "Служба уже выполняет другую операцию"
+        }
+        _uiState.update { it.copy(restartPhase = "Останавливаем модуль…") }
+        val state = withTimeout(90_000L) {
+          var result = ""
+          while (result.isEmpty()) {
+            delay(400)
+            val status = api.getJsonData("/api/status")
+            val runtime = status.optString("actual_runtime_state")
+            if (status.optBoolean("start_in_progress") || runtime == "starting") {
+              _uiState.update { it.copy(restartPhase = "Запускаем модуль…") }
+            }
+            if (!status.optBoolean("stop_in_progress") && !status.optBoolean("start_in_progress") &&
+                runtime in setOf("running", "partial", "stopped", "error")) result = runtime
+          }
+          result
+        }
+        check(state == "running" || state == "partial") { "Не удалось запустить модуль. Открой диагностику." }
+        ok = state == "running"
+        if (!ok) withContext(Dispatchers.Main.immediate) { toast("Модуль запущен частично. Открой диагностику.") }
+      } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        withContext(Dispatchers.Main.immediate) { toast("Истекло время ожидания. Проверь состояние модуля.") }
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        val message = e.message ?: "Ошибка перезапуска модуля"
+        log("ERR", message)
+        withContext(Dispatchers.Main.immediate) { toast(message) }
+      } finally {
+        runCatching { fetchAndUpdateStatus(force = true) }
+        _uiState.update { it.copy(busy = false, restartPhase = null) }
+        withContext(Dispatchers.Main.immediate) { onDone(ok) }
+      }
+    }
+  }
+
+  private fun restartAfterSave(section: String) {
+    if (ctx.getSharedPreferences("network_apply", Context.MODE_PRIVATE).getBoolean(section, false)) {
+      restartService(onlyIfRunning = true)
+    }
+  }
+
   private fun isNfqwsTesterLockActive(): Boolean {
     return runCatching {
       root.execRootSh("test -f /data/adb/modules/ZDT-D/working_folder/nfqws_tester/session.json").isSuccess
@@ -7012,7 +7069,10 @@ private fun shQuote(s: String): String {
       } else {
         log("ERR", "$programId/$profile toggle failed")
       }
-      withContext(Dispatchers.Main.immediate) { onDone(ok) }
+      withContext(Dispatchers.Main.immediate) {
+        if (ok && programId in setOf("nfqws", "nfqws2")) restartAfterSave("zapret")
+        onDone(ok)
+      }
     }
   }
 
@@ -7319,7 +7379,10 @@ private fun shQuote(s: String): String {
           log("OK", "$path: saved (apply after stop/start)")
         }
       } else log("ERR", "$path: save failed")
-      withContext(Dispatchers.Main.immediate) { onDone(ok) }
+      withContext(Dispatchers.Main.immediate) {
+        if (ok && Regex("^/api/programs/nfqws2?/profiles/[^/]+/config$").matches(path)) restartAfterSave("zapret")
+        onDone(ok)
+      }
     }
   }
 
@@ -7447,7 +7510,10 @@ private fun shQuote(s: String): String {
         val detail = result.exceptionOrNull()?.message?.trim().orEmpty()
         log("ERR", if (detail.isBlank()) "$path: save failed" else "$path: save failed — $detail")
       }
-      withContext(Dispatchers.Main.immediate) { onDone(ok) }
+      withContext(Dispatchers.Main.immediate) {
+        if (ok && path == "/api/programs/dnsprofiles/config") restartAfterSave("dns")
+        onDone(ok)
+      }
     }
   }
 
@@ -7570,7 +7636,10 @@ override fun applyStrategicVariant(programId: String, profile: String, file: Str
       .put("profile", profile)
       .put("file", file)
     val ok = runCatching { api.postJsonData("/api/strategicvar/apply", payload) }.getOrDefault(false)
-    withContext(Dispatchers.Main.immediate) { onDone(ok) }
+    withContext(Dispatchers.Main.immediate) {
+      if (ok && programId in setOf("nfqws", "nfqws2")) restartAfterSave("zapret")
+      onDone(ok)
+    }
   }
 }
 

@@ -260,6 +260,13 @@ internal fun DnsProfileCheckDialog(
                   Text(dnsSummary(report), style = MaterialTheme.typography.titleMedium)
                   Text("${report.optString("protocol")} · ${report.optString("endpoint_host")} · ${report.optString("domain")}",
                     style = MaterialTheme.typography.bodySmall)
+                  report.optJSONObject("gemini_filter")?.let { filter ->
+                    Text(when {
+                      filter.optLong("updated_at") == 0L -> "Подписка Gemini · список ещё не загружен"
+                      filter.optBoolean("matches_domain") -> "Подписка Gemini · для домена есть правило"
+                      else -> "Подписка Gemini · для домена используется DNS профиля"
+                    }, style = MaterialTheme.typography.bodySmall)
+                  }
                 }
               }
             }

@@ -5672,6 +5672,15 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
         }
 
 
+        ("GET", ["api", "programs", "dnsprofiles", "gemini-filter"]) => {
+            write_json(stream, 200, json!({"ok": true, "data": crate::programs::dnsprofiles::google_filter::status()}))
+        }
+        ("POST", ["api", "programs", "dnsprofiles", "gemini-filter"]) => {
+            match crate::programs::dnsprofiles::google_filter::request_refresh() {
+                Ok(()) => write_json(stream, 200, json!({"ok": true, "accepted": true})),
+                Err(e) => write_json(stream, 200, json!({"ok": false, "error": format!("{e:#}")})),
+            }
+        }
         ("GET", ["api", "programs", "dnsprofiles", "status"]) => {
             write_json(
                 stream,
@@ -7646,6 +7655,12 @@ match (method.as_str(), path.as_str()) {
         ("POST", "/api/start") => {
             let res = daemon::handle_start_async(&state);
             match res {
+                Ok(accepted) => write_json(stream, 200, json!({"ok": true, "accepted": accepted})),
+                Err(e) => write_json(stream, 200, json!({"ok": false, "error": format!("{e:#}")})),
+            }
+        }
+        ("POST", "/api/restart") => {
+            match daemon::handle_restart_async(&state) {
                 Ok(accepted) => write_json(stream, 200, json!({"ok": true, "accepted": accepted})),
                 Err(e) => write_json(stream, 200, json!({"ok": false, "error": format!("{e:#}")})),
             }
