@@ -5,10 +5,19 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,8 +62,13 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
 
   Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
     Column(Modifier.fillMaxSize().padding(padding)) {
-      Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        if (page != NetworkPage.HOME) TextButton(onClick = ::up) { Text("Назад") }
+      Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (page != NetworkPage.HOME) {
+          IconButton(onClick = ::up) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
+        }
         Text(page.title, Modifier.padding(vertical = 10.dp), style = MaterialTheme.typography.headlineSmall)
       }
       when (page) {
@@ -64,16 +78,19 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
         ) {
           val running = ApiModels.isServiceOn(ui.status)
           val applying = ui.status?.let { it.startInProgress || it.stopInProgress } == true
-          Card(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+          Surface(
+            Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.primaryContainer,
+          ) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
               Column(Modifier.weight(1f)) {
-                Text("Модуль", style = MaterialTheme.typography.titleMedium)
+                Text("Модуль ZDT-D", style = MaterialTheme.typography.labelLarge)
                 Text(when {
                   !ui.daemonOnline -> "Нет связи со службой"
                   applying -> "Применяются настройки"
-                  running -> "Работает"
-                  else -> "Выключен"
-                }, style = MaterialTheme.typography.bodyMedium)
+                  running -> "Модуль работает"
+                  else -> "Модуль выключен"
+                }, style = MaterialTheme.typography.titleLarge)
               }
               Switch(
                 checked = running,
@@ -82,26 +99,29 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
               )
             }
           }
-          NetworkEntry("DNS для приложений", "DoH и DoT для выбранных приложений") {
+          NetworkEntry(Icons.Default.Dns, "DNS для приложений", "Профили DoH и DoT") {
             page = NetworkPage.DNS
           }
-          NetworkEntry("Zapret для YouTube", "Приложения и стратегия Zapret2") {
+          NetworkEntry(Icons.Default.PlayCircle, "Zapret для YouTube", "Профили и стратегии") {
             page = NetworkPage.ZAPRET
           }
-          Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-              Text("VPN", style = MaterialTheme.typography.titleMedium)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { page = NetworkPage.SUBSCRIPTIONS }) { Text("Подписка") }
-                TextButton(onClick = {
-                  context.startActivity(Intent(context, ConnectionModesActivity::class.java))
-                }) { Text("Подключение") }
-              }
+          OutlinedCard(Modifier.fillMaxWidth()) {
+            ListItem(
+              leadingContent = { NetworkIcon(Icons.Default.VpnKey) },
+              headlineContent = { Text("VPN", style = MaterialTheme.typography.titleMedium) },
+              supportingContent = { Text("Режимы, приложения и серверы") },
+            )
+            Row(Modifier.padding(start = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              TextButton(onClick = {
+                context.startActivity(Intent(context, ConnectionModesActivity::class.java))
+              }) { Text("Подключение") }
+              TextButton(onClick = { page = NetworkPage.SUBSCRIPTIONS }) { Text("Подписки") }
             }
           }
-          NetworkEntry("Проверка связи", "Интернет, DNS, YouTube и VPN") {
+          NetworkEntry(Icons.Default.NetworkCheck, "Проверка связи", "Интернет, DNS, YouTube и VPN") {
             context.startActivity(Intent(context, ConnectionDiagnosticsActivity::class.java))
           }
+          Spacer(Modifier.height(6.dp))
         }
         NetworkPage.DNS -> DnsProfilesScreen(actions)
         NetworkPage.ZAPRET -> Column(Modifier.fillMaxSize()) {
@@ -142,11 +162,20 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
 }
 
 @Composable
-private fun NetworkEntry(title: String, detail: String, open: () -> Unit) {
-  Card(onClick = open, modifier = Modifier.fillMaxWidth()) {
-    Column(Modifier.padding(16.dp)) {
-      Text(title, style = MaterialTheme.typography.titleMedium)
-      Text(detail, style = MaterialTheme.typography.bodyMedium)
-    }
+private fun NetworkEntry(icon: ImageVector, title: String, detail: String, open: () -> Unit) {
+  OutlinedCard(onClick = open, modifier = Modifier.fillMaxWidth()) {
+    ListItem(
+      leadingContent = { NetworkIcon(icon) },
+      headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+      supportingContent = { Text(detail) },
+      trailingContent = { Icon(Icons.Default.ChevronRight, null) },
+    )
+  }
+}
+
+@Composable
+private fun NetworkIcon(icon: ImageVector) {
+  Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
+    Icon(icon, null, Modifier.padding(9.dp).size(22.dp))
   }
 }

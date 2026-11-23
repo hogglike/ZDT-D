@@ -8,6 +8,8 @@
 //! This leaves port 53 available for Android's wildcard tethering dnsmasq.
 //! No loopback alias, PREROUTING, forwarding or system DNS setting is changed.
 //! Selected apps retain the proven full-route netd VPN policy.
+pub mod diagnostics;
+
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -833,7 +835,7 @@ fn spawn_plan(plan: &RuntimePlan) -> Result<i32> {
     Ok(pid)
 }
 
-fn dns_query_packet(id: u16) -> Vec<u8> {
+fn dns_query_for(id: u16, domain: &str) -> Vec<u8> {
     let mut buf = Vec::with_capacity(64);
     buf.extend_from_slice(&id.to_be_bytes());
     buf.extend_from_slice(&0x0100u16.to_be_bytes());
@@ -841,7 +843,7 @@ fn dns_query_packet(id: u16) -> Vec<u8> {
     buf.extend_from_slice(&0u16.to_be_bytes());
     buf.extend_from_slice(&0u16.to_be_bytes());
     buf.extend_from_slice(&0u16.to_be_bytes());
-    for label in ["example", "com"] {
+    for label in domain.split('.') {
         buf.push(label.len() as u8);
         buf.extend_from_slice(label.as_bytes());
     }
@@ -859,7 +861,7 @@ fn dns_probe_once(ip: Ipv4Addr) -> bool {
         .unwrap_or_default()
         .subsec_nanos();
     let id = ((std::process::id() as u16) ^ (nanos as u16) ^ ((nanos >> 16) as u16)).wrapping_add(0x3157);
-    let packet = dns_query_packet(id);
+    let packet = dns_query_for(id, "example.com");
     if socket.send_to(&packet, SocketAddrV4::new(ip, 53)).is_err() {
         return false;
     }

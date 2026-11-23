@@ -1,17 +1,25 @@
 package com.android.zdtd.service.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.android.zdtd.service.ZdtdActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,26 +29,32 @@ import org.json.JSONObject
 private const val DnsConfigPath = "/api/programs/dnsprofiles/config"
 private const val DnsValidatePath = "/api/programs/dnsprofiles/validate"
 private const val DnsStatusPath = "/api/programs/dnsprofiles/status"
-private const val DnsDiagnosePath = "/api/programs/dnsprofiles/diagnose"
 
-/** Per-app encrypted DNS profile editor. Runtime changes take effect after a normal ZDT-D restart. */
 @Composable
 fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottomContentPadding: Dp = 0.dp) {
-  val diagnosticContext = LocalContext.current
+  val context = LocalContext.current
   var document by remember { mutableStateOf<JSONObject?>(null) }
+  var status by remember { mutableStateOf<JSONObject?>(null) }
   var loading by remember { mutableStateOf(true) }
-  var busy by remember { mutableStateOf(false) }
+  var saving by remember { mutableStateOf(false) }
+  var message by remember { mutableStateOf<String?>(null) }
   var error by remember { mutableStateOf<String?>(null) }
-  var editId by remember { mutableStateOf<String?>(null) }
+  var editId by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteId by remember { mutableStateOf<String?>(null) }
-  var diagnostics by remember { mutableStateOf<String?>(null) }
-  var showDiagnostics by remember { mutableStateOf(false) }
-  var runtimeStatus by remember { mutableStateOf<JSONObject?>(null) }
-  var runtimeDiagnostics by remember { mutableStateOf<JSONObject?>(null) }
-  var showRuntimeDiagnostics by remember { mutableStateOf(false) }
+  var checkId by rememberSaveable { mutableStateOf<String?>(null) }
+  var validation by remember { mutableStateOf<JSONObject?>(null) }
+  var showValidation by remember { mutableStateOf(false) }
+  var settings by remember { mutableStateOf(false) }
+  val reports = remember { mutableStateMapOf<String, JSONObject>() }
+  val appLabels by produceState<Map<String, String>>(emptyMap(), context) {
+    value = withContext(Dispatchers.IO) {
+      runCatching { loadInstalledAppsCached(context.packageManager).associate { it.packageName to it.label } }
+        .getOrDefault(emptyMap())
+    }
+  }
 
+  fun refreshStatus() = actions.loadJsonData(DnsStatusPath) { status = it }
   fun reload() {
-    runtimeDiagnostics = null
     loading = true
     actions.loadJsonData(DnsConfigPath) { result ->
       loading = false
@@ -48,32 +62,35 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
         document = result
         error = null
       } else {
-        document = null
-        error = "Не удалось прочитать профили. Проверь подключение к демону и обнови список."
+        error = "Профили недоступны. Проверь, запущен ли модуль, и обнови экран."
       }
     }
-    actions.loadJsonData(DnsStatusPath) { result -> runtimeStatus = result }
+    refreshStatus()
   }
   LaunchedEffect(Unit) { reload() }
 
-  fun submit(candidate: JSONObject) {
-    busy = true
+  fun submit(candidate: JSONObject, apply: Boolean = true) {
+    saving = true
     error = null
+    validation = null
     actions.postJsonResult(DnsValidatePath, candidate) { result ->
       if (result?.optBoolean("valid") != true) {
-        error = result?.optString("error") ?: "Ошибка проверки профиля."
-        busy = false
+        error = result?.optString("error")?.takeIf { it.isNotBlank() } ?: "Служба не ответила на проверку."
+        saving = false
+      } else if (!apply) {
+        validation = result.optJSONObject("data")
+        saving = false
       } else {
         actions.saveJsonData(DnsConfigPath, candidate) { ok ->
-          busy = false
+          saving = false
           if (ok) {
             editId = null
             deleteId = null
-            diagnostics = null
-            showDiagnostics = false
+            reports.clear()
+            message = "Сохранено. Чтобы применить настройки, выключи и включи модуль на экране «Сеть»."
             reload()
           } else {
-            error = "Сохранение отклонено. Если настройки изменены в другом окне, обнови список. Подробности — в журнале."
+            error = "Не удалось сохранить настройки. Обнови список и повтори."
           }
         }
       }
@@ -82,253 +99,221 @@ fun DnsProfilesScreen(actions: ZdtdActions, topContentPadding: Dp = 0.dp, bottom
 
   val current = document
   val profiles = current?.optJSONObject("profiles")
-  val suspendedForTethering = current?.optBoolean("suspend_for_tethering") == true
-  val ids = profiles?.keys()?.asSequence()?.toList()?.sorted().orEmpty()
-  val enabledCount = ids.count { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
-  val assignedApps = ids.sumOf { profiles?.optJSONObject(it)?.optJSONArray("apps")?.length() ?: 0 }
-  val runningCount = ids.count { id ->
-    val rs = runtimeStatus?.optJSONObject("profiles")?.optJSONObject(id)
-    rs?.optBoolean("netd_applied") == true && rs.optBoolean("process_running")
+  val ids = profiles?.keys()?.asSequence()?.toList().orEmpty().sortedWith(
+    compareByDescending<String> { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
+      .thenBy { profiles?.optJSONObject(it)?.optString("display_name").orEmpty().lowercase() }
+  )
+  val suspended = current?.optBoolean("suspend_for_tethering") == true
+  val runtime = status?.optJSONObject("profiles")
+  val enabled = ids.count { profiles?.optJSONObject(it)?.optBoolean("enabled") == true }
+  val active = ids.count { id ->
+    val state = runtime?.optJSONObject(id)
+    profiles?.optJSONObject(id)?.optBoolean("enabled") == true &&
+      state?.optBoolean("netd_applied") == true && state.optBoolean("process_running")
   }
+
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topContentPadding + 12.dp, bottom = bottomContentPadding + 16.dp),
+    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topContentPadding + 4.dp, bottom = bottomContentPadding + 20.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     item {
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-      ) {
-        Column(
-          Modifier.padding(16.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          Text("DNS-профили", style = MaterialTheme.typography.headlineSmall)
-          OutlinedButton(onClick = {
-            diagnosticContext.startActivity(android.content.Intent(diagnosticContext,
-              com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity::class.java))
-          }) { Text("Проверка соединения и ошибки раздачи") }
-          Text(
-            "Частный DNS по HTTPS или TLS для выбранных приложений.",
-            style = MaterialTheme.typography.bodyMedium,
-          )
-          Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            DnsMetricCard("Профили", ids.size.toString(), Modifier.weight(1f))
-            DnsMetricCard("Активно", "${runningCount}/${enabledCount}", Modifier.weight(1f))
-            DnsMetricCard("Приложения", assignedApps.toString(), Modifier.weight(1f))
-          }
-          Text(
-            "Изменения применяются после перезапуска ZDT-D. Перед включением системной точки доступа можно полностью приостановить DNS-профили, не удаляя настройки.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          HorizontalDivider()
-          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column(Modifier.weight(1f)) {
-              Text("Режим раздачи", style = MaterialTheme.typography.titleMedium)
-              Text(
-                if (suspendedForTethering) "DNS-профили полностью приостановлены"
-                else "DNS-профили работают для выбранных приложений",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+      Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.primaryContainer) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(if (suspended) "Приостановлено для раздачи" else "Активные профили",
+            style = MaterialTheme.typography.labelLarge)
+          Text(if (status == null) "— / $enabled" else "$active / $enabled",
+            style = MaterialTheme.typography.headlineMedium)
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { editId = ""; error = null; validation = null }, enabled = current != null && !saving && !loading && ids.size < 16) {
+              Text("Новый профиль")
             }
-            Switch(
-              checked = suspendedForTethering,
-              onCheckedChange = { checked ->
-                val candidate = JSONObject(current.toString()).put("suspend_for_tethering", checked)
-                submit(candidate)
-              },
-              enabled = current != null && !busy && !loading,
-            )
-          }
-          Text(
-            "Если раздача не запускается, включи этот режим и перезапусти ZDT-D. Он приостанавливает DNS-профили; назначения приложений сохраняются.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          runtimeStatus?.let { st ->
-            if (st.optBoolean("global_dnscrypt_enabled")) {
-              Text("⚠ Глобальный DNSCrypt включён — per-app DNS не запустится.", color = MaterialTheme.colorScheme.error)
-            }
-            val pdns = st.optString("private_dns_mode", "unknown")
-            if (pdns == "hostname") {
-              Text("⚠ Android Private DNS в строгом режиме — выключи его перед запуском.", color = MaterialTheme.colorScheme.error)
-            }
+            TextButton(onClick = { reload() }, enabled = !saving && !loading) { Text("Обновить") }
           }
         }
       }
     }
-    item {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { editId = ""; error = null }, enabled = current != null && !busy && !loading && ids.size < 16) { Text("Создать") }
-        OutlinedButton(onClick = { reload() }, enabled = !busy && !loading) { Text("Обновить") }
+    if (loading || saving) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+    if (message != null) item {
+      Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.medium) {
+        Text(message.orEmpty(), Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall)
       }
-      OutlinedButton(
-        onClick = {
-          busy = true
-          error = null
-          actions.postJsonResult(DnsDiagnosePath, JSONObject()) { result ->
-            busy = false
-            val data = result?.optJSONObject("data")
-            runtimeDiagnostics = data
-            showRuntimeDiagnostics = data != null
-            if (data == null) error = "Расширенный тест не получил ответ от демона."
-          }
-        },
-        modifier = Modifier.fillMaxWidth(),
-        enabled = current != null && !busy && !loading,
-      ) { Text("Расширенный тест DNS") }
-      if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-      error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-      runtimeDiagnostics?.let { result ->
-        val suspended = result.optBoolean("suspended_for_tethering")
-        val tested = result.optInt("tested_profiles")
-        val passed = result.optInt("passed_profiles")
-        val ok = result.optBoolean("all_enabled_dns_probes_ok")
-        Text(
-          when {
-            suspended -> "Тест: DNS-профили приостановлены для раздачи; запросы не отправлялись."
-            ok -> "Тест: реальный DNS-запрос example.com прошёл ($passed/$tested)."
-            else -> "Тест: успешно $passed из $tested. Открой технические данные и журнал профиля."
-          },
-          color = if (ok || suspended) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        )
-        TextButton(onClick = { showRuntimeDiagnostics = !showRuntimeDiagnostics }) {
-          Text(if (showRuntimeDiagnostics) "Скрыть технические данные" else "Показать технические данные")
-        }
-        if (showRuntimeDiagnostics) Surface(
-          color = MaterialTheme.colorScheme.surfaceVariant,
-          shape = MaterialTheme.shapes.small,
-        ) { Text(result.toString(2), modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall) }
-      }
+    }
+    if (error != null && editId == null && deleteId == null) item {
+      Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
+    }
+    if (status?.optBoolean("global_dnscrypt_enabled") == true) item {
+      Text("Глобальный DNSCrypt мешает запуску профилей.", color = MaterialTheme.colorScheme.error)
+    }
+    if (status?.optString("private_dns_mode") == "hostname") item {
+      Text("Для применения профилей отключи строгий режим «Частный DNS» в Android.", color = MaterialTheme.colorScheme.error)
     }
     items(ids, key = { it }) { id ->
       val profile = profiles?.optJSONObject(id) ?: JSONObject()
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)),
-      ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column(Modifier.weight(1f)) {
-              Text(profile.optString("display_name"), style = MaterialTheme.typography.titleLarge)
-              Text(
-                "${if (profile.optString("endpoint").startsWith("tls://", true)) "DoT" else "DoH"} · приложений: ${profile.optJSONArray("apps")?.length() ?: 0}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            Switch(
-              checked = profile.optBoolean("enabled"),
-              onCheckedChange = { checked ->
-                val candidate = JSONObject(current.toString())
-                candidate.getJSONObject("profiles").getJSONObject(id).put("enabled", checked)
-                submit(candidate)
-              },
-              enabled = !busy && !loading && (profile.optJSONArray("apps")?.length() ?: 0) > 0,
-            )
-          }
-          Text(
-            profile.optString("endpoint"),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          runtimeStatus?.optJSONObject("profiles")?.optJSONObject(id)?.let { rs ->
-            val applied = rs.optBoolean("netd_applied")
-            val running = rs.optBoolean("process_running")
-            val enabled = profile.optBoolean("enabled")
-            val stateText = when {
-              suspendedForTethering -> "○ Приостановлен режимом раздачи"
-              !enabled -> "○ Выключен"
-              applied && running -> "● Запущен · для проверки ответа нажми «Расширенный тест DNS»"
-              else -> "● Требует применения · перезапусти ZDT-D или проверь журнал"
-            }
-            Text(
-              stateText,
-              style = MaterialTheme.typography.bodyMedium,
-              color = when {
-                suspendedForTethering || !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
-                applied && running -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.error
-              },
-            )
-          }
-          runtimeDiagnostics?.optJSONObject("profiles")?.optJSONObject(id)?.takeIf { it.optBoolean("dns_query_sent") }?.let { probe ->
-            Text(if (probe.optBoolean("dns_query_ok")) "✓ Последний DNS-запрос получил ответ" else "× Последний DNS-запрос не получил ответ; открой журнал профиля", color = if (probe.optBoolean("dns_query_ok")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-          }
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { editId = id; error = null }, enabled = !busy && !loading) { Text("Изменить") }
-            TextButton(onClick = { deleteId = id }, enabled = !busy && !loading) { Text("Удалить") }
-          }
+      DnsProfileCard(
+        profile, runtime?.optJSONObject(id), reports[id], appLabels, suspended, !saving && !loading,
+        onSwitch = { checked ->
+          val candidate = JSONObject(current.toString())
+          candidate.getJSONObject("profiles").getJSONObject(id).put("enabled", checked)
+          submit(candidate)
+        },
+        onEdit = { editId = id; error = null; validation = null; showValidation = false },
+        onDelete = { deleteId = id; error = null },
+        onCheck = { checkId = id },
+      )
+    }
+    if (ids.isEmpty() && !loading && current != null) item {
+      Text("Создай профиль DoH или DoT и выбери приложения.", style = MaterialTheme.typography.bodyMedium)
+    }
+    if (current != null) item {
+      OutlinedCard(Modifier.fillMaxWidth()) {
+        TextButton(onClick = { settings = !settings }) {
+          Text(if (settings) "Скрыть настройки DNS" else "Настройки DNS")
         }
+        if (settings) ListItem(
+          headlineContent = { Text("Пауза при раздаче") },
+          supportingContent = { Text("Приостановить все DNS-профили после перезапуска модуля.") },
+          trailingContent = {
+            Switch(
+              checked = suspended, enabled = !saving && !loading,
+              onCheckedChange = { submit(JSONObject(current.toString()).put("suspend_for_tethering", it)) },
+            )
+          },
+        )
       }
     }
-    if (ids.isEmpty() && !loading && current != null) item { Text("Профилей пока нет. Можно начать с Xbox DNS.") }
   }
 
   val editing = editId
-  if (editing != null && current != null) {
-    DnsProfileEditor(
-      originalId = editing, original = profiles?.optJSONObject(editing), busy = busy,
-      error = error, diagnostics = diagnostics,
-      showDiagnostics = showDiagnostics,
-      onToggleDiagnostics = { showDiagnostics = !showDiagnostics },
-      onDismiss = { if (!busy) { editId = null; error = null; diagnostics = null; showDiagnostics = false } },
-      onSubmit = { id, profile, save ->
-        if (editing.isEmpty() && profiles?.has(id) == true) {
-          error = "Профиль с таким ID уже существует."
-        } else {
-          val candidate = JSONObject(current.toString())
-          candidate.getJSONObject("profiles").put(id, profile)
-          if (save) submit(candidate) else {
-            busy = true
-            actions.postJsonResult(DnsValidatePath, candidate) { result ->
-              busy = false
-              error = if (result?.optBoolean("valid") == true) null else result?.optString("error") ?: "Нет ответа от демона."
-              diagnostics = result?.optJSONObject("data")?.toString(2)
-            }
-          }
-        }
-      },
-    )
-  }
+  if (editing != null && current != null) DnsProfileEditor(
+    originalId = editing, original = profiles?.optJSONObject(editing), appLabels = appLabels,
+    busy = saving, error = error, diagnostics = validation,
+    showDiagnostics = showValidation, onToggleDiagnostics = { showValidation = !showValidation },
+    onDismiss = { if (!saving) { editId = null; error = null; validation = null } },
+    onSubmit = { requestedId, profile, apply ->
+      val id = if (requestedId.isNotBlank()) requestedId else generateSequence(1) { it + 1 }
+        .map { "dns-$it" }.first { profiles?.has(it) != true }
+      if (editing.isEmpty() && profiles?.has(id) == true) {
+        error = "ID уже используется."
+      } else {
+        val candidate = JSONObject(current.toString())
+        candidate.getJSONObject("profiles").put(id, profile)
+        submit(candidate, apply)
+      }
+    },
+  )
+
   val deleting = deleteId
   if (deleting != null && current != null) AlertDialog(
-    onDismissRequest = { if (!busy) deleteId = null },
-    title = { Text("Удалить профиль $deleting?") },
-    text = { Column { Text("Будут удалены настройки и назначения этого профиля. Из работающего runtime он исчезнет после перезапуска ZDT-D."); error?.let { Text(it, color = MaterialTheme.colorScheme.error) } } },
-    confirmButton = { TextButton(enabled = !busy, onClick = {
-      val candidate = JSONObject(current.toString())
-      candidate.getJSONObject("profiles").remove(deleting)
-      submit(candidate)
-    }) { Text("Удалить") } },
-    dismissButton = { TextButton(enabled = !busy, onClick = { deleteId = null }) { Text("Отмена") } },
+    onDismissRequest = { if (!saving) deleteId = null },
+    title = { Text("Удалить ${profiles?.optJSONObject(deleting)?.optString("display_name") ?: deleting}?") },
+    text = { Text(error ?: "У профиля будут удалены настройки и назначения приложений.") },
+    confirmButton = {
+      TextButton(enabled = !saving, onClick = {
+        val candidate = JSONObject(current.toString())
+        candidate.getJSONObject("profiles").remove(deleting)
+        submit(candidate)
+      }) { Text("Удалить") }
+    },
+    dismissButton = { TextButton(enabled = !saving, onClick = { deleteId = null }) { Text("Отмена") } },
+  )
+
+  val checking = checkId
+  val checkProfile = checking?.let { profiles?.optJSONObject(it) }
+  if (checking != null && checkProfile != null) DnsProfileCheckDialog(
+    actions = actions, id = checking, name = checkProfile.optString("display_name", checking),
+    appLabels = appLabels, previous = reports[checking],
+    onResult = { reports[checking] = it; refreshStatus() }, onDismiss = { checkId = null },
   )
 }
 
 @Composable
+private fun DnsProfileCard(
+  profile: JSONObject, runtime: JSONObject?, report: JSONObject?, appLabels: Map<String, String>,
+  suspended: Boolean, editable: Boolean, onSwitch: (Boolean) -> Unit, onEdit: () -> Unit,
+  onDelete: () -> Unit, onCheck: () -> Unit,
+) {
+  var menu by remember { mutableStateOf(false) }
+  val enabled = profile.optBoolean("enabled")
+  val active = runtime?.optBoolean("process_running") == true && runtime.optBoolean("netd_applied")
+  val status = when {
+    suspended -> "Приостановлен"
+    !enabled -> "Выключен"
+    active -> "Применён"
+    runtime == null -> "Статус недоступен"
+    else -> "Не запущен"
+  }
+  val endpoint = profile.optString("endpoint")
+  val protocol = if (endpoint.startsWith("tls://", true)) "DoT" else "DoH"
+  val host = runCatching { java.net.URI(endpoint).host }.getOrNull().orEmpty()
+  val apps = profile.optJSONArray("apps")?.strings().orEmpty().map { appLabels[it] ?: it }.sorted()
+  OutlinedCard(Modifier.fillMaxWidth()) {
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+          Text(profile.optString("display_name"), style = MaterialTheme.typography.titleLarge)
+          Text("$protocol · $host", maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(enabled, onSwitch, enabled = editable && (apps.isNotEmpty() || enabled))
+        Box {
+          IconButton(onClick = { menu = true }, enabled = editable) { Icon(Icons.Default.MoreVert, "Действия профиля") }
+          DropdownMenu(menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Редактировать") }, onClick = { menu = false; onEdit() })
+            DropdownMenuItem(text = { Text("Удалить") }, onClick = { menu = false; onDelete() })
+          }
+        }
+      }
+      Text(status, style = MaterialTheme.typography.labelLarge, color = when {
+        active && enabled && !suspended -> MaterialTheme.colorScheme.primary
+        enabled && !suspended && runtime != null -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+      })
+      HorizontalDivider(Modifier.padding(top = 2.dp, bottom = 4.dp))
+      Text(if (apps.isEmpty()) "Приложения не выбраны" else "Приложения · ${apps.size}",
+        style = MaterialTheme.typography.labelMedium)
+      if (apps.isNotEmpty()) Text(
+        apps.take(4).joinToString(", ") + if (apps.size > 4) " · ещё ${apps.size - 4}" else "",
+        style = MaterialTheme.typography.bodyMedium,
+      )
+      report?.optJSONObject("upstream")?.let {
+        Text("Последний тест сервера · ${dnsStageText(it)}",
+          color = if (it.optString("state") == "ok") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.bodySmall)
+      }
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalButton(onClick = onCheck, enabled = editable) { Text(if (report == null) "Проверить" else "Диагностика") }
+        TextButton(onClick = onEdit, enabled = editable) { Text("Изменить") }
+      }
+    }
+  }
+}
+
+@Composable
 private fun DnsProfileEditor(
-  originalId: String, original: JSONObject?, busy: Boolean, error: String?, diagnostics: String?,
+  originalId: String, original: JSONObject?, appLabels: Map<String, String>,
+  busy: Boolean, error: String?, diagnostics: JSONObject?,
   showDiagnostics: Boolean, onToggleDiagnostics: () -> Unit,
   onDismiss: () -> Unit, onSubmit: (String, JSONObject, Boolean) -> Unit,
 ) {
-  var id by remember(originalId) { mutableStateOf(originalId.ifEmpty { "xbox" }) }
-  var name by remember(originalId) { mutableStateOf(original?.optString("display_name") ?: "Xbox DNS") }
-  var endpoint by remember(originalId) { mutableStateOf(original?.optString("endpoint") ?: "https://xbox-dns.ru/dns-query") }
+  var id by remember(originalId) { mutableStateOf(originalId) }
+  var name by remember(originalId) { mutableStateOf(original?.optString("display_name") ?: "") }
+  var endpoint by remember(originalId) { mutableStateOf(original?.optString("endpoint") ?: "") }
   var dot by remember(originalId) { mutableStateOf(endpoint.startsWith("tls://", true)) }
-  var bootstrap by remember(originalId) { mutableStateOf(original?.optJSONArray("bootstrap")?.strings()?.joinToString(", ") ?: "1.1.1.1, 9.9.9.9") }
+  var dohAddress by remember(originalId) { mutableStateOf(if (dot) "" else endpoint) }
+  var dotAddress by remember(originalId) { mutableStateOf(if (dot) endpoint else "") }
+  var bootstrap by remember(originalId) { mutableStateOf(original?.optJSONArray("bootstrap")?.strings()?.joinToString(", ") ?: "1.1.1.1") }
   var timeout by remember(originalId) { mutableStateOf(original?.optInt("timeout_ms")?.toString() ?: "7000") }
   var selected by remember(originalId) { mutableStateOf(original?.optJSONArray("apps")?.strings()?.toSet() ?: emptySet()) }
   var enabled by remember(originalId) { mutableStateOf(original?.optBoolean("enabled") ?: false) }
   var showApps by remember { mutableStateOf(false) }
+  var advanced by remember { mutableStateOf(false) }
   val address = endpoint.trim()
   val validProtocol = if (dot) !address.contains("://") || address.startsWith("tls://", true)
     else address.startsWith("https://", true)
+
+  val canSubmit = !busy && name.isNotBlank() && validProtocol && address.isNotBlank()
 
   fun payload(): JSONObject {
     val url = if (dot && !address.contains("://")) "tls://$address" else address
@@ -339,116 +324,137 @@ private fun DnsProfileEditor(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text(if (originalId.isEmpty()) "Новый DNS-профиль" else "DNS-профиль") },
+    title = { Text(if (originalId.isEmpty()) "Новый профиль" else "Редактировать профиль") },
     text = {
       Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(id, { id = it }, label = { Text("ID: латиница, цифры, _ и -") }, enabled = !busy && originalId.isEmpty(), singleLine = true)
-        OutlinedTextField(name, { name = it }, label = { Text("Название") }, enabled = !busy, singleLine = true)
+        OutlinedTextField(name, { name = it }, label = { Text("Название") }, enabled = !busy,
+          singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           FilterChip(selected = !dot, onClick = {
-            if (dot) { dot = false; endpoint = "" }
+            if (dot) { dot = false; endpoint = dohAddress }
           }, label = { Text("DoH") })
           FilterChip(selected = dot, onClick = {
-            if (!dot) { dot = true; endpoint = "" }
+            if (!dot) { dot = true; endpoint = dotAddress }
           }, label = { Text("DoT") })
         }
         OutlinedTextField(
-          endpoint, { endpoint = it },
+          endpoint, {
+            endpoint = it
+            if (dot) dotAddress = it else dohAddress = it
+          },
           label = { Text(if (dot) "Адрес DNS over TLS" else "Адрес DNS over HTTPS") },
-          supportingText = { Text(if (dot) "Например, dns.google или tls://dns.google:853" else "Полный URL, например https://xbox-dns.ru/dns-query") },
-          enabled = !busy, singleLine = true,
+          placeholder = { Text(if (dot) "dns.google" else "https://dns.google/dns-query") },
+          enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(bootstrap, { bootstrap = it }, label = { Text("DNS для поиска адреса DNS-сервера") }, supportingText = { Text("IPv4 DNS-серверов через запятую. Используются при подключении к частному DNS; запросы приложений идут к адресу выше.") }, enabled = !busy)
-        OutlinedTextField(timeout, { timeout = it }, label = { Text("Таймаут, мс (250–30000)") }, enabled = !busy, singleLine = true)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-          Column(Modifier.weight(1f)) { Text("Включить профиль"); Text("Применится после перезапуска ZDT-D", style = MaterialTheme.typography.bodySmall) }
-          Switch(checked = enabled, onCheckedChange = { enabled = it }, enabled = !busy && (selected.isNotEmpty() || enabled))
+        OutlinedButton(onClick = { showApps = true }, enabled = !busy,
+          modifier = Modifier.fillMaxWidth()) { Text("Приложения · ${selected.size}") }
+        if (selected.isNotEmpty()) {
+          Text(selected.map { appLabels[it] ?: it }.sorted().joinToString(", "),
+            style = MaterialTheme.typography.bodySmall)
         }
-        OutlinedButton(onClick = { showApps = true }, enabled = !busy) { Text("Приложения: ${selected.size}") }
-        if (selected.isNotEmpty()) TextButton(onClick = { selected = emptySet(); enabled = false }, enabled = !busy) { Text("Очистить назначения") }
-        Text("Один DNS-сервер на профиль. Выбранное приложение использует профильный TUN. Для системной точки доступа можно приостановить все DNS-профили главным переключателем. Встроенный DoH самого приложения этот профиль не переопределяет.")
-        OutlinedButton(onClick = { onSubmit(id.trim(), payload(), false) }, enabled = !busy && validProtocol && address.isNotBlank()) { Text("Проверить настройки и UID") }
-        Text("Проверка валидирует настройки/UID и показывает будущие netId/TUN. Доступность DNS-сервера проверяется при запуске профиля.")
-        diagnostics?.let {
-          TextButton(onClick = onToggleDiagnostics) {
-            Text(if (showDiagnostics) "Скрыть технические данные" else "Показать технические данные")
+        ListItem(
+          headlineContent = { Text("Включить профиль") },
+          trailingContent = {
+            Switch(checked = enabled, onCheckedChange = { enabled = it },
+              enabled = !busy && (selected.isNotEmpty() || enabled))
+          },
+        )
+        TextButton(onClick = { advanced = !advanced }) {
+          Text(if (advanced) "Скрыть дополнительные настройки" else "Дополнительные настройки")
+        }
+        if (advanced) {
+          if (originalId.isEmpty()) OutlinedTextField(id, { id = it },
+            label = { Text("ID профиля (необязательно)") }, enabled = !busy, singleLine = true)
+          OutlinedTextField(bootstrap, { bootstrap = it },
+            label = { Text("Bootstrap DNS") },
+            supportingText = { Text("Первый IPv4 используется для поиска адреса сервера.") }, enabled = !busy)
+          OutlinedTextField(timeout, { timeout = it }, label = { Text("Таймаут, мс") },
+            supportingText = { Text("От 250 до 30 000") }, enabled = !busy, singleLine = true)
+          TextButton(onClick = { onSubmit(id.trim(), payload(), false) }, enabled = canSubmit) {
+            Text("Проверить настройки")
           }
-          if (showDiagnostics) {
-            Surface(
-              color = MaterialTheme.colorScheme.surfaceVariant,
-              shape = MaterialTheme.shapes.small,
-            ) {
-              Text(it, modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+          if (diagnostics != null) {
+            Text("Настройки и назначения приложений прошли проверку.",
+              color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = onToggleDiagnostics) {
+              Text(if (showDiagnostics) "Скрыть технические данные" else "Технические данные")
             }
+            if (showDiagnostics) Text(diagnostics.toString(2), style = MaterialTheme.typography.bodySmall)
           }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
       }
     },
-    confirmButton = { TextButton(enabled = !busy && validProtocol && address.isNotBlank(), onClick = { onSubmit(id.trim(), payload(), true) }) { Text("Сохранить") } },
+    confirmButton = { TextButton(enabled = canSubmit, onClick = { onSubmit(id.trim(), payload(), true) }) { Text("Сохранить") } },
     dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
   )
-  if (showApps) DnsProfileAppPicker(selected, onDismiss = { showApps = false }, onSave = { selected = it; showApps = false })
+  if (showApps) DnsProfileAppPicker(selected, onDismiss = { showApps = false }, onSave = { selected = it; if (it.isEmpty()) enabled = false; showApps = false })
 }
 
-@Composable
-private fun DnsMetricCard(title: String, value: String, modifier: Modifier = Modifier) {
-  Card(
-    modifier = modifier,
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-  ) {
-    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-      Text(
-        title,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Text(value, style = MaterialTheme.typography.titleMedium)
-    }
-  }
-}
 
 private fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }
 
 @Composable
 private fun DnsProfileAppPicker(initial: Set<String>, onDismiss: () -> Unit, onSave: (Set<String>) -> Unit) {
   val context = LocalContext.current
-  var apps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
+  var apps by remember { mutableStateOf<List<InstalledApp>?>(null) }
   var selected by remember { mutableStateOf(initial) }
-  var query by remember { mutableStateOf("") }
-  var system by remember { mutableStateOf(false) }
-  var loading by remember { mutableStateOf(true) }
-  var error by remember { mutableStateOf<String?>(null) }
-  LaunchedEffect(Unit) {
+  var query by rememberSaveable { mutableStateOf("") }
+  var system by rememberSaveable { mutableStateOf(false) }
+  var onlySelected by rememberSaveable { mutableStateOf(false) }
+  var error by remember { mutableStateOf(false) }
+  LaunchedEffect(context) {
     val result = withContext(Dispatchers.IO) { runCatching { loadInstalledAppsCached(context.packageManager) } }
-    apps = result.getOrDefault(emptyList()).filter { it.packageName != "com.android.zdtd.service" }
-    error = result.exceptionOrNull()?.let { "Не удалось загрузить приложения." }
-    loading = false
+    apps = result.getOrDefault(emptyList()).filter { it.packageName != context.packageName && it.packageName != ZDTD_APP_PACKAGE_NAME }
+    error = result.isFailure
   }
-  val filtered = apps.filter { (!it.isSystem || system || it.packageName in selected) &&
-    (it.label.contains(query, true) || it.packageName.contains(query, true)) }
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text("Выбрать приложения") },
-    text = {
-      Column {
-        OutlinedTextField(query, { query = it }, label = { Text("Поиск") }, singleLine = true)
-        Row { Checkbox(system, { system = it }); Text("Системные приложения") }
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        LazyColumn(Modifier.heightIn(max = 360.dp)) {
-          items(filtered, key = { it.packageName }) { app ->
-            fun toggle() { selected = if (app.packageName in selected) selected - app.packageName else selected + app.packageName }
-            Row(Modifier.fillMaxWidth().clickable { toggle() }.padding(vertical = 4.dp)) {
-              Checkbox(app.packageName in selected, { toggle() })
-              Column { Text(app.label); Text(app.packageName, style = MaterialTheme.typography.bodySmall) }
+  val known = apps.orEmpty()
+  val installed = known.mapTo(mutableSetOf()) { it.packageName }
+  val visible = (known + (selected - installed).map { InstalledApp(it, it, false) })
+    .filter { app ->
+      val picked = app.packageName in selected
+      (!onlySelected || picked) && (!app.isSystem || system || picked) &&
+        (app.label.contains(query.trim(), true) || app.packageName.contains(query.trim(), true))
+    }
+    .sortedWith(compareByDescending<InstalledApp> { it.packageName in selected }.thenBy { it.sortKey })
+  Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Surface(Modifier.fillMaxSize()) {
+      Column(Modifier.safeDrawingPadding().imePadding().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Приложения профиля", style = MaterialTheme.typography.headlineSmall)
+        OutlinedTextField(query, { query = it }, label = { Text("Поиск по названию или пакету") },
+          singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          FilterChip(onlySelected, { onlySelected = !onlySelected }, label = { Text("Выбрано · ${selected.size}") })
+          FilterChip(system, { system = !system }, label = { Text("Системные") })
+        }
+        if (apps == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (error) Text("Не удалось прочитать список приложений.", color = MaterialTheme.colorScheme.error)
+        LazyColumn(Modifier.weight(1f)) {
+          items(visible, key = { it.packageName }) { app ->
+            val checked = app.packageName in selected
+            Row(
+              Modifier.fillMaxWidth().toggleable(checked, role = Role.Checkbox) {
+                selected = if (it) selected + app.packageName else selected - app.packageName
+              }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Checkbox(checked, onCheckedChange = null)
+              Column(Modifier.padding(start = 12.dp)) {
+                Text(app.label)
+                Text(if (app.packageName in installed) app.packageName else "Приложение не установлено",
+                  style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+              }
             }
+            HorizontalDivider()
           }
         }
-        Text("Выбрано: ${selected.size}. Общие UID проверяются перед сохранением.")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OutlinedButton(onDismiss, Modifier.weight(1f)) { Text("Отмена") }
+          Button(onClick = { onSave(selected) }, enabled = apps != null && !error, modifier = Modifier.weight(1f)) {
+            Text("Готово")
+          }
+        }
       }
-    },
-    confirmButton = { TextButton(enabled = !loading && error == null, onClick = { onSave(selected) }) { Text("Готово") } },
-    dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
-  )
+    }
+  }
 }

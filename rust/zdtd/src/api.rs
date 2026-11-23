@@ -5686,6 +5686,31 @@ fn handle_programs_subroutes(stream: TcpStream, method: &str, path: &str, header
             }
         }
 
+        ("POST", ["api", "programs", "dnsprofiles", "checks", id]) => {
+            use crate::programs::dnsprofiles as dns;
+            let result = (|| -> Result<serde_json::Value> {
+                if body.len() > 1024 {
+                    anyhow::bail!("dns_check_request_too_large");
+                }
+                let request: serde_json::Value = serde_json::from_slice(body)?;
+                let document = dns::load(Path::new(dns::CONFIG_PATH))?;
+                dns::diagnostics::start(id, request.get("domain").and_then(|v| v.as_str()), document)
+            })();
+            match result {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data})),
+                Err(e) => write_err(stream, e),
+            }
+        }
+        ("GET", ["api", "programs", "dnsprofiles", "checks", id, ticket]) => {
+            let data = ticket.parse().map(|ticket| {
+                crate::programs::dnsprofiles::diagnostics::result(id, ticket)
+            });
+            match data {
+                Ok(data) => write_json(stream, 200, json!({"ok": true, "data": data})),
+                Err(e) => write_err(stream, e.into()),
+            }
+        }
+
         // --- dnscrypt enabled/config
         ("GET", ["api", "programs", "dnscrypt", "enabled"]) => {
             let p = active_json_path("dnscrypt");
