@@ -101,13 +101,15 @@ pub fn start_if_enabled() -> Result<()> {
     ensure_dir(WORKING_DIR)?;
     fs::create_dir_all(WIREPROXY_ROOT).ok();
     fs::create_dir_all(WIREPROXY_PROFILE_ROOT).ok();
-    ensure_file(WIREPROXY_BIN)?;
-
     let active_path = Path::new(ACTIVE_JSON);
     let active: ActiveProfiles = match read_json(active_path) {
         Ok(v) => v,
         Err(e) => {
-            warn!("wireproxy: failed to read active.json (skip): {e:#}");
+            let missing = e.downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if !missing {
+                warn!("wireproxy: failed to read active.json (skip): {e:#}");
+            }
             return Ok(());
         }
     };
@@ -123,6 +125,7 @@ pub fn start_if_enabled() -> Result<()> {
         info!("wireproxy: no enabled profiles in active.json");
         return Ok(());
     }
+    ensure_file(WIREPROXY_BIN)?;
 
     let api_settings = settings::load_api_settings().unwrap_or_default();
     let hotspot_profile = api_settings
