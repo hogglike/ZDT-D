@@ -2,6 +2,7 @@ package com.android.zdtd.service.ui
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -26,6 +28,8 @@ import com.android.zdtd.service.ZdtdActions
 import com.android.zdtd.service.api.ApiModels
 import com.android.zdtd.service.diagnostics.connection.ConnectionDiagnosticsActivity
 import com.android.zdtd.service.modes.ConnectionModesActivity
+import com.android.zdtd.service.ui.theme.NetworkBackdrop
+import com.android.zdtd.service.ui.theme.NetworkPanel
 import kotlinx.coroutines.flow.StateFlow
 
 private enum class NetworkPage(val title: String) {
@@ -61,7 +65,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
   }
 
   Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
-    Column(Modifier.fillMaxSize().padding(padding)) {
+    Column(NetworkBackdrop(Modifier.fillMaxSize()).padding(padding)) {
       Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -78,10 +82,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
         ) {
           val running = ApiModels.isServiceOn(ui.status)
           val applying = ui.status?.let { it.startInProgress || it.stopInProgress } == true
-          Surface(
-            Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.primaryContainer,
-          ) {
+          NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
               Column(Modifier.weight(1f)) {
                 Text("Модуль ZDT-D", style = MaterialTheme.typography.labelLarge)
@@ -102,20 +103,23 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
           NetworkEntry(Icons.Default.Dns, "DNS для приложений", "Профили DoH и DoT") {
             page = NetworkPage.DNS
           }
-          NetworkEntry(Icons.Default.PlayCircle, "Zapret для YouTube", "Профили и стратегии") {
+          NetworkEntry(Icons.Default.PlayCircle, "Zapret для YouTube", "YouTube, Music и ReVanced") {
             page = NetworkPage.ZAPRET
           }
-          OutlinedCard(Modifier.fillMaxWidth()) {
-            ListItem(
-              leadingContent = { NetworkIcon(Icons.Default.VpnKey) },
-              headlineContent = { Text("VPN", style = MaterialTheme.typography.titleMedium) },
-              supportingContent = { Text("Режимы, приложения и серверы") },
-            )
-            Row(Modifier.padding(start = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-              TextButton(onClick = {
-                context.startActivity(Intent(context, ConnectionModesActivity::class.java))
-              }) { Text("Подключение") }
-              TextButton(onClick = { page = NetworkPage.SUBSCRIPTIONS }) { Text("Подписки") }
+          NetworkPanel(Modifier.fillMaxWidth()) {
+            Column {
+              ListItem(
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                leadingContent = { NetworkIcon(Icons.Default.VpnKey) },
+                headlineContent = { Text("VPN", style = MaterialTheme.typography.titleMedium) },
+                supportingContent = { Text("Режимы, приложения и серверы") },
+              )
+              Row(Modifier.padding(start = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = {
+                  context.startActivity(Intent(context, ConnectionModesActivity::class.java))
+                }) { Text("Подключение") }
+                TextButton(onClick = { page = NetworkPage.SUBSCRIPTIONS }) { Text("Подписки") }
+              }
             }
           }
           NetworkEntry(Icons.Default.NetworkCheck, "Проверка связи", "Интернет, DNS, YouTube и VPN") {
@@ -125,20 +129,23 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
         }
         NetworkPage.DNS -> DnsProfilesScreen(actions)
         NetworkPage.ZAPRET -> Column(Modifier.fillMaxSize()) {
-          Text(
-            "В профиле выбери YouTube или ReVanced. Старые профили видны на вкладке Zapret 1.",
-            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.bodyMedium,
-          )
-          Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("nfqws2" to "Zapret2", "nfqws" to "Zapret 1").forEach { (id, label) ->
-              val count = ui.programs.firstOrNull { it.id == id }?.profiles?.size ?: 0
-              FilterChip(selected = zapretEngine == id, onClick = { zapretEngine = id },
-                label = { Text(if (count > 0) "$label · $count" else label) })
+          NetworkPanel(Modifier.fillMaxWidth().padding(horizontal = 16.dp), accent = true) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+              Text("YouTube и YouTube Music", style = MaterialTheme.typography.titleMedium)
+              Text(
+                "Открой профиль и отметь установленные приложения, включая ReVanced, если ты им пользуешься.",
+                Modifier.padding(top = 4.dp),
+                style = MaterialTheme.typography.bodyMedium,
+              )
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("nfqws2" to "Zapret2", "nfqws" to "Zapret 1").forEach { (id, label) ->
+                  val count = ui.programs.firstOrNull { it.id == id }?.profiles?.size ?: 0
+                  FilterChip(selected = zapretEngine == id, onClick = { zapretEngine = id },
+                    label = { Text(if (count > 0) "$label · $count" else label) })
+                }
+              }
+              TextButton(onClick = { page = NetworkPage.TESTER }) { Text("Проверить стратегии") }
             }
-          }
-          TextButton(onClick = { page = NetworkPage.TESTER }, modifier = Modifier.padding(horizontal = 12.dp)) {
-            Text("Проверить стратегию")
           }
           Box(Modifier.weight(1f)) {
             ProgramScreen(
@@ -163,8 +170,10 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
 
 @Composable
 private fun NetworkEntry(icon: ImageVector, title: String, detail: String, open: () -> Unit) {
-  OutlinedCard(onClick = open, modifier = Modifier.fillMaxWidth()) {
+  NetworkPanel(Modifier.fillMaxWidth()) {
     ListItem(
+      modifier = Modifier.clickable(onClick = open),
+      colors = ListItemDefaults.colors(containerColor = Color.Transparent),
       leadingContent = { NetworkIcon(icon) },
       headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
       supportingContent = { Text(detail) },
@@ -175,7 +184,7 @@ private fun NetworkEntry(icon: ImageVector, title: String, detail: String, open:
 
 @Composable
 private fun NetworkIcon(icon: ImageVector) {
-  Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
+  Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
     Icon(icon, null, Modifier.padding(9.dp).size(22.dp))
   }
 }

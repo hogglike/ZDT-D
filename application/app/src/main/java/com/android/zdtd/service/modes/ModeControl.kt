@@ -177,13 +177,19 @@ internal fun bindVpnWidget(context: Context, views: RemoteViews) {
   ModeClient.modes.forEachIndexed { index, target ->
     val intent = ModeClient.confirmation(context, target).putExtra("widget", true)
     views.setOnClickPendingIntent(buttons[index], PendingIntent.getActivity(context, 20200 + index, intent, flags))
-    views.setInt(buttons[index], "setBackgroundColor", when {
-      target != mode -> 0xff263d39.toInt()
-      state == "connecting" || health == "checking" || health == "partial" -> 0xff645125.toInt()
-      state == "error" || state == "connected" && health == "fail" -> 0xff6d343e.toInt()
-      state == "connected" -> 0xff1d664c.toInt()
-      else -> 0xff263d39.toInt()
-    })
+    val selected = target == mode
+    val connected = selected && state == "connected" && health !in listOf("checking", "partial", "fail")
+    val background = when {
+      connected -> R.drawable.widget_network_button_selected
+      selected && (active || state == "error") -> R.drawable.widget_network_button_pending
+      else -> R.drawable.widget_network_button
+    }
+    views.setInt(buttons[index], "setBackgroundResource", background)
+    views.setTextColor(buttons[index], context.getColor(when {
+      connected -> R.color.widget_network_on_accent
+      selected && (active || state == "error") -> R.color.widget_network_accent
+      else -> R.color.widget_network_text
+    }))
   }
   val detail = when (health) {
     "checking" -> "проверка"
@@ -203,7 +209,9 @@ internal fun bindVpnWidget(context: Context, views: RemoteViews) {
   views.setOnClickPendingIntent(R.id.mode_settings, PendingIntent.getActivity(context, 20204, settings, flags))
   views.setOnClickPendingIntent(R.id.mode_server, PendingIntent.getActivity(context, 20206, picker, flags))
   views.setBoolean(R.id.mode_stop, "setEnabled", active)
-  views.setTextColor(R.id.mode_stop, if (active) 0xffa9f2d7.toInt() else 0xffa1aaa8.toInt())
+  views.setTextColor(R.id.mode_stop, context.getColor(
+    if (active) R.color.widget_network_accent else R.color.widget_network_muted,
+  ))
   val stop = Intent(context, ModeActionService::class.java).putExtra("mode", "")
   views.setOnClickPendingIntent(R.id.mode_stop, PendingIntent.getForegroundService(context, 20205, stop, flags))
 }

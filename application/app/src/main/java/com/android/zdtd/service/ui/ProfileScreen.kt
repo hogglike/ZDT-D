@@ -60,7 +60,6 @@ fun ProfileScreen(
     Spacer(Modifier.height(effectiveTopContentPadding))
 
     StrategicProfileEnabledCard(
-      programId = programId,
       toolName = toolName,
       profile = profile,
       checked = prof?.enabled ?: false,
@@ -131,14 +130,13 @@ fun ProfileScreen(
 
 @Composable
 private fun StrategicProfileEnabledCard(
-  programId: String,
   toolName: String,
   profile: String,
   checked: Boolean,
   onCheckedChange: (Boolean) -> Unit,
 ) {
   val compact = rememberIsCompactWidth()
-  val accent = strategicAccentFor(programId, checked)
+  val accent = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
   val stateText = stringResource(if (checked) R.string.enabled_state_on else R.string.enabled_state_off)
 
   Card(
@@ -207,7 +205,6 @@ internal fun StrategicProfileTabs(
   tabs: List<Pair<Int, String>>,
   selected: Int,
   onSelect: (Int) -> Unit,
-  activeTextColor: Color = Color(0xFF7DD3FC),
 ) {
   val compact = rememberIsCompactWidth()
   Surface(
@@ -227,9 +224,10 @@ internal fun StrategicProfileTabs(
             .weight(1f)
             .clickable { onSelect(index) },
           shape = RoundedCornerShape(16.dp),
-          color = if (active) Color(0xFF38BDF8).copy(alpha = 0.18f) else Color.Transparent,
-          contentColor = if (active) activeTextColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.70f),
-          border = if (active) BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.28f)) else null,
+          color = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+          contentColor = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+          else MaterialTheme.colorScheme.onSurfaceVariant,
+          border = if (active) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)) else null,
         ) {
           Box(
             modifier = Modifier.padding(horizontal = 6.dp, vertical = if (compact) 8.dp else 9.dp),
@@ -246,16 +244,5 @@ internal fun StrategicProfileTabs(
         }
       }
     }
-  }
-}
-
-private fun strategicAccentFor(programId: String, checked: Boolean): Color {
-  if (!checked) return Color(0xFF94A3B8)
-  return when (programId) {
-    "nfqws" -> Color(0xFF38BDF8)
-    "nfqws2" -> Color(0xFF60A5FA)
-    "dpitunnel" -> Color(0xFFA78BFA)
-    "byedpi" -> Color(0xFFF97316)
-    else -> Color(0xFF22C55E)
   }
 }

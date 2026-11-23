@@ -1,5 +1,8 @@
 package com.android.zdtd.service.diagnostics.connection
 
+import com.android.zdtd.service.RootConfigManager
+import com.android.zdtd.service.ui.theme.ZdtdTheme
+import com.android.zdtd.service.ui.theme.ZdtdThemeMode
 import android.content.Intent
 import android.net.*
 import android.os.Bundle
@@ -10,8 +13,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.android.zdtd.service.ui.theme.NetworkBackdrop
+import com.android.zdtd.service.ui.theme.NetworkPanel
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -56,8 +63,9 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
   }
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    val themeMode = ZdtdThemeMode.fromStorage(RootConfigManager(this).getThemeMode())
     setContent {
-      MaterialTheme {
+      ZdtdTheme(themeMode) {
         var tick by remember { mutableStateOf(0) }
         LaunchedEffect(Unit) { while (isActive) { delay(750); tick++ } }
         var editTargets by remember { mutableStateOf(false) }
@@ -73,34 +81,58 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
         val error = prefs.getString("error", null)
         val zip = File(cacheDir, "ZDTD_hotspot_report.zip")
         Surface(Modifier.fillMaxSize()) {
-          Column(Modifier.safeDrawingPadding().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Проверка соединения", style = MaterialTheme.typography.headlineSmall)
-            Text("Напрямую · VPN · DNS · YouTube")
-            OutlinedButton(onClick = { editTargets = true }) { Text("Сайты и таймаут") }
-            Button(onClick = { start("CHECK") }, enabled = !checking && !capture) { Text(if (checking) "Проверка…" else "Проверить сейчас") }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              Switch(checked = prefs.getBoolean("automatic", false), onCheckedChange = {
-                prefs.edit().putBoolean("automatic", it).apply()
-                ConnectionHealthJobService.schedule(this@ConnectionDiagnosticsActivity, it)
-                tick++
-                if (it) start("CHECK")
-              })
-              Text("Автопроверка каждые 30 минут", Modifier.weight(1f))
+          Column(
+            NetworkBackdrop(Modifier.fillMaxSize())
+              .safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              IconButton(onClick = { finish() }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+              }
+              Text("Проверка связи", style = MaterialTheme.typography.headlineSmall)
             }
-            Text("Android может задержать фоновую проверку. При смене сети проверка запускается сразу, пока этот экран открыт. Внешние сайты получат небольшие тестовые запросы.", style = MaterialTheme.typography.bodySmall)
+            NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
+              Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Интернет, VPN, DNS и YouTube", style = MaterialTheme.typography.titleMedium)
+                Button(onClick = { start("CHECK") }, enabled = !checking && !capture) {
+                  Text(if (checking) "Проверка…" else "Проверить сейчас")
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                  Text("Автопроверка · 30 мин", Modifier.weight(1f))
+                  Switch(checked = prefs.getBoolean("automatic", false), onCheckedChange = {
+                    prefs.edit().putBoolean("automatic", it).apply()
+                    ConnectionHealthJobService.schedule(this@ConnectionDiagnosticsActivity, it)
+                    tick++
+                    if (it) start("CHECK")
+                  })
+                }
+                TextButton(onClick = { editTargets = true }) { Text("Сайты и таймаут") }
+                Text(
+                  "Android может задержать фоновую проверку. При смене сети открытый экран проверяет связь сразу.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
             val time = report.optLong("time")
             if (time > 0) {
               Text("${report.optString("network")} · ${SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault()).format(Date(time))}")
               if (now - time > 60 * 60 * 1000) Text("Результаты устарели", color = MaterialTheme.colorScheme.error)
-              Text(report.optString("summary"))
+              Text(report.optString("summary"), style = MaterialTheme.typography.titleMedium)
               val rows = report.optJSONArray("rows")
               if (rows != null) for (i in 0 until rows.length()) {
                 val row = rows.getJSONObject(i)
                 val state = row.optString("state")
-                Card(Modifier.fillMaxWidth()) {
+                NetworkPanel(Modifier.fillMaxWidth()) {
                   Column(Modifier.padding(12.dp)) {
                     Text((when (state) { "ok" -> "✓ "; "off" -> "○ "; else -> "! " }) + row.optString("name"),
-                      color = when (state) { "ok" -> Color(0xFF28743B); "off" -> Color.Gray; else -> MaterialTheme.colorScheme.error })
+                      color = when (state) {
+                        "ok" -> MaterialTheme.colorScheme.onSurface
+                        "off" -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.error
+                      })
                     Text(row.optString("detail"), style = MaterialTheme.typography.bodySmall)
                   }
                 }
@@ -122,7 +154,6 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
               startActivity(Intent.createChooser(send, "Сохранить или отправить отчёт"))
             }, enabled = zip.exists() && !capture) { Text("Сохранить / отправить ZIP-отчёт") }
             Text("Отчёт остаётся на телефоне. Перед отправкой проверь содержимое: в нём есть сетевые адреса. Рабочие настройки раздачи и DNS запись не меняет.", style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = { finish() }) { Text("Назад") }
           }
         }
       }

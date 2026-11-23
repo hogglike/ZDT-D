@@ -14,13 +14,19 @@ import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
 
+private val YoutubeTestUrls = listOf(
+  "https://www.youtube.com/",
+  "https://music.youtube.com/",
+  "https://i.ytimg.com/generate_204",
+).joinToString("\n")
+
 @Composable
 fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, String) -> Unit) {
   val context = LocalContext.current
   val prefs = remember { context.getSharedPreferences("zapret_auto", Context.MODE_PRIVATE) }
   val scope = rememberCoroutineScope()
   val report by ZapretAutoReport.state.collectAsState()
-  var urls by remember { mutableStateOf(prefs.getString("urls", "https://www.youtube.com/\nhttps://i.ytimg.com/generate_204\nhttps://discord.com/").orEmpty()) }
+  var urls by remember { mutableStateOf(prefs.getString("urls", YoutubeTestUrls).orEmpty()) }
   var limit by remember { mutableStateOf(prefs.getInt("limit", 12)) }
   var message by remember { mutableStateOf("") }
   var details by remember { mutableStateOf(false) }
@@ -33,10 +39,13 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
       Text("Автоподбор Zapret", style = MaterialTheme.typography.titleLarge)
       Text("Дважды проверяет каждый HTTPS-адрес через настоящие правила выбранной стратегии. Основной ZDT-D и другие VPN должны быть выключены. Настройки профилей до применения не меняются.")
       OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth(), enabled = !running, label = { Text("Что должно открываться · 1–4 HTTPS-адреса") }, minLines = 2)
+      TextButton(onClick = { urls = YoutubeTestUrls }, enabled = !running) {
+        Text("Адреса YouTube и Music")
+      }
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (count in listOf(12, 30, 100)) FilterChip(limit == count, { limit = count }, enabled = !running, label = { Text(if (count == 100) "Все (до 100)" else "$count стратегий") })
       }
-      Text("Проверяются первые варианты из установленного набора. Успех означает ответы HTTP 2xx/3xx в обеих попытках; видео, QUIC и звонки проверь отдельно. Максимальная сессия — 30 минут.", style = MaterialTheme.typography.bodySmall)
+      Text("Проверяются первые варианты из установленного набора. Успех означает ответы HTTP 2xx/3xx в обеих попытках; воспроизведение видео и музыки проверь в приложениях. Максимальная сессия — 30 минут.", style = MaterialTheme.typography.bodySmall)
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
           prefs.edit().putString("urls", urls).putInt("limit", limit).apply()

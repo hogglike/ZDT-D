@@ -1,5 +1,8 @@
 package com.android.zdtd.service.modes
 
+import com.android.zdtd.service.RootConfigManager
+import com.android.zdtd.service.ui.theme.ZdtdTheme
+import com.android.zdtd.service.ui.theme.ZdtdThemeMode
 import com.android.zdtd.service.BuildConfig
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -49,7 +52,8 @@ class ConnectionModesActivity : ComponentActivity() {
   @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContent { MaterialTheme { Screen() } }
+    val themeMode = ZdtdThemeMode.fromStorage(RootConfigManager(this).getThemeMode())
+    setContent { ZdtdTheme(themeMode) { Screen() } }
   }
   @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
   @Composable

@@ -1,5 +1,8 @@
 package com.android.zdtd.service.modes
 
+import com.android.zdtd.service.RootConfigManager
+import com.android.zdtd.service.ui.theme.ZdtdTheme
+import com.android.zdtd.service.ui.theme.ZdtdThemeMode
 import android.os.Bundle
 import android.content.Intent
 import androidx.activity.ComponentActivity
@@ -21,7 +24,8 @@ class ModeServerPickerActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     val mode = intent.getStringExtra("mode").orEmpty()
     if (mode !in ModeClient.modes) { finish(); return }
-    setContent { MaterialTheme {
+    val themeMode = ZdtdThemeMode.fromStorage(RootConfigManager(this).getThemeMode())
+    setContent { ZdtdTheme(themeMode) {
       val scope = rememberCoroutineScope()
       var nodes by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
       var status by remember { mutableStateOf(JSONObject()) }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_network_text">#31151A</color>
+    <color name="widget_network_muted">#71535A</color>
+    <color name="widget_network_accent">#A41B2D</color>
+    <color name="widget_network_on_accent">#FFFFFF</color>
+</resources>

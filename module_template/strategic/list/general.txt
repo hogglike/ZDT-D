@@ -2,6 +2,8 @@ googlevideo.com
 youtu.be
 youtube.com
 youtubei.googleapis.com
+youtube.googleapis.com
+music.youtube.com
 youtubeembeddedplayer.googleapis.com
 ytimg.l.google.com
 ytimg.com

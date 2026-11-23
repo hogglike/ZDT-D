@@ -54,7 +54,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -208,11 +207,6 @@ fun ProgramScreen(
           ),
           selected = dnscryptTab,
           onSelect = { dnscryptTab = it },
-          activeTextColor = if (MaterialTheme.colorScheme.background.luminance() > 0.5f) {
-            Color.Black
-          } else {
-            Color(0xFF7DD3FC)
-          },
         )
       }
     } else if (program.id == "operaproxy") {
@@ -1758,8 +1752,8 @@ internal fun ProfilesSectionTitle() {
 @Composable
 internal fun CreateProfileCard(onAdd: () -> Unit) {
   val compact = rememberIsCompactWidth()
-  val accent = Color(0xFFA78BFA)
-  val accentSoft = Color(0xFFFF4D7D)
+  val accent = MaterialTheme.colorScheme.primary
+  val accentSoft = MaterialTheme.colorScheme.primaryContainer
   val shape = RoundedCornerShape(if (compact) 20.dp else 24.dp)
 
   Surface(
@@ -1930,8 +1924,8 @@ private fun CreateProfileDialog(
   val enterNameErr = stringResource(R.string.enter_a_name)
   val invalidNameSnack = stringResource(invalidNameRes)
   val profileExistsErr = stringResource(existsErrorRes)
-  val accent = Color(0xFFA78BFA)
-  val accentSoft = Color(0xFFFF4D7D)
+  val accent = MaterialTheme.colorScheme.primary
+  val accentSoft = MaterialTheme.colorScheme.primaryContainer
   val dialogShape = RoundedCornerShape(28.dp)
 
   Dialog(

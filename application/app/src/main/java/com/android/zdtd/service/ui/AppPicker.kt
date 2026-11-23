@@ -265,6 +265,15 @@ fun NfqwsAppListsSection(
   }
 }
 
+private val ZapretYoutubePackages = setOf(
+  "com.google.android.youtube",
+  "com.google.android.apps.youtube.music",
+  "app.revanced.android.youtube",
+  "app.revanced.android.apps.youtube.music",
+  "app.rvx.android.youtube",
+  "app.rvx.android.apps.youtube.music",
+)
+
 private data class AppPickerMoveConfirm(
   val removalsByPath: Map<String, Set<String>>,
   val entries: List<ApiModels.AppAssignmentEntry>,
@@ -476,6 +485,16 @@ internal fun AppPickerSheet(
     }
   }
 
+  val youtubeApps = remember(path, apps, assignments, activeConflictReasons, hiddenPackages) {
+    if (assignments == null || !(path.startsWith("/api/programs/nfqws/") || path.startsWith("/api/programs/nfqws2/"))) {
+      emptySet()
+    } else {
+      apps.map { it.packageName }.filterTo(mutableSetOf()) { packageName ->
+        packageName in ZapretYoutubePackages && packageName !in activeConflictReasons && packageName !in hiddenPackages
+      }
+    }
+  }
+
   val appsByPackage = remember(apps) { apps.associateBy { it.packageName } }
   val selectedAppsAll = remember(appsByPackage, selected) {
     selected.map { pkg -> appsByPackage[pkg] ?: InstalledApp(pkg, pkg, false) }
@@ -609,6 +628,11 @@ internal fun AppPickerSheet(
         label = { Text(stringResource(R.string.app_picker_search)) },
       )
 
+      if (youtubeApps.any { it !in selected }) {
+        TextButton(onClick = { selected = selected + youtubeApps }) {
+          Text("Выбрать YouTube и Music")
+        }
+      }
       Spacer(Modifier.height(10.dp))
 
       Crossfade(targetState = appsLoading) { isLoading ->
