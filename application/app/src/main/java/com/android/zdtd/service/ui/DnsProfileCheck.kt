@@ -83,6 +83,22 @@ private fun dnsSummary(report: JSONObject): String {
   val upstream = report.optJSONObject("upstream")?.optString("state")
   val listener = report.optJSONObject("listener")?.optString("state")
   val redirect = report.optJSONObject("redirect")?.optString("state")
+  report.optJSONObject("gemini_filter")?.let { filter ->
+    return when {
+      !report.optBoolean("enabled") -> "Профиль Gemini выключен"
+      report.optBoolean("suspended_for_tethering") -> "DNS-профили на паузе"
+      report.optBoolean("global_dnscrypt_enabled") -> "Запуску мешает глобальный DNSCrypt"
+      report.optString("android_private_dns") == "hostname" -> "В Android включён строгий «Частный DNS»"
+      filter.optLong("updated_at") == 0L -> "Список Gemini ещё не загружен"
+      !runtime.optBoolean("sing_box") || !runtime.optBoolean("tun2socks") -> "Список загружен · профиль Gemini не запущен"
+      !runtime.optBoolean("config_matches") -> "Нужно применить обновлённый профиль"
+      !runtime.optBoolean("netd") -> "Профиль Gemini не назначен приложениям"
+      !filter.optBoolean("matches_domain") -> "Для этого домена нет записи в списке Gemini"
+      filter.optBoolean("redirect_matches") -> "Gemini получает DNS-адрес из списка"
+      filter.optBoolean("listener_matches") -> "Адрес из списка получен локально · проверь порт 53"
+      else -> "Нет подтверждения, что Gemini получил адрес из списка"
+    }
+  }
   return when {
     upstream != "ok" && bootstrap !in listOf("ok", "not_needed") -> "Bootstrap DNS не вернул адрес сервера"
     upstream != "ok" -> "Внешний DNS не ответил на проверку"
@@ -111,7 +127,8 @@ private fun reportText(report: JSONObject): String = buildString {
   appendLine("Проверяемый домен ${report.optString("domain")}")
   stages.forEach { (key, title) ->
     report.optJSONObject(key)?.let { stage ->
-      appendLine("$title — ${dnsStageText(stage)}")
+      val label = if (key == "upstream" && report.optJSONObject("gemini_filter") != null) "Обычный DNS вне списка" else title
+      appendLine("$label — ${dnsStageText(stage)}")
       eventTexts(stage).forEach { appendLine("  $it") }
     }
   }
@@ -277,8 +294,9 @@ internal fun DnsProfileCheckDialog(
               OutlinedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                   val tested = report.optString("upstream_domain")
+                  val name = if (key == "upstream" && report.optJSONObject("gemini_filter") != null) "Обычный DNS вне списка" else label
                   Text(
-                    if (key == "upstream" && tested.isNotBlank() && tested != report.optString("domain")) "$label · $tested" else label,
+                    if (key == "upstream" && tested.isNotBlank() && tested != report.optString("domain")) "$name · $tested" else name,
                     style = MaterialTheme.typography.labelLarge,
                   )
                   Text(dnsStageText(stage), color = when (state) {

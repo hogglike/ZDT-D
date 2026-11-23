@@ -13,7 +13,7 @@ use std::{
 const SOURCE: &str = "https://raw.githubusercontent.com/Noktomezo/RussiaFancyLists/main/lists/hosts/smart-no-crutch.adguard.txt";
 const INTERVAL: Duration = Duration::from_secs(3600);
 const MAX_SOURCE: u64 = 512 * 1024;
-const CORE_DOMAIN: &str = "gemini.google.com";
+pub(super) const CORE_DOMAIN: &str = "gemini.google.com";
 const DOMAINS: &[&str] = &[
     CORE_DOMAIN,
     "bard.google.com",
@@ -116,10 +116,18 @@ pub(super) fn ensure_cache() -> Result<()> {
     }
 }
 
+pub(super) fn cached_addresses(domain: &str) -> BTreeSet<Ipv4Addr> {
+    if !DOMAINS.contains(&domain) {
+        return BTreeSet::new();
+    }
+    fs::read_to_string(path()).unwrap_or_default().lines().filter_map(|line| {
+        let (address, name) = line.split_once(' ')?;
+        (name == domain).then(|| address.parse().ok()).flatten()
+    }).collect()
+}
+
 pub(super) fn has_cached_rule(domain: &str) -> bool {
-    DOMAINS.contains(&domain) && fs::read_to_string(path()).is_ok_and(|source| {
-        source.lines().any(|line| line.split_once(' ').is_some_and(|(_, name)| name == domain))
-    })
+    !cached_addresses(domain).is_empty()
 }
 
 pub fn status() -> Value {
@@ -177,7 +185,8 @@ pub fn start_worker() {
                 None
             };
             *STATE.lock().unwrap_or_else(|e| e.into_inner()) = (false, error);
-            next = Some(Instant::now() + INTERVAL);
+            let delay = if error.is_some() { Duration::from_secs(300) } else { INTERVAL };
+            next = Some(Instant::now() + delay);
         }
     });
 }

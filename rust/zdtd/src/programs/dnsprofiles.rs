@@ -18,13 +18,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket},
+    net::{Ipv4Addr, SocketAddrV4, TcpStream},
     os::unix::{fs::OpenOptionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use super::common::{stable_netid, u32_to_ipv4, wait_tun_link, NETID_DNSPROFILES};
@@ -36,6 +36,7 @@ use crate::{
 };
 
 const AUTOMATIC_DNS: &str = "system://android";
+const LOCAL_DNS_CHECK: &str = "zdt-gemini-check.invalid";
 pub const CONFIG_PATH: &str = "/data/adb/modules/ZDT-D/working_folder/dnsprofiles/profiles.json";
 pub const MAX_BYTES: usize = 256 * 1024;
 const ROOT: &str = "/data/adb/modules/ZDT-D/working_folder/dnsprofiles";
@@ -453,7 +454,7 @@ fn parse_endpoint(endpoint: &str) -> Result<reqwest::Url> {
 
 fn upstreams(profile: &DnsProfile, network_dns: Option<Ipv4Addr>) -> Result<Vec<Value>> {
     let bootstrap = *profile.bootstrap.first().context("dnsprofiles: missing bootstrap DNS")?;
-    if profile.endpoint == AUTOMATIC_DNS {
+    if profile.google_filter {
         let primary = network_dns.unwrap_or(bootstrap);
         return Ok(vec![json!({"type": "udp", "tag": "profile-upstream", "server": primary})]);
     }
@@ -514,7 +515,7 @@ fn network_dns() -> Option<Ipv4Addr> {
 }
 
 fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
-    let network_dns = (plan.profile.endpoint == AUTOMATIC_DNS).then(network_dns).flatten();
+    let network_dns = plan.profile.google_filter.then(network_dns).flatten();
     let servers = upstreams(&plan.profile, network_dns)?;
     let mut config = json!({
         "log": {"level": "info", "timestamp": true},
@@ -550,6 +551,7 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
             "type": "hosts", "tag": "gemini-filter", "path": [google_filter::path()]
         }));
         config["dns"]["rules"] = json!([
+            {"domain": [LOCAL_DNS_CHECK], "query_type": ["A"], "action": "predefined", "rcode": "NOERROR"},
             {
                 "query_type": ["A"], "preferred_by": "gemini-filter",
                 "action": "route", "server": "gemini-filter", "disable_cache": true, "rewrite_ttl": 60
@@ -559,6 +561,11 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
                 "action": "predefined", "rcode": "NOERROR"
             }
         ]);
+        // SOCKS clients can pass a name directly. Resolve those with the same
+        // DNS rules as regular Android queries before dialing the outbound.
+        config["route"]["rules"].as_array_mut().context("missing routing rules")?.push(json!({
+            "inbound": ["dns-profile-mixed"], "action": "resolve", "strategy": "ipv4_only"
+        }));
     }
     Ok(config)
 }
@@ -576,6 +583,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 fn prepare_plan_files(plan: &RuntimePlan) -> Result<()> {
     if plan.profile.google_filter {
         google_filter::ensure_cache()?;
+        if !google_filter::has_cached_rule(google_filter::CORE_DOMAIN) {
+            let _ = google_filter::request_refresh();
+        }
     }
     fs::create_dir_all(&plan.root).with_context(|| format!("mkdir {}", plan.root.display()))?;
     let config = serde_json::to_vec_pretty(&build_singbox_config(plan)?)?;
@@ -911,30 +921,15 @@ fn dns_query_for(id: u16, domain: &str) -> Vec<u8> {
     buf
 }
 
-fn dns_probe_once(ip: Ipv4Addr) -> bool {
-    let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) else { return false; };
-    let _ = socket.set_read_timeout(Some(Duration::from_secs(2)));
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let id = ((std::process::id() as u16) ^ (nanos as u16) ^ ((nanos >> 16) as u16)).wrapping_add(0x3157);
-    let packet = dns_query_for(id, "example.com");
-    if socket.send_to(&packet, SocketAddrV4::new(ip, 53)).is_err() {
-        return false;
-    }
-    let mut buf = [0u8; 1024];
-    let Ok((n, _)) = socket.recv_from(&mut buf) else { return false; };
-    if n < 12 || u16::from_be_bytes([buf[0], buf[1]]) != id {
-        return false;
-    }
-    let flags = u16::from_be_bytes([buf[2], buf[3]]);
-    let rcode = flags & 0x000f;
-    rcode == 0 || rcode == 3
-}
-
 fn wait_dns_ready(plan: &RuntimePlan) -> Result<()> {
     let ip: Ipv4Addr = plan.dns.parse().context("dnsprofiles generated DNS is invalid")?;
+    let (domain, expected) = if plan.profile.google_filter {
+        // The starter only needs a functioning local port and DNS rules.
+        // Subscription availability and external DNS are checked separately.
+        (LOCAL_DNS_CHECK, &["no_records"][..])
+    } else {
+        ("example.com", &["ok", "no_records", "nxdomain"][..])
+    };
     let deadline = Instant::now() + DNS_WAIT;
     while Instant::now() < deadline {
         if let Some(pid) = read_pid(&plan.pid) {
@@ -942,12 +937,13 @@ fn wait_dns_ready(plan: &RuntimePlan) -> Result<()> {
                 bail!("dnsprofiles: sing-box for {} exited during DNS readiness", plan.id);
             }
         }
-        if dns_probe_once(ip) {
+        let response = diagnostics::udp_probe(SocketAddrV4::new(ip, 53), domain, Duration::from_secs(2));
+        if response["state"].as_str().is_some_and(|state| expected.contains(&state)) {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(500));
     }
-    bail!("dnsprofiles: upstream DNS readiness failed for {} via {}", plan.id, plan.profile.endpoint)
+    bail!("dnsprofiles: DNS readiness failed for {} ({domain})", plan.id)
 }
 
 fn start_plan(plan: &RuntimePlan) -> Result<()> {
@@ -972,8 +968,7 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
     let start_result = (|| -> Result<()> {
         wait_tcp_ready(plan.proxy_port, TUN_WAIT)?;
         install_dns_port_redirects(plan)?;
-        // Verify the local DNS listener and encrypted upstream before handing the TUN
-        // to Android netd.
+        // Verify DNS through the port 53 redirect before registering the TUN.
         wait_dns_ready(plan)?;
         let tun_pid = spawn_tun2socks(plan)?;
         wait_tun_link(&plan.tun, TUN_WAIT)?;
@@ -986,7 +981,7 @@ fn start_plan(plan: &RuntimePlan) -> Result<()> {
             plan.tun,
             plan.dns,
             plan.proxy_port,
-            plan.profile.endpoint
+            if plan.profile.google_filter { "gemini-filter" } else { &plan.profile.endpoint }
         );
         Ok(())
     })();
@@ -1162,9 +1157,8 @@ pub fn runtime_status() -> RuntimeStatus {
 }
 
 /// Run read-only live checks against the currently applied DNS runtime.
-/// The DNS probe sends a real UDP query for example.com to the profile-local
-/// listener; interface counters are included so the companion shell capture
-/// can compare traffic before and after opening selected applications.
+/// Profiles with the subscription probe the Gemini rule through port 53.
+/// Ordinary profiles probe the response from their configured upstream.
 pub fn runtime_diagnostics() -> Result<Value> {
     let document = load(Path::new(CONFIG_PATH))?;
     let names = document.profiles.keys().cloned().collect::<Vec<_>>();
@@ -1217,11 +1211,17 @@ pub fn runtime_diagnostics() -> Result<Value> {
             Err(e) => (Value::Null, json!(format!("{e:#}"))),
         };
 
+        let domain = if profile.google_filter { google_filter::CORE_DOMAIN } else { "example.com" };
         let should_probe = profile.enabled && !document.suspend_for_tethering && process_running;
         let dns_query_ok = if should_probe {
             tested_profiles += 1;
             let ip: Ipv4Addr = plan.dns.parse().context("dnsprofiles generated DNS is invalid")?;
-            let ok = dns_probe_once(ip);
+            let result = diagnostics::udp_probe(SocketAddrV4::new(ip, 53), domain, Duration::from_secs(2));
+            let ok = if profile.google_filter {
+                diagnostics::matches_filter(&result, &google_filter::cached_addresses(domain))
+            } else {
+                result["state"].as_str().is_some_and(|state| matches!(state, "ok" | "no_records" | "nxdomain"))
+            };
             if ok {
                 passed_profiles += 1;
             }
@@ -1249,6 +1249,7 @@ pub fn runtime_diagnostics() -> Result<Value> {
                 "process_running": process_running,
                 "netd_applied": netd_applied,
                 "default_route_present": default_route_present,
+                "probe_name": domain,
                 "dns_query_sent": should_probe,
                 "dns_query_ok": dns_query_ok,
                 "interface_stats": interface_stats,
@@ -1479,7 +1480,9 @@ mod tests {
         assert!(validate(&doc).is_err());
         doc.profiles.get_mut("google").unwrap().google_filter = true;
         assert!(validate(&doc).is_ok());
-        let profile = &doc.profiles["google"];
+        let profile = doc.profiles.get_mut("google").unwrap();
+        // A profile saved by mod47 can still have an old, unreachable DoH URL.
+        profile.endpoint = "https://old.example/dns-query".into();
         let output = "Active default network: 101
 NetworkAgentInfo{network{100} DnsAddresses: [ /8.8.8.8 ]}
 NetworkAgentInfo{network{101} DnsAddresses: [ /fe80::1,/10.253.240.1,/192.168.1.1 ]}";
@@ -1504,6 +1507,14 @@ NetworkAgentInfo{network{101} DnsAddresses: [ /fe80::1,/10.253.240.1,/192.168.1.
             let config = build_singbox_config(&plan).unwrap();
             assert_eq!(config["dns"]["rules"].is_array(), id == "google");
             assert_eq!(config["dns"]["final"], "profile-upstream");
+            if id == "google" {
+                assert_eq!(config["dns"]["rules"][0]["domain"][0], LOCAL_DNS_CHECK);
+                assert_eq!(config["dns"]["servers"][0]["type"], "udp");
+                assert_eq!(config["route"]["rules"][2]["action"], "resolve");
+            } else {
+                assert_eq!(config["dns"]["servers"][1]["type"], "https");
+                assert_eq!(config["route"]["rules"].as_array().unwrap().len(), 2);
+            }
         }
     }
 

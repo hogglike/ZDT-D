@@ -6,6 +6,7 @@ use super::{
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{
+    collections::BTreeSet,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom},
     net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
@@ -115,14 +116,67 @@ fn parse_dns_answer(message: &[u8], id: u16) -> Value {
         (0, _, _) => "dns_error",
         _ => "truncated",
     };
-    json!({"state": state, "rcode": rcode, "answers": answers})
+    json!({"state": state, "rcode": rcode, "answers": answers,
+        "a_records": if state == "ok" { a_records(message).unwrap_or_default() } else { BTreeSet::new() }})
+}
+
+fn skip_dns_name(message: &[u8], offset: &mut usize) -> Option<()> {
+    loop {
+        let length = *message.get(*offset)? as usize;
+        *offset += 1;
+        match length {
+            0 => return Some(()),
+            1..=63 => *offset += length,
+            192..=255 => {
+                message.get(*offset)?;
+                *offset += 1;
+                return Some(());
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn a_records(message: &[u8]) -> Option<BTreeSet<Ipv4Addr>> {
+    let questions = u16::from_be_bytes(message.get(4..6)?.try_into().ok()?);
+    let answers = u16::from_be_bytes(message.get(6..8)?.try_into().ok()?);
+    let mut offset = 12;
+    for _ in 0..questions {
+        skip_dns_name(message, &mut offset)?;
+        offset += 4;
+    }
+    let mut records = BTreeSet::new();
+    for _ in 0..answers {
+        skip_dns_name(message, &mut offset)?;
+        let header = message.get(offset..offset + 10)?;
+        let length = u16::from_be_bytes([header[8], header[9]]) as usize;
+        offset += 10;
+        let data = message.get(offset..offset + length)?;
+        if header[..4] == [0, 1, 0, 1] && data.len() == 4 {
+            records.insert(Ipv4Addr::new(data[0], data[1], data[2], data[3]));
+        }
+        offset += length;
+    }
+    Some(records)
+}
+
+pub(super) fn matches_filter(response: &Value, expected: &BTreeSet<Ipv4Addr>) -> bool {
+    if expected.is_empty() || response["state"] != "ok" {
+        return false;
+    }
+    let Some(addresses) = response["a_records"].as_array() else {
+        return false;
+    };
+    !addresses.is_empty() && addresses.iter().all(|record| {
+        record.as_str().and_then(|s| s.parse::<Ipv4Addr>().ok()).is_some_and(|ip| expected.contains(&ip))
+    })
 }
 
 fn elapsed_ms(start: Instant) -> u64 {
     start.elapsed().as_millis() as u64
 }
 
-fn udp_probe(server: SocketAddrV4, domain: &str, timeout: Duration) -> Value {
+pub(super) fn udp_probe(server: SocketAddrV4, domain: &str, timeout: Duration) -> Value {
     let start = Instant::now();
     let probe = || -> io::Result<Value> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
@@ -244,6 +298,8 @@ fn isolated_probe(plan: &RuntimePlan, domain: &str) -> Result<Value> {
     inbound["listen"] = json!(local);
     inbound["listen_port"] = json!(port);
     settings["inbounds"] = json!([inbound]);
+    settings["route"]["rules"].as_array_mut().context("missing routing rules")?
+        .retain(|rule| rule["action"] != "resolve");
     settings["log"]["level"] = json!("error");
     fs::write(&config, serde_json::to_vec(&settings)?)?;
     let output = OpenOptions::new().write(true).create_new(true).open(&log)?;
@@ -295,7 +351,7 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
         vpn_netd,
     };
 
-    let automatic = plan.profile.endpoint == super::AUTOMATIC_DNS;
+    let automatic = plan.profile.google_filter;
     let (hostname, protocol, port) = if automatic {
         ("DNS сети".to_owned(), "Авто", 53)
     } else {
@@ -352,8 +408,13 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
     });
 
     let address: Ipv4Addr = plan.dns.parse()?;
-    let filter_matches = plan.profile.google_filter && super::google_filter::has_cached_rule(domain);
-    let upstream_domain = if filter_matches { "example.com" } else { domain };
+    let expected_addresses = if automatic {
+        super::google_filter::cached_addresses(domain)
+    } else {
+        BTreeSet::new()
+    };
+    let filter_matches = !expected_addresses.is_empty();
+    let upstream_domain = if automatic { "example.com" } else { domain };
     let (bootstrap, upstream, listener, redirect) = thread::scope(|scope| {
         let bootstrap = scope.spawn(|| {
             if automatic {
@@ -399,17 +460,21 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
         )
     });
 
+    let filter_result = automatic.then(|| {
+        let mut filter = super::google_filter::status();
+        filter["matches_domain"] = json!(filter_matches);
+        filter["listener_matches"] = json!(matches_filter(&listener, &expected_addresses));
+        filter["redirect_matches"] = json!(matches_filter(&redirect, &expected_addresses));
+        filter["expected_addresses"] = json!(expected_addresses);
+        filter
+    });
     Ok(json!({
         "schema": 1, "state": "done", "profile": plan.id, "revision": revision,
         "domain": domain, "upstream_domain": upstream_domain, "protocol": protocol, "endpoint_host": hostname, "endpoint_port": port,
         "enabled": plan.profile.enabled, "suspended_for_tethering": suspended,
         "global_dnscrypt_enabled": global_dnscrypt_enabled(), "android_private_dns": private_dns_mode(),
         "bootstrap": bootstrap, "upstream": upstream, "listener": listener, "redirect": redirect,
-        "gemini_filter": plan.profile.google_filter.then(|| {
-            let mut filter = super::google_filter::status();
-            filter["matches_domain"] = json!(filter_matches);
-            filter
-        }),
+        "gemini_filter": filter_result,
         "runtime": {
             "sing_box": sing_box, "tun2socks": tun2socks, "netd": netd.is_some(),
             "netd_snapshot_available": snapshot.is_ok(), "uid_lookup_ok": uids.is_ok(),
@@ -422,6 +487,23 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscription_check_requires_an_address_from_the_list() {
+        let id = 99;
+        let mut reply = dns_query_for(id, "gemini.google.com");
+        reply[2] = 0x81;
+        reply[3] = 0x80;
+        reply[7] = 1;
+        reply.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 8, 8, 4, 4]);
+        let expected = BTreeSet::from([Ipv4Addr::new(8, 8, 4, 4)]);
+        assert!(matches_filter(&parse_dns_answer(&reply, id), &expected));
+        reply.pop();
+        assert!(!matches_filter(&parse_dns_answer(&reply, id), &expected));
+        reply.push(8);
+        assert!(!matches_filter(&parse_dns_answer(&reply, id), &expected));
+        assert!(!matches_filter(&parse_dns_answer(&reply, id), &BTreeSet::new()));
+    }
 
     #[test]
     fn probe_rejects_bad_names_and_unrelated_packets() {
