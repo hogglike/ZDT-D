@@ -17,6 +17,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.zdtd.service.BuildConfig
 import com.android.zdtd.service.ZdtdActions
+import com.android.zdtd.service.diagnostics.checkGeminiHttps
+import com.android.zdtd.service.diagnostics.geminiHttpsResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -94,7 +96,7 @@ private fun dnsSummary(report: JSONObject): String {
       !runtime.optBoolean("config_matches") -> "Нужно применить обновлённый профиль"
       !runtime.optBoolean("netd") -> "Профиль Gemini не назначен приложениям"
       !filter.optBoolean("matches_domain") -> "Для этого домена нет записи в списке Gemini"
-      filter.optBoolean("redirect_matches") -> "Gemini получает DNS-адрес из списка"
+      filter.optBoolean("redirect_matches") -> "DNS вернул адрес из списка"
       filter.optBoolean("listener_matches") -> "Адрес из списка получен локально · проверь порт 53"
       else -> "Нет подтверждения, что Gemini получил адрес из списка"
     }
@@ -130,6 +132,14 @@ private fun reportText(report: JSONObject): String = buildString {
       val label = if (key == "upstream" && report.optJSONObject("gemini_filter") != null) "Обычный DNS вне списка" else title
       appendLine("$label — ${dnsStageText(stage)}")
       eventTexts(stage).forEach { appendLine("  $it") }
+    }
+  }
+  report.optJSONArray("gemini_https")?.let { rows ->
+    appendLine()
+    appendLine("Gemini · HTTPS через туннель профиля")
+    for (i in 0 until rows.length()) {
+      val row = rows.optJSONObject(i) ?: continue
+      appendLine("${row.optString("host")} — ${geminiHttpsResult(row)}")
     }
   }
   appendLine()
@@ -228,6 +238,7 @@ internal fun DnsProfileCheckDialog(
               val date = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT)
               date.timeZone = TimeZone.getTimeZone("UTC")
               checked.put("checked_at", date.format(Date())).put("app_version", BuildConfig.VERSION_NAME)
+              checkGeminiHttps(checked)
               result = checked
               onResult(checked)
               return@launch
@@ -284,6 +295,22 @@ internal fun DnsProfileCheckDialog(
                       filter.optBoolean("matches_domain") -> "Подписка Gemini · для домена есть правило"
                       else -> "Подписка Gemini · для домена используется DNS профиля"
                     }, style = MaterialTheme.typography.bodySmall)
+                  }
+                }
+              }
+            }
+            report.optJSONArray("gemini_https")?.let { connection ->
+              item {
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                  Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("HTTPS через профиль Gemini", style = MaterialTheme.typography.titleMedium)
+                    for (i in 0 until connection.length()) {
+                      val row = connection.optJSONObject(i) ?: continue
+                      Text(row.optString("host"), style = MaterialTheme.typography.labelMedium)
+                      Text(geminiHttpsResult(row), style = MaterialTheme.typography.bodySmall,
+                        color = if (row.optString("state") == "http") MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
+                    }
+                    Text("Проверяется ответ сервера без аккаунта Google.", style = MaterialTheme.typography.bodySmall)
                   }
                 }
               }

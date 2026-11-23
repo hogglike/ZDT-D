@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     panic::{self, AssertUnwindSafe},
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::Mutex,
     thread,
     time::Duration,
 };
@@ -19,18 +19,35 @@ use crate::{
     stop,
 };
 
-static START_PARTIAL: AtomicBool = AtomicBool::new(false);
-
-fn reset_start_partial() {
-    START_PARTIAL.store(false, Ordering::SeqCst);
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StartupIssue {
+    pub service: String,
+    pub message: String,
 }
 
-fn mark_start_partial() {
-    START_PARTIAL.store(true, Ordering::SeqCst);
+static START_ISSUES: Mutex<Vec<StartupIssue>> = Mutex::new(Vec::new());
+
+fn reset_start_partial() {
+    START_ISSUES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+pub(crate) fn mark_start_partial(service: &str, message: impl AsRef<str>) {
+    let mut issues = START_ISSUES.lock().unwrap_or_else(|e| e.into_inner());
+    let issue = StartupIssue {
+        service: service.to_owned(),
+        message: message.as_ref().chars().take(700).collect(),
+    };
+    if issues.len() < 32 && !issues.contains(&issue) {
+        issues.push(issue);
+    }
+}
+
+pub fn last_start_issues() -> Vec<StartupIssue> {
+    START_ISSUES.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 pub fn last_start_partial() -> bool {
-    START_PARTIAL.load(Ordering::SeqCst)
+    !START_ISSUES.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
 /// Start all enabled services and apply iptables rules.
@@ -100,6 +117,7 @@ pub fn start_full() -> Result<()> {
         std::thread::spawn(|| {
             if let Err(e) = dnscrypt::start_if_enabled() {
                 log::error!("dnscrypt start failed: {:#}", e);
+                mark_start_partial("dnscrypt", format!("{e:#}"));
             }
         });
 
@@ -181,14 +199,14 @@ pub fn start_full() -> Result<()> {
                     Ok(items) => vpn_profiles.extend(items),
                     Err(e) => {
                         log::warn!("{log_label} startup failed, continuing: {e:#}");
-                        mark_start_partial();
+                        mark_start_partial(log_label, format!("{e:#}"));
                         crate::logging::user_warn(user_message);
                     }
                 }
             }
             if let Err(e) = crate::vpn_netd::start_profiles(vpn_profiles) {
                 log::warn!("vpn_netd apply failed, continuing: {e:#}");
-                mark_start_partial();
+                mark_start_partial("vpn_netd", format!("{e:#}"));
                 if vpn_expected {
                     crate::logging::user_warn("VPN/netd: ошибка применения, запуск продолжен");
                 }
@@ -205,7 +223,11 @@ pub fn start_full() -> Result<()> {
                 Some((program, profile)) => match vpn_tether_starters.iter().find(|(id, _)| *id == program) {
                     Some((_, start_profile)) => match start_profile(profile) {
                         Ok(item) => item,
-                        Err(e) => { log::warn!("vpn_tether {program} startup failed, continuing: {e:#}"); mark_start_partial(); None }
+                        Err(e) => {
+                            log::warn!("vpn_tether {program} startup failed, continuing: {e:#}");
+                            mark_start_partial("vpn_tether", format!("{program}/{profile}: {e:#}"));
+                            None
+                        }
                     },
                     None => {
                         log::warn!("vpn_tether unsupported selection program={} profile={}", program, profile);
@@ -216,7 +238,7 @@ pub fn start_full() -> Result<()> {
             };
             if let Err(e) = crate::vpn_tether::sync(vpn_tether_profile) {
                 log::warn!("vpn_tether apply failed, continuing: {e:#}");
-                mark_start_partial();
+                mark_start_partial("vpn_tether", format!("{e:#}"));
                 if hotspot_vpn_selection.is_some() {
                     crate::logging::user_warn("VPN-раздача: ошибка применения, запуск продолжен");
                 }
@@ -224,7 +246,7 @@ pub fn start_full() -> Result<()> {
         }
         Err(e) => {
             log::warn!("vpn profile claim conflict, skipping VPN/netd profiles and continuing: {e:#}");
-            mark_start_partial();
+            mark_start_partial("vpn_netd", format!("{e:#}"));
             if vpn_expected {
                 crate::logging::user_warn("VPN/netd: конфликт профилей, запуск продолжен");
             }
@@ -741,10 +763,10 @@ fn wait_android_runtime_ready_best_effort() {
     });
 
     if !join_boot_probe("package-manager", package_manager) {
-        mark_start_partial();
+        mark_start_partial("package-manager", "Служба Android не ответила при запуске");
     }
     if !join_boot_probe("netd", netd) {
-        mark_start_partial();
+        mark_start_partial("netd", "Сетевая служба Android не ответила при запуске");
     }
 }
 
@@ -801,19 +823,17 @@ where
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(())) => log::info!("startup service={name} finished"),
         Ok(Err(e)) => {
-            mark_start_partial();
+            mark_start_partial(name, format!("{e:#}"));
             log::warn!("startup service={name} failed, continuing: {e:#}");
         }
         Err(_) => {
-            mark_start_partial();
+            mark_start_partial(name, "Аварийное завершение при запуске");
             log::warn!("startup service={name} panicked, continuing");
         }
     }
 }
 
 fn validate_start_plan_best_effort() {
-    let mut had_warning = false;
-
     // NOTE: hysteria2::validate_start_plan() is deliberately NOT listed here. It was not
     // called before this refactor either; the list is kept identical so behavior does not
     // change. Pending maintainer decision on whether that omission is intentional.
@@ -829,17 +849,13 @@ fn validate_start_plan_best_effort() {
     ];
     for (label, validate) in start_plans {
         if let Err(e) = validate() {
-            had_warning = true;
+            mark_start_partial(label, format!("Проверка настроек: {e:#}"));
             log::warn!("start plan warning: {label}: {e:#}");
         }
     }
     if let Err(e) = validate_vpn_claims_unique() {
-        had_warning = true;
+        mark_start_partial("vpn_netd", format!("Конфликт профилей: {e:#}"));
         log::warn!("start plan warning: vpn claims: {e:#}");
-    }
-
-    if had_warning {
-        mark_start_partial();
     }
 }
 fn validate_vpn_claims_unique() -> Result<()> {
@@ -1027,18 +1043,19 @@ fn wait_start_group(stage_name: &str, handles: Vec<(&'static str, thread::JoinHa
             Ok(Err(e)) => {
                 log::error!("startup stage={stage_name} service={name} failed: {:#}", e);
                 crate::logging::user_warn(&format!("{name}: ошибка запуска"));
+                mark_start_partial(name, format!("{e:#}"));
                 failures.push(name.to_string());
             }
             Err(_) => {
                 log::error!("startup stage={stage_name} service={name} panicked");
                 crate::logging::user_warn(&format!("{name}: аварийное завершение потока запуска"));
+                mark_start_partial(name, "Аварийное завершение потока запуска");
                 failures.push(name.to_string());
             }
         }
     }
 
     if !failures.is_empty() {
-        mark_start_partial();
         log::warn!(
             "startup stage={stage_name} completed with failures: {}",
             failures.join(", ")

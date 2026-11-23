@@ -13,7 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.NetworkCheck
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.VpnKey
@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 private enum class NetworkPage(val title: String) {
   HOME("ZDT-D"),
   APPEARANCE("Оформление"),
+  JOURNAL("Журналы служб"),
   DNS("DNS для приложений"),
   ZAPRET("Zapret для YouTube"),
   STRATEGY("Стратегия Zapret"),
@@ -56,6 +57,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
   var page by rememberSaveable { mutableStateOf(NetworkPage.HOME) }
   val appearance = remember(context) { appearancePreferences(context) }
   var layout by remember { mutableStateOf(appearance.getString("layout", "tiles") ?: "tiles") }
+  var journalFrom by rememberSaveable { mutableStateOf(NetworkPage.HOME) }
   var profile by rememberSaveable { mutableStateOf("") }
   var zapretEngine by rememberSaveable { mutableStateOf("nfqws2") }
   val snackbar = remember { SnackbarHostState() }
@@ -63,6 +65,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
   fun up() {
     page = when (page) {
       NetworkPage.STRATEGY, NetworkPage.TESTER -> NetworkPage.ZAPRET
+      NetworkPage.JOURNAL -> journalFrom
       else -> NetworkPage.HOME
     }
   }
@@ -84,8 +87,11 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
           IconButton(onClick = ::up) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
         }
         Text(page.title, Modifier.weight(1f).padding(vertical = 8.dp), style = MaterialTheme.typography.headlineSmall)
-        if (page == NetworkPage.HOME) IconButton(onClick = { page = NetworkPage.APPEARANCE }) {
-          Icon(Icons.Default.Settings, "Оформление")
+        if (page in listOf(NetworkPage.HOME, NetworkPage.ZAPRET, NetworkPage.STRATEGY, NetworkPage.TESTER)) {
+          IconButton(onClick = {
+            journalFrom = page
+            page = NetworkPage.JOURNAL
+          }) { Icon(Icons.Default.Description, "Журналы служб") }
         }
       }
       val applySection = when (page) {
@@ -117,6 +123,15 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
                 )
               }
               if (applying) LinearProgressIndicator(Modifier.fillMaxWidth())
+              if (!applying && ui.status?.servicesPartial == true) {
+                val issue = ui.status?.startupIssues?.firstOrNull()
+                if (issue != null) Text("${issue.service} · ${issue.message}",
+                  style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, maxLines = 3)
+                TextButton(onClick = {
+                  journalFrom = NetworkPage.HOME
+                  page = NetworkPage.JOURNAL
+                }) { Text("Причины запуска и журналы") }
+              }
               TextButton(enabled = ui.daemonOnline && running && !applying, onClick = {
                 actions.restartService(onlyIfRunning = true)
               }) {
@@ -152,6 +167,10 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
           layout = value
           appearance.edit().putString("layout", value).apply()
         }
+        NetworkPage.JOURNAL -> ServiceJournalScreen(
+          zapret = journalFrom != NetworkPage.HOME,
+          statusIssues = ui.status?.startupIssues.orEmpty(),
+        )
         NetworkPage.DNS -> DnsProfilesScreen(actions, applying = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true)
         NetworkPage.ZAPRET -> Column(Modifier.fillMaxSize()) {
           NetworkPanel(Modifier.fillMaxWidth().padding(horizontal = 16.dp), accent = true) {

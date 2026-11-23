@@ -466,6 +466,10 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
         filter["listener_matches"] = json!(matches_filter(&listener, &expected_addresses));
         filter["redirect_matches"] = json!(matches_filter(&redirect, &expected_addresses));
         filter["expected_addresses"] = json!(expected_addresses);
+        if sing_box && tun2socks && netd.is_some() && config_matches {
+            filter["proxy_port"] = json!(plan.proxy_port);
+        }
+        filter["hosts"] = json!(super::google_filter::probe_hosts());
         filter
     });
     Ok(json!({

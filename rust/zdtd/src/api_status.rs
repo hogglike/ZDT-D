@@ -18,6 +18,8 @@ pub struct ApiStatus {
     pub daemon_pid: u32,
     pub updated_at_unix: u64,
     pub last_error: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub startup_issues: Vec<crate::runtime::StartupIssue>,
 }
 
 impl Default for ApiStatus {
@@ -50,6 +52,7 @@ impl ApiStatus {
             daemon_pid: std::process::id(),
             updated_at_unix: now_unix(),
             last_error: last_error.trim().to_string(),
+            startup_issues: Vec::new(),
         }
     }
 }
@@ -88,7 +91,9 @@ pub fn write_starting() {
 
 pub fn write_on(partial: bool) {
     if partial {
-        let _ = write(&ApiStatus::new("partial", true, false, false, true, true, ""));
+        let mut status = ApiStatus::new("partial", true, false, false, true, true, "");
+        status.startup_issues = crate::runtime::last_start_issues();
+        let _ = write(&status);
     } else {
         let _ = write(&ApiStatus::new("on", true, false, false, false, false, ""));
     }
@@ -100,6 +105,12 @@ pub fn write_stopping() {
 
 pub fn write_error_off(message: &str) {
     let _ = write(&ApiStatus::new("error", false, false, false, false, false, message));
+}
+
+pub fn write_start_error_off(message: &str) {
+    let mut status = ApiStatus::new("error", false, false, false, false, false, message);
+    status.startup_issues = crate::runtime::last_start_issues();
+    let _ = write(&status);
 }
 
 pub fn runtime_state_for_api(status: Option<&ApiStatus>, fallback: &str) -> String {

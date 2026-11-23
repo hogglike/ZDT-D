@@ -362,7 +362,7 @@ private fun DnsProfileCard(
       if (filter) {
         report?.optJSONObject("gemini_filter")?.takeIf { it.optBoolean("matches_domain") }?.let {
           val fromList = it.optBoolean("redirect_matches")
-          Text(if (fromList) "Ответ Gemini получен из списка" else "Локальный ответ по списку не подтверждён",
+          Text(if (fromList) "DNS вернул адрес из списка" else "Локальный ответ по списку не подтверждён",
             style = MaterialTheme.typography.bodySmall,
             color = if (fromList) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
         }

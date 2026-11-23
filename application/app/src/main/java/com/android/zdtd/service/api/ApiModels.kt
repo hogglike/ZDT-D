@@ -20,6 +20,8 @@ object ApiModels {
     val byedpi: ProcAgg = ProcAgg(),
   )
 
+  data class StartupIssue(val service: String, val message: String)
+
   data class StatusReport(
     val total: ProcAgg = ProcAgg(),
     val zdtd: ProcAgg = ProcAgg(),
@@ -51,6 +53,7 @@ object ApiModels {
     val daemonPid: Int = 0,
     val statusUpdatedAtUnix: Long = 0L,
     val lastError: String = "",
+    val startupIssues: List<StartupIssue> = emptyList(),
   )
 
 
@@ -440,6 +443,7 @@ object ApiModels {
       daemonPid = ui.optInt("daemon_pid", 0),
       statusUpdatedAtUnix = ui.optLong("updated_at_unix", 0L),
       lastError = ui.optString("last_error", ""),
+      startupIssues = parseStartupIssues(ui),
     )
   }
 
@@ -462,7 +466,18 @@ object ApiModels {
       daemonPid = fileObj.optInt("daemon_pid", base.daemonPid),
       statusUpdatedAtUnix = fileObj.optLong("updated_at_unix", base.statusUpdatedAtUnix),
       lastError = fileObj.optString("last_error", base.lastError),
+      startupIssues = parseStartupIssues(fileObj),
     )
+  }
+
+  fun parseStartupIssues(status: JSONObject): List<StartupIssue> {
+    val rows = status.optJSONArray("startup_issues") ?: return emptyList()
+    return (0 until rows.length().coerceAtMost(32)).mapNotNull { index ->
+      val row = rows.optJSONObject(index) ?: return@mapNotNull null
+      val service = row.optString("service")
+      val message = row.optString("message")
+      if (service.isBlank() || message.isBlank()) null else StartupIssue(service, message)
+    }
   }
 
   fun isServiceOn(r: StatusReport?): Boolean {

@@ -201,7 +201,7 @@ fn start_services(state: &SharedState) {
             Err(e) => {
                 logging::warn(&format!("start_full failed: {e:#}"));
                 crate::scan_detector::stop();
-                api_status::write_error_off(&format!("start_full failed: {e:#}"));
+                api_status::write_start_error_off(&format!("start_full failed: {e:#}"));
                 let mut st = lock_state(state);
                 st.services_running = false;
                 st.services_partial = false;
@@ -211,7 +211,7 @@ fn start_services(state: &SharedState) {
             logging::warn("start thread panicked");
             crate::logging::user_error("Ошибка запуска: внутренний сбой потока");
             crate::scan_detector::stop();
-            api_status::write_error_off("start thread panicked");
+            api_status::write_start_error_off("start thread panicked");
             let mut st = lock_state(state);
             st.services_running = false;
             st.services_partial = false;

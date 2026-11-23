@@ -53,11 +53,17 @@ pub fn start_active_profiles() -> Result<()> {
 
     let tracker = Sha256Tracker::new(SHA_FLAG_FILE);
 
+    let mut failures = Vec::new();
     for (profile_name, st) in active.profiles.iter() {
         if !st.enabled {
             continue;
         }
-        start_profile(profile_name, &tracker)?;
+        if let Err(error) = start_profile(profile_name, &tracker) {
+            failures.push(format!("{profile_name}: {error:#}"));
+        }
+    }
+    if !failures.is_empty() {
+        anyhow::bail!("{}: {}", "Zapret 2", failures.join(" | "));
     }
     Ok(())
 }
@@ -167,15 +173,13 @@ fn spawn_nfqws(workdir: &Path, port: u16, config_args: &[String], log_path: &Pat
         });
     }
 
-    let child = cmd.spawn().with_context(|| format!("spawn {}", NFQWS2_BIN))?;
+    let mut child = cmd.spawn().with_context(|| format!("spawn {}", NFQWS2_BIN))?;
     let pid = child.id();
     info!("spawned nfqws pid={} qnum={} log={}", pid, port, log_path.display());
 
-    // Quick liveness check (best-effort)
     std::thread::sleep(Duration::from_millis(150));
-    let proc_path = PathBuf::from("/proc").join(pid.to_string());
-    if !proc_path.is_dir() {
-        info!("nfqws pid={} is not running after spawn (check log {})", pid, log_path.display());
+    if let Some(status) = child.try_wait().context("check Zapret process")? {
+        anyhow::bail!("nfqws завершился сразу после запуска ({status}), журнал: {}", log_path.display());
     }
 
     Ok(())

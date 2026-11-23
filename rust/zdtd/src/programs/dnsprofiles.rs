@@ -1051,6 +1051,7 @@ pub fn start_profiles_for_netd() -> Result<Vec<VpnNetdProfile>> {
             Ok(item) => out.push(item),
             Err(e) => {
                 had_error = true;
+                crate::runtime::mark_start_partial("dnsprofiles", format!("{id}: {e:#}"));
                 log::warn!("dnsprofiles: profile {id} failed, continuing: {e:#}");
             }
         }

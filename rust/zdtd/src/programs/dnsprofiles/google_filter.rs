@@ -126,6 +126,15 @@ pub(super) fn cached_addresses(domain: &str) -> BTreeSet<Ipv4Addr> {
     }).collect()
 }
 
+pub(super) fn probe_hosts() -> BTreeMap<&'static str, BTreeSet<Ipv4Addr>> {
+    [
+        CORE_DOMAIN,
+        "geminiweb-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+        "robinfrontend-pa.googleapis.com",
+    ].into_iter().map(|host| (host, cached_addresses(host))).collect()
+}
+
 pub(super) fn has_cached_rule(domain: &str) -> bool {
     !cached_addresses(domain).is_empty()
 }
