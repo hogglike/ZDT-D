@@ -39,6 +39,7 @@ class ConnectionWidgetProvider : AppWidgetProvider() {
           NetworkAppearance.RED -> R.drawable.widget_detail_red
           NetworkAppearance.GLASS -> R.drawable.widget_network_background
           NetworkAppearance.GRAPHITE -> R.drawable.widget_detail_graphite
+          else -> R.drawable.widget_detail_red
         }
         views.setInt(R.id.connection_modes_widget, "setBackgroundResource", background)
         if (graphite) {

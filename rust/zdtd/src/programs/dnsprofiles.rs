@@ -35,6 +35,7 @@ use crate::{
     vpn_netd::VpnNetdProfile,
 };
 
+const AUTOMATIC_DNS: &str = "system://android";
 pub const CONFIG_PATH: &str = "/data/adb/modules/ZDT-D/working_folder/dnsprofiles/profiles.json";
 pub const MAX_BYTES: usize = 256 * 1024;
 const ROOT: &str = "/data/adb/modules/ZDT-D/working_folder/dnsprofiles";
@@ -164,7 +165,13 @@ pub fn validate(document: &ProfileDocument) -> Result<()> {
         if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
             bail!("invalid_display_name: {id}");
         }
-        parse_endpoint(&profile.endpoint).with_context(|| format!("invalid_dns_endpoint: {id}"))?;
+        if profile.endpoint == AUTOMATIC_DNS {
+            if !profile.google_filter {
+                bail!("automatic_dns_requires_gemini_filter: {id}");
+            }
+        } else {
+            parse_endpoint(&profile.endpoint).with_context(|| format!("invalid_dns_endpoint: {id}"))?;
+        }
         if !(250..=30000).contains(&profile.timeout_ms) {
             bail!("invalid_timeout: {id}");
         }
@@ -444,19 +451,17 @@ fn parse_endpoint(endpoint: &str) -> Result<reqwest::Url> {
     }
 }
 
-fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
-    let url = parse_endpoint(&plan.profile.endpoint)?;
+fn upstreams(profile: &DnsProfile, network_dns: Option<Ipv4Addr>) -> Result<Vec<Value>> {
+    let bootstrap = *profile.bootstrap.first().context("dnsprofiles: missing bootstrap DNS")?;
+    if profile.endpoint == AUTOMATIC_DNS {
+        let primary = network_dns.unwrap_or(bootstrap);
+        return Ok(vec![json!({"type": "udp", "tag": "profile-upstream", "server": primary})]);
+    }
+    let url = parse_endpoint(&profile.endpoint)?;
     let dot = url.scheme() == "tls";
     let host = url.host_str().context("DNS endpoint host missing")?
         .trim_start_matches('[').trim_end_matches(']');
     let port = url.port().unwrap_or(if dot { 853 } else { 443 });
-    let bootstrap = plan
-        .profile
-        .bootstrap
-        .first()
-        .context("dnsprofiles: missing bootstrap DNS")?
-        .to_string();
-
     let mut tls = serde_json::Map::new();
     tls.insert("enabled".to_string(), Value::Bool(true));
     if host.parse::<std::net::IpAddr>().is_err() {
@@ -469,7 +474,7 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
         "server_port": port,
         "domain_resolver": {"server": "bootstrap", "strategy": "ipv4_only"},
         "tls": Value::Object(tls),
-        "connect_timeout": format!("{}ms", plan.profile.timeout_ms)
+        "connect_timeout": format!("{}ms", profile.timeout_ms)
     });
     if !dot {
         let mut path = url.path().to_owned();
@@ -480,13 +485,41 @@ fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
         upstream["path"] = json!(path);
     }
 
+    Ok(vec![json!({"type": "udp", "tag": "bootstrap", "server": bootstrap}), upstream])
+}
+
+fn default_network_dns(output: &str) -> Option<Ipv4Addr> {
+    let network = output.lines().find_map(|line| {
+        line.trim().strip_prefix("Active default network: ")?.trim().parse::<u32>().ok()
+    })?;
+    let network_marker = format!("network{{{network}}}");
+    let addresses = output.lines().find_map(|line| {
+        if !line.contains(&network_marker) {
+            return None;
+        }
+        line.split_once("DnsAddresses: [")?.1.split_once(']').map(|(addresses, _)| addresses)
+    })?;
+    addresses.split(|c: char| c.is_ascii_whitespace() || c == ',').find_map(|word| {
+        let ip = word.trim_start_matches('/').parse::<Ipv4Addr>().ok()?;
+        let [a, b, c, _] = ip.octets();
+        (!ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast() && !ip.is_broadcast()
+            && (a, b, c) != (10, 253, 240)).then_some(ip)
+    })
+}
+
+fn network_dns() -> Option<Ipv4Addr> {
+    let (code, output) =
+        shell::run_timeout("dumpsys", &["connectivity"], Capture::Stdout, Duration::from_secs(2)).ok()?;
+    if code == 0 { default_network_dns(&output) } else { None }
+}
+
+fn build_singbox_config(plan: &RuntimePlan) -> Result<Value> {
+    let network_dns = (plan.profile.endpoint == AUTOMATIC_DNS).then(network_dns).flatten();
+    let servers = upstreams(&plan.profile, network_dns)?;
     let mut config = json!({
         "log": {"level": "info", "timestamp": true},
         "dns": {
-            "servers": [
-                {"type": "udp", "tag": "bootstrap", "server": bootstrap},
-                upstream
-            ],
+            "servers": servers,
             "final": "profile-upstream",
             "strategy": "ipv4_only",
             "independent_cache": true
@@ -1436,6 +1469,25 @@ mod tests {
         assert_ne!(a.cidr, b.cidr);
         assert_ne!(a.dns, b.dns);
     }
+    #[test]
+    fn automatic_dns_is_confined_to_gemini_and_uses_network_or_bootstrap() {
+        let mut doc = fixture();
+        let mut profile = doc.profiles.remove("xbox").unwrap();
+        profile.endpoint = AUTOMATIC_DNS.into();
+        profile.apps = vec!["com.google.android.apps.bard".into()];
+        doc.profiles.insert("google".into(), profile);
+        assert!(validate(&doc).is_err());
+        doc.profiles.get_mut("google").unwrap().google_filter = true;
+        assert!(validate(&doc).is_ok());
+        let profile = &doc.profiles["google"];
+        let output = "Active default network: 101
+NetworkAgentInfo{network{100} DnsAddresses: [ /8.8.8.8 ]}
+NetworkAgentInfo{network{101} DnsAddresses: [ /fe80::1,/10.253.240.1,/192.168.1.1 ]}";
+        let network = default_network_dns(output);
+        assert_eq!(upstreams(profile, network).unwrap()[0]["server"], "192.168.1.1");
+        assert_eq!(upstreams(profile, None).unwrap()[0]["server"], "1.1.1.1");
+    }
+
     #[test]
     fn gemini_filter_does_not_change_another_profiles_resolver() {
         let mut doc = fixture();

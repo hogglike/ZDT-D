@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.android.zdtd.service.diagnostics.nfqws.*
 import com.android.zdtd.service.api.ApiModels
 import com.android.zdtd.service.modes.ModeClient
+import com.android.zdtd.service.ui.theme.NetworkPanel
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,7 +22,14 @@ private val YoutubeTestUrls = listOf(
 ).joinToString("\n")
 
 @Composable
-fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, String) -> Unit) {
+fun ZapretAutoCard(
+  program: String,
+  serviceRunning: Boolean,
+  serviceBusy: Boolean,
+  daemonOnline: Boolean,
+  selectProgram: (String) -> Unit,
+  onApply: (String, String) -> Unit,
+) {
   val context = LocalContext.current
   val prefs = remember { context.getSharedPreferences("zapret_auto", Context.MODE_PRIVATE) }
   val scope = rememberCoroutineScope()
@@ -33,31 +41,46 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
   }
   var limit by remember { mutableStateOf(prefs.getInt("limit", 12)) }
   var message by remember { mutableStateOf("") }
+  var options by remember { mutableStateOf(false) }
   var details by remember { mutableStateOf(false) }
   var restoring by remember { mutableStateOf(false) }
   var backup by remember { mutableStateOf(prefs.getString("backup", "")) }
   LaunchedEffect(Unit) { ZapretAutoReport.restore(context) }
   val running = report.optBoolean("running")
-  Card(Modifier.fillMaxWidth()) {
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text("Автоподбор Zapret", style = MaterialTheme.typography.titleLarge)
-      Text("Сначала проверяет связь без Zapret. Затем для каждой стратегии дважды параллельно проверяет выбранные HTTPS-адреса. На время подбора выключи ZDT-D и другие VPN.")
-      OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth(), enabled = !running, label = { Text("Что должно открываться · 1–4 HTTPS-адреса") }, minLines = 2)
-      TextButton(onClick = { urls = YoutubeTestUrls }, enabled = !running) {
-        Text("Адреса YouTube и Music")
-      }
-      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (count in listOf(12, 30, 100)) FilterChip(limit == count, { limit = count }, enabled = !running, label = { Text(if (count == 100) "Все (до 100)" else "$count стратегий") })
-      }
-      Text("Успех означает HTTP 2xx или 3xx в обоих раундах. Воспроизведение видео и музыки проверь в самих приложениях. Тест длится до 30 минут.", style = MaterialTheme.typography.bodySmall)
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = {
-          prefs.edit().putString("urls", urls).putInt("limit", limit).apply()
-          runCatching { ZapretAutoService.start(context, program, urls.lines().map { it.trim() }.filter { it.isNotBlank() }.distinct(), limit) }.onFailure { message = it.message.orEmpty() }
-        }, enabled = !serviceRunning && !running && ZapretTestOwner.owner.get() == null) { Text("Подобрать автоматически") }
-        if (running) OutlinedButton(onClick = { ZapretAutoService.stop(context) }) { Text("Стоп") }
+        FilterChip(program == "nfqws2", { selectProgram("nfqws2") }, enabled = !running, label = { Text("Zapret 2") })
+        FilterChip(program == "nfqws", { selectProgram("nfqws") }, enabled = !running, label = { Text("Zapret 1") })
       }
-      if (serviceRunning) Text("Выключи модуль на экране «Сеть», затем запусти подбор здесь.")
+      if (serviceRunning && !running) {
+        Text("На время теста модуль остановится. После подбора можно сразу применить стратегию и запустить ZDT-D.", style = MaterialTheme.typography.bodySmall)
+      }
+      if (!daemonOnline) Text("Нет связи с модулем. Проверь root и версию установленного ZIP.", color = MaterialTheme.colorScheme.error)
+      if (running) {
+        OutlinedButton(onClick = { ZapretAutoService.stop(context) }) { Text("Остановить проверку") }
+      } else {
+        Button(onClick = {
+          message = ""
+          prefs.edit().putString("urls", urls).putInt("limit", limit).apply()
+          runCatching {
+            ZapretAutoService.start(context, program, urls.lines().map(String::trim).filter(String::isNotBlank).distinct(), limit, stopModule = serviceRunning)
+          }.onFailure { message = it.message.orEmpty() }
+        }, enabled = daemonOnline && !serviceBusy && ZapretTestOwner.owner.get() == null, modifier = Modifier.fillMaxWidth()) {
+          Text(if (serviceRunning) "Остановить и подобрать" else "Подобрать стратегии")
+        }
+      }
+      TextButton(onClick = { options = !options }) { Text(if (options) "Скрыть параметры теста" else "Адреса и число стратегий") }
+      if (options) {
+        OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth(), enabled = !running,
+          label = { Text("До 4 HTTPS-адресов") }, minLines = 2)
+        TextButton(onClick = { urls = YoutubeTestUrls }, enabled = !running) { Text("Вернуть адреса YouTube и Music") }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          for (count in listOf(12, 30, 100)) FilterChip(limit == count, { limit = count }, enabled = !running,
+            label = { Text(if (count == 100) "До 100" else count.toString()) })
+        }
+      }
       if (running) LinearProgressIndicator(Modifier.fillMaxWidth())
       if (report.has("started")) Text("${report.optString("network")} · ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(report.optLong("started")))}", style = MaterialTheme.typography.bodySmall)
       Text(report.optString("message", "Проверка ещё не запускалась"))
@@ -66,7 +89,7 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
       val results = report.optJSONArray("results") ?: JSONArray()
       val sorted = (0 until results.length()).map { results.getJSONObject(it) }.sortedWith(compareBy<JSONObject> { !it.optBoolean("passed") }.thenBy { it.optLong("elapsed_ms", Long.MAX_VALUE) })
       val passed = sorted.filter { it.optBoolean("passed") }
-      val canApply = !running && !serviceRunning && ZapretTestOwner.owner.get() == null
+      val canApply = daemonOnline && !serviceBusy && !running && !serviceRunning && ZapretTestOwner.owner.get() == null
       if ((report.optJSONArray("baseline_failed_urls")?.length() ?: 0) > 0) {
         passed.firstOrNull()?.let { best ->
           Button(onClick = { onApply(report.optString("program"), best.optString("strategy")) },
@@ -75,7 +98,7 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
           }
         }
       }
-      passed.forEach { row ->
+      (if (details) passed else passed.take(3)).forEach { row ->
         OutlinedButton(onClick = { onApply(report.optString("program"), row.optString("strategy")); backup = prefs.getString("backup", "") }, enabled = canApply, modifier = Modifier.fillMaxWidth()) {
           Text("✓ ${row.optString("strategy")} · ${row.optLong("elapsed_ms")} мс суммарно")
         }
@@ -87,7 +110,7 @@ fun ZapretAutoCard(program: String, serviceRunning: Boolean, onApply: (String, S
         val tests = row.optJSONArray("tests") ?: JSONArray()
         for (i in 0 until tests.length()) { val t = tests.getJSONObject(i); Text("${if (t.optBoolean("ok")) "✓" else "×"} ${t.optString("url")} · ${t.optInt("attempt")} · ${t.optLong("elapsed_ms")} мс ${t.optString("error")}", style = MaterialTheme.typography.bodySmall) }
       }
-      OutlinedButton(onClick = {
+      if (!prefs.getString("backup", "").isNullOrBlank()) TextButton(onClick = {
         backup = prefs.getString("backup", "")
         if (backup.isNullOrBlank()) { message = "Резервной копии пока нет: она появится после применения стратегии"; return@OutlinedButton }
         scope.launch {

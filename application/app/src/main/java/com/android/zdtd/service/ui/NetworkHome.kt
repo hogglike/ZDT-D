@@ -2,7 +2,9 @@ package com.android.zdtd.service.ui
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -11,7 +13,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.NetworkCheck
-import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
@@ -32,13 +35,13 @@ import com.android.zdtd.service.diagnostics.connection.ConnectionWidgetProvider
 import com.android.zdtd.service.modes.ConnectionModesActivity
 import com.android.zdtd.service.ui.theme.NetworkBackdrop
 import com.android.zdtd.service.ui.theme.NetworkPanel
-import com.android.zdtd.service.ui.theme.LocalNetworkAppearance
 import com.android.zdtd.service.ui.theme.NetworkAppearance
 import com.android.zdtd.service.ui.theme.appearancePreferences
 import kotlinx.coroutines.flow.StateFlow
 
 private enum class NetworkPage(val title: String) {
-  HOME("Сеть"),
+  HOME("ZDT-D"),
+  APPEARANCE("Оформление"),
   DNS("DNS для приложений"),
   ZAPRET("Zapret для YouTube"),
   STRATEGY("Стратегия Zapret"),
@@ -51,7 +54,8 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
   val context = LocalContext.current
   val ui by uiStateFlow.collectAsStateWithLifecycle()
   var page by rememberSaveable { mutableStateOf(NetworkPage.HOME) }
-  var choosingAppearance by rememberSaveable { mutableStateOf(false) }
+  val appearance = remember(context) { appearancePreferences(context) }
+  var layout by remember { mutableStateOf(appearance.getString("layout", "tiles") ?: "tiles") }
   var profile by rememberSaveable { mutableStateOf("") }
   var zapretEngine by rememberSaveable { mutableStateOf("nfqws2") }
   val snackbar = remember { SnackbarHostState() }
@@ -70,24 +74,6 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
     if (page == NetworkPage.ZAPRET) actions.refreshPrograms()
   }
 
-  if (choosingAppearance) AlertDialog(
-    onDismissRequest = { choosingAppearance = false },
-    title = { Text("Оформление ZDT-D") },
-    text = {
-      Column {
-        for (style in NetworkAppearance.entries) {
-          Row(Modifier.fillMaxWidth().clickable {
-            appearancePreferences(context).edit().putString("style", style.key).apply()
-            ConnectionWidgetProvider.render(context)
-          }, verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(selected = LocalNetworkAppearance.current == style, onClick = null, modifier = Modifier.padding(12.dp))
-            Text(style.label)
-          }
-        }
-      }
-    },
-    confirmButton = { TextButton(onClick = { choosingAppearance = false }) { Text("Готово") } },
-  )
   Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
     Column(NetworkBackdrop(Modifier.fillMaxSize()).padding(padding)) {
       Row(
@@ -97,7 +83,10 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
         if (page != NetworkPage.HOME) {
           IconButton(onClick = ::up) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
         }
-        Text(page.title, Modifier.padding(vertical = 10.dp), style = MaterialTheme.typography.headlineSmall)
+        Text(page.title, Modifier.weight(1f).padding(vertical = 8.dp), style = MaterialTheme.typography.headlineSmall)
+        if (page == NetworkPage.HOME) IconButton(onClick = { page = NetworkPage.APPEARANCE }) {
+          Icon(Icons.Default.Settings, "Оформление")
+        }
       }
       val applySection = when (page) {
         NetworkPage.DNS -> "dns"
@@ -113,64 +102,60 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
           val running = ApiModels.isServiceOn(ui.status)
           val applying = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true
           NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-              Column(Modifier.weight(1f)) {
-                Text("Модуль ZDT-D", style = MaterialTheme.typography.labelLarge)
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(when {
-                  !ui.daemonOnline -> "Нет связи со службой"
-                  applying -> ui.restartPhase ?: "Применяются настройки…"
-                  running -> "Модуль работает"
+                  !ui.daemonOnline -> "Служба недоступна"
+                  applying -> ui.restartPhase ?: "Применяем настройки…"
+                  ui.status?.servicesPartial == true -> "Запущен частично"
+                  running -> "Модуль включён"
                   else -> "Модуль выключен"
-                }, style = MaterialTheme.typography.titleLarge)
+                }, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                Switch(
+                  checked = running, onCheckedChange = { actions.toggleService() },
+                  enabled = ui.daemonOnline && !applying,
+                )
               }
-              Switch(
-                checked = running,
-                onCheckedChange = { actions.toggleService() },
-                enabled = ui.daemonOnline && !ui.busy && !applying,
-              )
-            }
-          }
-          NetworkApplyControls(ui, actions)
-          NetworkEntry(Icons.Default.Dns, "DNS для приложений", "Профили DoH и DoT") {
-            page = NetworkPage.DNS
-          }
-          NetworkEntry(Icons.Default.PlayCircle, "Zapret для YouTube", "YouTube, Music и ReVanced") {
-            page = NetworkPage.ZAPRET
-          }
-          NetworkPanel(Modifier.fillMaxWidth()) {
-            Column {
-              ListItem(
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                leadingContent = { NetworkIcon(Icons.Default.VpnKey) },
-                headlineContent = { Text("VPN", style = MaterialTheme.typography.titleMedium) },
-                supportingContent = { Text("Режимы, приложения и серверы") },
-              )
-              Row(Modifier.padding(start = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = {
-                  context.startActivity(Intent(context, ConnectionModesActivity::class.java))
-                }) { Text("Подключение") }
-                TextButton(onClick = { page = NetworkPage.SUBSCRIPTIONS }) { Text("Подписки") }
+              if (applying) LinearProgressIndicator(Modifier.fillMaxWidth())
+              TextButton(enabled = ui.daemonOnline && running && !applying, onClick = {
+                actions.restartService(onlyIfRunning = true)
+              }) {
+                Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Перезапустить")
               }
             }
           }
-          NetworkEntry(Icons.Default.NetworkCheck, "Проверка связи", "Интернет, DNS, YouTube и VPN") {
-            context.startActivity(Intent(context, ConnectionDiagnosticsActivity::class.java))
+          val pages = listOf(
+            NetworkDestination(Icons.Default.Dns, "DNS профили", "Для приложений") { page = NetworkPage.DNS },
+            NetworkDestination(Icons.Default.PlayCircle, "Zapret", "YouTube и Music") { page = NetworkPage.ZAPRET },
+            NetworkDestination(Icons.Default.VpnKey, "VPN", "Подключение") {
+              context.startActivity(Intent(context, ConnectionModesActivity::class.java))
+            },
+            NetworkDestination(Icons.Default.NetworkCheck, "Проверка связи", "Сайты и сервисы") {
+              context.startActivity(Intent(context, ConnectionDiagnosticsActivity::class.java))
+            },
+          )
+          if (layout == "list") pages.forEach { NetworkEntry(it) }
+          else pages.chunked(2).forEach { pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+              pair.forEach { item -> NetworkEntry(item, Modifier.weight(1f), tile = true) }
+            }
           }
-          NetworkEntry(Icons.Default.Palette, "Оформление", LocalNetworkAppearance.current.label) {
-            choosingAppearance = true
+          Row {
+            TextButton(onClick = { page = NetworkPage.SUBSCRIPTIONS }) { Text("Подписки VPN") }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { page = NetworkPage.APPEARANCE }) { Text("Оформление") }
           }
-          Spacer(Modifier.height(6.dp))
+        }
+        NetworkPage.APPEARANCE -> AppearanceSettings(layout) { value ->
+          layout = value
+          appearance.edit().putString("layout", value).apply()
         }
         NetworkPage.DNS -> DnsProfilesScreen(actions, applying = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true)
         NetworkPage.ZAPRET -> Column(Modifier.fillMaxSize()) {
           NetworkPanel(Modifier.fillMaxWidth().padding(horizontal = 16.dp), accent = true) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-              Text("YouTube и YouTube Music", style = MaterialTheme.typography.titleMedium)
-              Text(
-                "Открой профиль и отметь установленные приложения, включая ReVanced, если ты им пользуешься.",
-                Modifier.padding(top = 4.dp),
-                style = MaterialTheme.typography.bodyMedium,
-              )
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("nfqws2" to "Zapret2", "nfqws" to "Zapret 1").forEach { (id, label) ->
                   val count = ui.programs.firstOrNull { it.id == id }?.profiles?.size ?: 0
@@ -178,7 +163,7 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
                     label = { Text(if (count > 0) "$label · $count" else label) })
                 }
               }
-              TextButton(onClick = { page = NetworkPage.TESTER }) { Text("Проверить стратегии") }
+              Button(onClick = { page = NetworkPage.TESTER }, modifier = Modifier.fillMaxWidth()) { Text("Подобрать стратегию") }
             }
           }
           Box(Modifier.weight(1f)) {
@@ -195,24 +180,100 @@ internal fun NetworkHome(uiStateFlow: StateFlow<UiState>, actions: ZdtdActions) 
           }
         }
         NetworkPage.STRATEGY -> ProfileScreen(ui.programs, zapretEngine, profile, actions, snackbar)
-        NetworkPage.TESTER -> NfqwsTesterScreen(uiStateFlow = uiStateFlow, actions = actions)
+        NetworkPage.TESTER -> NfqwsTesterScreen(uiStateFlow = uiStateFlow, actions = actions, initialProgram = zapretEngine)
         NetworkPage.SUBSCRIPTIONS -> SubscriptionsScreen(actions = actions, snackHost = snackbar)
       }
     }
   }
 }
 
+private data class NetworkDestination(val icon: ImageVector, val title: String, val detail: String, val open: () -> Unit)
+
 @Composable
-private fun NetworkEntry(icon: ImageVector, title: String, detail: String, open: () -> Unit) {
-  NetworkPanel(Modifier.fillMaxWidth()) {
-    ListItem(
-      modifier = Modifier.clickable(onClick = open),
+private fun NetworkEntry(item: NetworkDestination, modifier: Modifier = Modifier.fillMaxWidth(), tile: Boolean = false) {
+  NetworkPanel(modifier) {
+    if (tile) {
+      Column(Modifier.fillMaxWidth().heightIn(min = 112.dp).clickable(onClick = item.open).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        NetworkIcon(item.icon)
+        Text(item.title, style = MaterialTheme.typography.titleSmall)
+        Text(item.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      }
+    } else ListItem(
+      modifier = Modifier.clickable(onClick = item.open),
       colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-      leadingContent = { NetworkIcon(icon) },
-      headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
-      supportingContent = { Text(detail) },
+      leadingContent = { NetworkIcon(item.icon) },
+      headlineContent = { Text(item.title) },
+      supportingContent = { Text(item.detail) },
       trailingContent = { Icon(Icons.Default.ChevronRight, null) },
     )
+  }
+}
+
+@Composable
+private fun AppearanceSettings(layout: String, changeLayout: (String) -> Unit) {
+  val context = LocalContext.current
+  val prefs = remember(context) { appearancePreferences(context) }
+  var palette by remember { mutableStateOf(NetworkAppearance.fromKey(prefs.getString("style", null))) }
+  var display by remember { mutableStateOf(prefs.getString("theme", "preset")) }
+  var panels by remember { mutableStateOf(prefs.getString("panels", "preset")) }
+  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
+      Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        NetworkIcon(Icons.Default.Dns)
+        Spacer(Modifier.width(12.dp))
+        Column {
+          Text("Предпросмотр", style = MaterialTheme.typography.titleMedium)
+          Text("Акцент, фон и карточки", style = MaterialTheme.typography.bodySmall)
+        }
+      }
+    }
+    Text("Палитра", style = MaterialTheme.typography.titleMedium)
+    NetworkAppearance.entries.chunked(2).forEach { row ->
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        row.forEach { style ->
+          FilterChip(
+            selected = palette == style,
+            onClick = {
+              palette = style
+              prefs.edit().putString("style", style.key).apply()
+              ConnectionWidgetProvider.render(context)
+            },
+            modifier = Modifier.weight(1f),
+            leadingIcon = { Box(Modifier.size(14.dp).background(style.swatch, CircleShape)) },
+            label = { Text(style.label) },
+          )
+        }
+      }
+    }
+    AppearanceChoices("Режим", display, listOf("system" to "Система", "light" to "Светлый", "dark" to "Тёмный")) {
+      display = it
+      prefs.edit().putString("theme", it).apply()
+    }
+    AppearanceChoices("Карточки", panels, listOf("solid" to "Матовые", "glass" to "Стекло", "sharp" to "Строгие")) {
+      panels = it
+      prefs.edit().putString("panels", it).apply()
+    }
+    AppearanceChoices("Главный экран", layout, listOf("tiles" to "Плитки", "list" to "Список"), changeLayout)
+    TextButton(onClick = {
+      prefs.edit().remove("style").remove("theme").remove("panels").apply()
+      palette = NetworkAppearance.RED
+      display = "preset"
+      panels = "preset"
+      changeLayout("tiles")
+      ConnectionWidgetProvider.render(context)
+    }) { Text("Сбросить оформление") }
+  }
+}
+
+@Composable
+private fun AppearanceChoices(title: String, value: String?, choices: List<Pair<String, String>>, choose: (String) -> Unit) {
+  Column {
+    Text(title, style = MaterialTheme.typography.titleMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      choices.forEach { (key, label) -> FilterChip(value == key, { choose(key) }, label = { Text(label) }) }
+    }
   }
 }
 
@@ -229,32 +290,19 @@ private fun NetworkApplyControls(ui: UiState, actions: ZdtdActions, section: Str
   val prefs = remember(context) { context.getSharedPreferences("network_apply", android.content.Context.MODE_PRIVATE) }
   var automatic by remember(section) { mutableStateOf(section?.let { prefs.getBoolean(it, false) } ?: false) }
   val working = ui.busy || ui.status?.let { it.startInProgress || it.stopInProgress } == true
-  Column(Modifier.fillMaxWidth().padding(horizontal = if (section == null) 0.dp else 16.dp)) {
+  Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
     if (working) {
       LinearProgressIndicator(Modifier.fillMaxWidth())
-      if (section != null) Text(ui.restartPhase ?: "Применяются настройки…", style = MaterialTheme.typography.bodySmall)
+      Text(ui.restartPhase ?: "Применяем настройки…", style = MaterialTheme.typography.bodySmall)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      TextButton(
-        onClick = { actions.restartService(onlyIfRunning = true) },
-        enabled = ui.daemonOnline && !working && ApiModels.isServiceOn(ui.status),
-      ) { Text(if (section == null) "Перезапустить ZDT-D" else "Применить и перезапустить") }
-    }
-    if (section != null) {
-      Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, bottom = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Column(Modifier.weight(1f)) {
-          Text("Перезапускать при сохранении", style = MaterialTheme.typography.labelLarge)
-          Text("ZDT-D кратковременно прерывает обработку трафика", style = MaterialTheme.typography.bodySmall)
-        }
-        Switch(checked = automatic, onCheckedChange = {
-          automatic = it
-          prefs.edit().putBoolean(section, it).apply()
-        })
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      OutlinedButton(onClick = { actions.restartService() }, enabled = ui.daemonOnline && !working) {
+        Text("Применить")
       }
+      if (section != null) FilterChip(automatic, {
+        automatic = !automatic
+        prefs.edit().putBoolean(section, automatic).apply()
+      }, label = { Text("Перезапуск при сохранении") })
     }
   }
 }

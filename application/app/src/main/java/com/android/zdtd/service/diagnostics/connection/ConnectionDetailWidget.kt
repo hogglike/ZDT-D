@@ -170,10 +170,10 @@ class ConnectionDetailWidgetSettingsActivity : ComponentActivity() {
             Text("Максимум строк · $rows")
             Slider(rows.toFloat(), { rows = it.toInt() }, valueRange = 3f..8f, steps = 4)
             Text("Оформление", style = MaterialTheme.typography.titleMedium)
-            for (appearance in NetworkAppearance.entries) {
+            for (appearance in listOf(NetworkAppearance.RED, NetworkAppearance.GLASS, NetworkAppearance.GRAPHITE)) {
               Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(style == appearance.key, onClick = { style = appearance.key })
-                Text(appearance.label)
+                Text(if (appearance == NetworkAppearance.GLASS) "Стекло" else appearance.label)
               }
             }
             Button(enabled = chosen.isNotEmpty(), onClick = {

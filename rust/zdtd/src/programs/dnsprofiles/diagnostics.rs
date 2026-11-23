@@ -235,9 +235,11 @@ fn isolated_probe(plan: &RuntimePlan, domain: &str) -> Result<Value> {
     let port = tcp.local_addr()?.port();
     let udp = UdpSocket::bind((local, port))?;
 
-    // Same encrypted resolver and bootstrap as the profile. A temporary
-    // loopback listener keeps the test independent of Android netd and TUN.
+    // The live listener stages keep the filter. This stage tests the upstream.
     let mut settings = build_singbox_config(plan)?;
+    settings["dns"].as_object_mut().context("missing DNS config")?.remove("rules");
+    settings["dns"]["servers"].as_array_mut().context("missing DNS servers")?
+        .retain(|server| server["tag"] != "gemini-filter");
     let mut inbound = settings["inbounds"][1].clone();
     inbound["listen"] = json!(local);
     inbound["listen_port"] = json!(port);
@@ -293,13 +295,16 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
         vpn_netd,
     };
 
-    let url = parse_endpoint(&plan.profile.endpoint)?;
-    let host = url.host_str().context("dns_endpoint_host_missing")?;
-    let hostname = host.trim_matches(['[', ']']).trim_end_matches('.');
-    let protocol = if url.scheme() == "tls" { "DoT" } else { "DoH" };
-    let port = url
-        .port()
-        .unwrap_or(if protocol == "DoT" { 853 } else { 443 });
+    let automatic = plan.profile.endpoint == super::AUTOMATIC_DNS;
+    let (hostname, protocol, port) = if automatic {
+        ("DNS сети".to_owned(), "Авто", 53)
+    } else {
+        let url = parse_endpoint(&plan.profile.endpoint)?;
+        let host = url.host_str().context("dns_endpoint_host_missing")?;
+        let protocol = if url.scheme() == "tls" { "DoT" } else { "DoH" };
+        let port = url.port().unwrap_or(if protocol == "DoT" { 853 } else { 443 });
+        (host.trim_matches(['[', ']']).trim_end_matches('.').to_owned(), protocol, port)
+    };
 
     let sing_box = read_pid(&plan.pid).is_some_and(|pid| pid_matches_plan(pid, plan));
     let tun2socks =
@@ -347,18 +352,23 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
     });
 
     let address: Ipv4Addr = plan.dns.parse()?;
+    let filter_matches = plan.profile.google_filter && super::google_filter::has_cached_rule(domain);
+    let upstream_domain = if filter_matches { "example.com" } else { domain };
     let (bootstrap, upstream, listener, redirect) = thread::scope(|scope| {
         let bootstrap = scope.spawn(|| {
+            if automatic {
+                return json!({"state": "not_needed", "automatic": true});
+            }
             if hostname.parse::<std::net::IpAddr>().is_ok() {
                 return json!({"state": "not_needed"});
             }
             let server = plan.profile.bootstrap[0];
-            let mut result = udp_probe(SocketAddrV4::new(server, 53), hostname, LOCAL_TIMEOUT);
+            let mut result = udp_probe(SocketAddrV4::new(server, 53), &hostname, LOCAL_TIMEOUT);
             result["server"] = json!(server);
             result
         });
         let upstream = scope.spawn(|| {
-            isolated_probe(plan, domain).unwrap_or_else(|_| json!({"state": "start_failed"}))
+            isolated_probe(plan, upstream_domain).unwrap_or_else(|_| json!({"state": "start_failed"}))
         });
         let listener = scope.spawn(|| {
             if !sing_box {
@@ -391,13 +401,13 @@ fn check(plan: &RuntimePlan, domain: &str, revision: u64, suspended: bool) -> Re
 
     Ok(json!({
         "schema": 1, "state": "done", "profile": plan.id, "revision": revision,
-        "domain": domain, "protocol": protocol, "endpoint_host": host, "endpoint_port": port,
+        "domain": domain, "upstream_domain": upstream_domain, "protocol": protocol, "endpoint_host": hostname, "endpoint_port": port,
         "enabled": plan.profile.enabled, "suspended_for_tethering": suspended,
         "global_dnscrypt_enabled": global_dnscrypt_enabled(), "android_private_dns": private_dns_mode(),
         "bootstrap": bootstrap, "upstream": upstream, "listener": listener, "redirect": redirect,
         "gemini_filter": plan.profile.google_filter.then(|| {
             let mut filter = super::google_filter::status();
-            filter["matches_domain"] = json!(super::google_filter::has_cached_rule(domain));
+            filter["matches_domain"] = json!(filter_matches);
             filter
         }),
         "runtime": {

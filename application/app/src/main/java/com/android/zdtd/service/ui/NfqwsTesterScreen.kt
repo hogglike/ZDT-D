@@ -54,6 +54,8 @@ import com.android.zdtd.service.api.ApiModels
 import com.android.zdtd.service.diagnostics.nfqws.NfqwsTesterOverlayService
 import com.android.zdtd.service.diagnostics.nfqws.NfqwsTesterPhase
 import com.android.zdtd.service.diagnostics.nfqws.NfqwsTesterStore
+import com.android.zdtd.service.diagnostics.nfqws.ZapretAutoReport
+import com.android.zdtd.service.diagnostics.nfqws.ZapretTestOwner
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,13 +67,16 @@ fun NfqwsTesterScreen(
   actions: ZdtdActions,
   topContentPadding: Dp = 0.dp,
   bottomContentPadding: Dp = 0.dp,
+  initialProgram: String = "nfqws2",
 ) {
   val context = LocalContext.current
   val compact = rememberIsCompactWidth()
   val shortHeight = rememberIsShortHeight()
   val uiState by uiStateFlow.collectAsStateWithLifecycle()
   val testerState by NfqwsTesterStore.state.collectAsStateWithLifecycle()
-  var selectedProgram by remember { mutableStateOf("nfqws2") }
+  val auto by ZapretAutoReport.state.collectAsStateWithLifecycle()
+  var manual by remember { mutableStateOf(false) }
+  var selectedProgram by remember(initialProgram) { mutableStateOf(initialProgram) }
   var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
   var applyProgram by remember { mutableStateOf("nfqws2") }
   val applyScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -90,6 +95,11 @@ fun NfqwsTesterScreen(
   }
 
   val serviceRunning = ApiModels.isServiceOn(uiState.status)
+  val serviceBusy = uiState.busy || uiState.status?.let { it.startInProgress || it.stopInProgress } == true
+  LaunchedEffect(auto.optBoolean("running")) {
+    actions.refreshStatus()
+    if (!auto.optBoolean("running")) actions.refreshPrograms()
+  }
   val activeProgram = testerState.program.ifBlank { selectedProgram }
   val programProfiles = uiState.programs.firstOrNull { it.id == applyProgram }?.profiles.orEmpty()
 
@@ -103,8 +113,22 @@ fun NfqwsTesterScreen(
     ),
     verticalArrangement = Arrangement.spacedBy(if (shortHeight) 8.dp else 10.dp),
   ) {
-    item { ZapretAutoCard(selectedProgram, serviceRunning) { program, strategy -> applyProgram = program; selectedWorking = strategy } }
+    item {
+      ZapretAutoCard(selectedProgram, serviceRunning, serviceBusy, uiState.daemonOnline, { selectedProgram = it }) { program, strategy ->
+        applyProgram = program
+        selectedWorking = strategy
+      }
+    }
     if (applyMessage.isNotBlank()) item { Text(applyMessage) }
+    item {
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!serviceRunning && ZapretTestOwner.owner.get() == null) OutlinedButton(
+          onClick = { actions.restartService() }, enabled = uiState.daemonOnline && !serviceBusy,
+        ) { Text("Запустить ZDT-D") }
+        TextButton(onClick = { manual = !manual }) { Text(if (manual) "Скрыть ручной тест" else "Ручной тест") }
+      }
+    }
+    if (manual) {
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
@@ -158,8 +182,8 @@ fun NfqwsTesterScreen(
               ok = !serviceRunning,
               okText = stringResource(R.string.nfqws_tester_service_stopped),
               failText = stringResource(R.string.nfqws_tester_service_must_be_stopped),
-              buttonText = "Обновить состояние (службу не выключает)",
-              onButton = actions::refreshStatus,
+              buttonText = "Остановить модуль",
+              onButton = { if (!serviceBusy) actions.toggleService() },
             )
           }
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -234,6 +258,7 @@ fun NfqwsTesterScreen(
         ResultSection(title = stringResource(R.string.nfqws_tester_skipped_title), items = testerState.skipped)
       }
     }
+    }
   }
 
   selectedWorking?.let { strategy ->
@@ -247,7 +272,9 @@ fun NfqwsTesterScreen(
         },
       )
     } else {
-      var selectedProfile by remember(strategy) { mutableStateOf(programProfiles.first().name) }
+      var selectedProfile by remember(strategy) {
+        mutableStateOf((programProfiles.firstOrNull { it.enabled } ?: programProfiles.first()).name)
+      }
       AlertDialog(
         onDismissRequest = { selectedWorking = null },
         title = { Text(stringResource(R.string.nfqws_tester_apply_title)) },
@@ -260,7 +287,7 @@ fun NfqwsTesterScreen(
                 shape = RoundedCornerShape(12.dp),
                 color = if (selectedProfile == profile.name) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
               ) {
-                Text(profile.name, modifier = Modifier.padding(10.dp))
+                Text(if (profile.enabled) profile.name else "${profile.name} · выключен", modifier = Modifier.padding(10.dp))
               }
             }
           }
@@ -281,14 +308,19 @@ fun NfqwsTesterScreen(
                 }
                 check(context.getSharedPreferences("zapret_auto", 0).edit().putString("backup", org.json.JSONObject().put("path", path).put("content", previous).toString()).commit()) { "Не удалось сохранить резервную копию" }
                 actions.applyStrategicVariant(applyProgram, selectedProfile, strategy) { ok ->
-                  applyMessage = if (ok) "Стратегия сохранена. Запусти ZDT-D и проверь нужное приложение" else "Не удалось применить стратегию"
+                  val active = programProfiles.firstOrNull { it.name == selectedProfile }?.enabled == true
+                  applyMessage = when {
+                    !ok -> "Не удалось применить стратегию"
+                    active -> "Стратегия сохранена. Нажми «Запустить ZDT-D»."
+                    else -> "Стратегия сохранена в выключенном профиле. Включи его в списке Zapret."
+                  }
                   applying = false
                 }
                 selectedWorking = null
               } catch(e: Exception) { applyMessage = e.message.orEmpty(); applying = false }
             }
           }, enabled = !applying && !serviceRunning) {
-            Text(stringResource(R.string.common_yes))
+            Text("Сохранить стратегию")
           }
         },
         dismissButton = {

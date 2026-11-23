@@ -44,7 +44,7 @@ internal fun dnsStageText(stage: JSONObject): String {
     "nxdomain" -> "Домен не найден"
     "no_records" -> "Нет A-записей"
     "truncated" -> "Ответ усечён"
-    "not_needed" -> "Адрес задан как IP"
+    "not_needed" -> if (stage.optBoolean("automatic")) "Используется DNS сети" else "Адрес задан как IP"
     "not_running" -> "Профиль не запущен"
     "start_failed" -> "Проверочный процесс не запустился"
     "start_timeout" -> "Таймаут запуска проверки"
@@ -55,7 +55,7 @@ internal fun dnsStageText(stage: JSONObject): String {
 
 private val stages = listOf(
   "bootstrap" to "Поиск адреса DNS-сервера",
-  "upstream" to "Ответ DoH / DoT",
+  "upstream" to "Ответ DNS-сервера",
   "listener" to "Локальный DNS профиля",
   "redirect" to "Запрос через порт 53",
 )
@@ -85,7 +85,7 @@ private fun dnsSummary(report: JSONObject): String {
   val redirect = report.optJSONObject("redirect")?.optString("state")
   return when {
     upstream != "ok" && bootstrap !in listOf("ok", "not_needed") -> "Bootstrap DNS не вернул адрес сервера"
-    upstream != "ok" -> "Проверка зашифрованного DNS не прошла"
+    upstream != "ok" -> "Внешний DNS не ответил на проверку"
     report.optBoolean("suspended_for_tethering") -> "Сервер отвечает · профили на паузе"
     !report.optBoolean("enabled") -> "Сервер отвечает · профиль выключен"
     report.optBoolean("global_dnscrypt_enabled") -> "Запуску мешает глобальный DNSCrypt"
@@ -153,11 +153,12 @@ private fun validCheckDomain(input: String): Boolean {
 internal fun DnsProfileCheckDialog(
   actions: ZdtdActions, id: String, name: String, appLabels: Map<String, String>, previous: JSONObject?,
   onResult: (JSONObject) -> Unit, onDismiss: () -> Unit,
+  defaultDomain: String = DefaultDomain,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val path = "/api/programs/dnsprofiles/checks/$id"
-  var domain by rememberSaveable(id) { mutableStateOf(previous?.optString("domain") ?: DefaultDomain) }
+  var domain by rememberSaveable(id) { mutableStateOf(previous?.optString("domain") ?: defaultDomain) }
   var result by remember(id) { mutableStateOf(previous) }
   var running by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
@@ -275,7 +276,11 @@ internal fun DnsProfileCheckDialog(
               val state = stage.optString("state")
               OutlinedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                  Text(label, style = MaterialTheme.typography.labelLarge)
+                  val tested = report.optString("upstream_domain")
+                  Text(
+                    if (key == "upstream" && tested.isNotBlank() && tested != report.optString("domain")) "$label · $tested" else label,
+                    style = MaterialTheme.typography.labelLarge,
+                  )
                   Text(dnsStageText(stage), color = when (state) {
                     "ok" -> MaterialTheme.colorScheme.primary
                     "not_needed", "not_running" -> MaterialTheme.colorScheme.onSurfaceVariant

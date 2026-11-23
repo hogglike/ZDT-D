@@ -21,10 +21,8 @@ import com.android.zdtd.service.ui.theme.NetworkBackdrop
 import com.android.zdtd.service.ui.theme.NetworkPanel
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -74,12 +72,9 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
         @Suppress("UNUSED_VARIABLE") val refresh = tick
         val report = ConnectionHealth.read(this)
         val now = System.currentTimeMillis()
-        val captureSince = prefs.getLong("capture_since", 0)
-        val capture = captureSince > 0 && now - captureSince < 180_000
         val runningSince = prefs.getLong("running_since", 0)
         val checking = runningSince > 0 && now - runningSince < 120_000
         val error = prefs.getString("error", null)
-        val zip = File(cacheDir, "ZDTD_hotspot_report.zip")
         Surface(Modifier.fillMaxSize()) {
           Column(
             NetworkBackdrop(Modifier.fillMaxSize())
@@ -95,7 +90,7 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
             NetworkPanel(Modifier.fillMaxWidth(), accent = true) {
               Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Интернет, VPN, DNS и YouTube", style = MaterialTheme.typography.titleMedium)
-                Button(onClick = { start("CHECK") }, enabled = !checking && !capture) {
+                Button(onClick = { start("CHECK") }, enabled = !checking) {
                   Text(if (checking) "Проверка…" else "Проверить сейчас")
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
@@ -140,20 +135,7 @@ class ConnectionDiagnosticsActivity : ComponentActivity() {
               Text(report.optString("note"), style = MaterialTheme.typography.bodySmall)
             }
             if (!error.isNullOrBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-            HorizontalDivider()
-            Text("Ошибка включения раздачи", style = MaterialTheme.typography.titleLarge)
-            Text("Нажми «Записать», затем попробуй включить системную точку доступа. Запись идёт 90 секунд и собирает ошибки SoftAP, hostapd, tethering, маршруты и счётчики интерфейсов. Нужен root.")
-            Button(onClick = { start("HOTSPOT") }, enabled = !capture && !checking) {
-              Text(if (capture) "Запись: ${((now - captureSince) / 1000).coerceAtMost(90)} / 90 с" else "Записать ошибку раздачи")
-            }
-            if (capture) OutlinedButton(onClick = { stopService(Intent(this@ConnectionDiagnosticsActivity, DiagnosticService::class.java)) }) { Text("Остановить запись") }
-            OutlinedButton(onClick = {
-              val uri = FileProvider.getUriForFile(this@ConnectionDiagnosticsActivity, "$packageName.fileprovider", zip)
-              val send = Intent(Intent.ACTION_SEND).setType("application/zip").putExtra(Intent.EXTRA_STREAM, uri)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-              startActivity(Intent.createChooser(send, "Сохранить или отправить отчёт"))
-            }, enabled = zip.exists() && !capture) { Text("Сохранить / отправить ZIP-отчёт") }
-            Text("Отчёт остаётся на телефоне. Перед отправкой проверь содержимое: в нём есть сетевые адреса. Рабочие настройки раздачи и DNS запись не меняет.", style = MaterialTheme.typography.bodySmall)
+
           }
         }
       }

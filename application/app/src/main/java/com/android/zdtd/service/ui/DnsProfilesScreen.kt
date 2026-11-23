@@ -30,6 +30,7 @@ import org.json.JSONObject
 private const val DnsConfigPath = "/api/programs/dnsprofiles/config"
 private const val DnsValidatePath = "/api/programs/dnsprofiles/validate"
 private const val DnsStatusPath = "/api/programs/dnsprofiles/status"
+private const val AutomaticDnsEndpoint = "system://android"
 private const val GeminiFilterPath = "/api/programs/dnsprofiles/gemini-filter"
 private val GeminiPackages = setOf(
   "com.google.android.apps.bard", "com.google.android.googlequicksearchbox",
@@ -58,7 +59,6 @@ fun DnsProfilesScreen(
   var checkId by rememberSaveable { mutableStateOf<String?>(null) }
   var validation by remember { mutableStateOf<JSONObject?>(null) }
   var showValidation by remember { mutableStateOf(false) }
-  var settings by remember { mutableStateOf(false) }
   val reports = remember { mutableStateMapOf<String, JSONObject>() }
   val appLabels by produceState<Map<String, String>>(emptyMap(), context) {
     value = withContext(Dispatchers.IO) {
@@ -83,7 +83,7 @@ fun DnsProfilesScreen(
   }
   LaunchedEffect(Unit) { reload() }
 
-  fun submit(candidate: JSONObject, apply: Boolean = true) {
+  fun submit(candidate: JSONObject, apply: Boolean = true, applyNow: Boolean = false) {
     saving = true
     error = null
     validation = null
@@ -103,9 +103,15 @@ fun DnsProfilesScreen(
             reports.clear()
             val automatic = context.getSharedPreferences("network_apply", android.content.Context.MODE_PRIVATE)
               .getBoolean("dns", false)
-            message = if (automatic) "Настройки сохранены. Если модуль выключен, они применятся при запуске."
-              else "Настройки сохранены. Для применения нажми «Применить и перезапустить»."
+            message = if (applyNow) "Сохранено. Применяем настройки профиля…"
+              else if (automatic) "Настройки сохранены. Если модуль выключен, они применятся при запуске."
+              else "Настройки сохранены. Нажми «Применить»."
             reload()
+            if (automatic || applyNow) actions.restartService(onlyIfRunning = !applyNow) { started ->
+              refreshStatus()
+              if (applyNow) message = if (started) "Модуль запущен. Проверь состояние профиля."
+                else "Настройки сохранены. Проверь статус модуля и DNS-профиля."
+            }
           } else {
             error = "Не удалось сохранить настройки. Обнови список и повтори."
           }
@@ -221,26 +227,34 @@ fun DnsProfilesScreen(
         onDelete = { deleteId = id; error = null },
         onCheck = { checkId = id },
       )
+      if (current != null && profile.optBoolean("google_filter") && profile.optBoolean("enabled") &&
+        profile.optString("endpoint") != AutomaticDnsEndpoint && runtime?.optJSONObject(id)?.optBoolean("process_running") != true
+      ) {
+        var confirm by remember { mutableStateOf(false) }
+        TextButton(onClick = { confirm = true }, enabled = !saving && !loading && !applying) {
+          Text("Переключить на DNS сети")
+        }
+        if (confirm) AlertDialog(
+          onDismissRequest = { confirm = false },
+          title = { Text("Использовать DNS сети?") },
+          text = { Text("Для этого профиля запросы вне списка Gemini пойдут через DNS текущей сети. Если адрес сети недоступен в настройках Android, используется первый Bootstrap DNS. Обычные запросы передаются без шифрования.") },
+          confirmButton = { Button(onClick = {
+            confirm = false
+            val candidate = JSONObject(current.toString())
+            candidate.getJSONObject("profiles").getJSONObject(id).put("endpoint", AutomaticDnsEndpoint)
+            submit(candidate, applyNow = true)
+          }) { Text("Сохранить и применить") } },
+          dismissButton = { TextButton(onClick = { confirm = false }) { Text("Отмена") } },
+        )
+      }
     }
     if (ids.isEmpty() && !loading && current != null) item {
       Text("Создай профиль DoH или DoT и выбери приложения.", style = MaterialTheme.typography.bodyMedium)
     }
-    if (current != null) item {
-      OutlinedCard(Modifier.fillMaxWidth()) {
-        TextButton(onClick = { settings = !settings }) {
-          Text(if (settings) "Скрыть настройки DNS" else "Настройки DNS")
-        }
-        if (settings) ListItem(
-          headlineContent = { Text("Пауза при раздаче") },
-          supportingContent = { Text("Приостановить все DNS-профили после перезапуска модуля.") },
-          trailingContent = {
-            Switch(
-              checked = suspended, enabled = !saving && !loading && !applying,
-              onCheckedChange = { submit(JSONObject(current.toString()).put("suspend_for_tethering", it)) },
-            )
-          },
-        )
-      }
+    if (suspended && current != null) item {
+      OutlinedButton(enabled = !saving && !loading && !applying, onClick = {
+        submit(JSONObject(current.toString()).put("suspend_for_tethering", false), applyNow = true)
+      }) { Text("Возобновить DNS-профили") }
     }
   }
 
@@ -284,6 +298,7 @@ fun DnsProfilesScreen(
     actions = actions, id = checking, name = checkProfile.optString("display_name", checking),
     appLabels = appLabels, previous = reports[checking],
     onResult = { reports[checking] = it; refreshStatus() }, onDismiss = { checkId = null },
+    defaultDomain = if (checkProfile.optBoolean("google_filter")) "gemini.google.com" else "example.com",
   )
 }
 
@@ -304,7 +319,11 @@ private fun DnsProfileCard(
     else -> "Не запущен"
   }
   val endpoint = profile.optString("endpoint")
-  val protocol = if (endpoint.startsWith("tls://", true)) "DoT" else "DoH"
+  val protocol = when {
+    endpoint == AutomaticDnsEndpoint -> "DNS сети"
+    endpoint.startsWith("tls://", true) -> "DoT"
+    else -> "DoH"
+  }
   val host = runCatching { java.net.URI(endpoint).host }.getOrNull().orEmpty()
   val apps = profile.optJSONArray("apps")?.strings().orEmpty().map { appLabels[it] ?: it }.sorted()
   OutlinedCard(Modifier.fillMaxWidth()) {
@@ -312,7 +331,7 @@ private fun DnsProfileCard(
       Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
           Text(profile.optString("display_name"), style = MaterialTheme.typography.titleLarge)
-          Text("$protocol · $host", maxLines = 1, overflow = TextOverflow.Ellipsis,
+          Text(if (endpoint == AutomaticDnsEndpoint) protocol else "$protocol · $host", maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(enabled, onSwitch, enabled = editable && (apps.isNotEmpty() || enabled))
@@ -359,7 +378,8 @@ private fun DnsProfileEditor(
 ) {
   var id by remember(originalId) { mutableStateOf(originalId) }
   var name by remember(originalId) { mutableStateOf(original?.optString("display_name") ?: "") }
-  var endpoint by remember(originalId) { mutableStateOf(original?.optString("endpoint") ?: "") }
+  var networkDns by remember(originalId) { mutableStateOf(original?.optString("endpoint") == AutomaticDnsEndpoint) }
+  var endpoint by remember(originalId) { mutableStateOf(original?.optString("endpoint").orEmpty().takeUnless { it == AutomaticDnsEndpoint }.orEmpty()) }
   var dot by remember(originalId) { mutableStateOf(endpoint.startsWith("tls://", true)) }
   var dohAddress by remember(originalId) { mutableStateOf(if (dot) "" else endpoint) }
   var dotAddress by remember(originalId) { mutableStateOf(if (dot) endpoint else "") }
@@ -375,10 +395,15 @@ private fun DnsProfileEditor(
   val validProtocol = if (dot) !address.contains("://") || address.startsWith("tls://", true)
     else address.startsWith("https://", true)
 
-  val canSubmit = !busy && !unrelatedApps && name.isNotBlank() && validProtocol && address.isNotBlank()
+  val canSubmit = !busy && !unrelatedApps && name.isNotBlank() &&
+    (if (networkDns) googleFilter else validProtocol && address.isNotBlank())
 
   fun payload(): JSONObject {
-    val url = if (dot && !address.contains("://")) "tls://$address" else address
+    val url = when {
+      networkDns -> AutomaticDnsEndpoint
+      dot && !address.contains("://") -> "tls://$address"
+      else -> address
+    }
     return JSONObject().put("display_name", name.trim()).put("endpoint", url)
       .put("bootstrap", JSONArray(bootstrap.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }))
       .put("timeout_ms", timeout.toIntOrNull() ?: 0).put("apps", JSONArray(selected.sorted())).put("enabled", enabled)
@@ -393,14 +418,19 @@ private fun DnsProfileEditor(
         OutlinedTextField(name, { name = it }, label = { Text("Название") }, enabled = !busy,
           singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          FilterChip(selected = !dot, onClick = {
+          FilterChip(selected = !networkDns && !dot, onClick = {
+            networkDns = false
             if (dot) { dot = false; endpoint = dohAddress }
           }, label = { Text("DoH") })
-          FilterChip(selected = dot, onClick = {
+          FilterChip(selected = !networkDns && dot, onClick = {
+            networkDns = false
             if (!dot) { dot = true; endpoint = dotAddress }
           }, label = { Text("DoT") })
+          if (googleFilter) FilterChip(networkDns, { networkDns = true }, label = { Text("DNS сети") })
         }
-        OutlinedTextField(
+        if (networkDns) Text("Обычные запросы используют DNS сети по UDP. Если Android не сообщает адрес, берётся первый Bootstrap DNS.",
+          style = MaterialTheme.typography.bodySmall)
+        else OutlinedTextField(
           endpoint, {
             endpoint = it
             if (dot) dotAddress = it else dohAddress = it
@@ -425,7 +455,10 @@ private fun DnsProfileEditor(
         ListItem(
           headlineContent = { Text("Подписка Gemini") },
           supportingContent = { Text("Обновляет DNS-правила Gemini каждый час. Только для Gemini, Google, Google Play и сервисов Google Play.") },
-          trailingContent = { Switch(checked = googleFilter, enabled = !busy, onCheckedChange = { googleFilter = it }) },
+          trailingContent = { Switch(checked = googleFilter, enabled = !busy, onCheckedChange = {
+            googleFilter = it
+            if (!it) networkDns = false else if (endpoint.isBlank()) networkDns = true
+          }) },
         )
         if (unrelatedApps) {
           Text("В профиле есть приложения вне списка Google. Убери их для подключения подписки.",

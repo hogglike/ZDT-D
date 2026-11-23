@@ -6826,12 +6826,14 @@ private fun shQuote(s: String): String {
       var ok = false
       try {
         val initial = api.getJsonData("/api/status").optString("actual_runtime_state")
-        if (initial in setOf("stopped", "error") && onlyIfRunning) return@launchIO
-        check(initial in setOf("running", "partial")) { "Перезапуск доступен, когда модуль работает" }
-        check(api.postJsonResult("/api/restart", JSONObject()).optBoolean("accepted")) {
+        val stopped = initial in setOf("stopped", "error")
+        if (stopped && onlyIfRunning) return@launchIO
+        check(stopped || initial in setOf("running", "partial")) { "Подожди окончания запуска или остановки модуля" }
+        val request = if (stopped) "/api/start" else "/api/restart"
+        check(api.postJsonResult(request, JSONObject()).optBoolean("accepted")) {
           "Служба уже выполняет другую операцию"
         }
-        _uiState.update { it.copy(restartPhase = "Останавливаем модуль…") }
+        _uiState.update { it.copy(restartPhase = if (stopped) "Запускаем модуль…" else "Останавливаем модуль…") }
         val state = withTimeout(90_000L) {
           var result = ""
           while (result.isEmpty()) {
@@ -7510,10 +7512,7 @@ private fun shQuote(s: String): String {
         val detail = result.exceptionOrNull()?.message?.trim().orEmpty()
         log("ERR", if (detail.isBlank()) "$path: save failed" else "$path: save failed — $detail")
       }
-      withContext(Dispatchers.Main.immediate) {
-        if (ok && path == "/api/programs/dnsprofiles/config") restartAfterSave("dns")
-        onDone(ok)
-      }
+      withContext(Dispatchers.Main.immediate) { onDone(ok) }
     }
   }
 

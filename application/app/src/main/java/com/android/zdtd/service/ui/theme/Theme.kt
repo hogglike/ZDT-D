@@ -181,17 +181,29 @@ fun ZdtdTheme(
   val context = LocalContext.current
   val prefs = remember(context) { appearancePreferences(context) }
   var appearance by remember(prefs) { mutableStateOf(NetworkAppearance.fromKey(prefs.getString("style", null))) }
+  var display by remember(prefs) { mutableStateOf(prefs.getString("theme", "preset")) }
+  var panels by remember(prefs) { mutableStateOf(prefs.getString("panels", "preset") ?: "preset") }
   DisposableEffect(prefs) {
     val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-      if (key == "style") appearance = NetworkAppearance.fromKey(prefs.getString("style", null))
+      when (key) {
+        "style" -> appearance = NetworkAppearance.fromKey(prefs.getString("style", null))
+        "theme" -> display = prefs.getString("theme", "preset")
+        "panels" -> panels = prefs.getString("panels", "preset") ?: "preset"
+      }
     }
     prefs.registerOnSharedPreferenceChangeListener(listener)
     onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
   }
-  val useDark = appearance == NetworkAppearance.GRAPHITE || when (themeMode) {
-    ZdtdThemeMode.SYSTEM -> isSystemInDarkTheme()
-    ZdtdThemeMode.LIGHT -> false
-    ZdtdThemeMode.DARK -> true
+  val systemDark = isSystemInDarkTheme()
+  val useDark = when (display) {
+    "light" -> false
+    "dark" -> true
+    "system" -> systemDark
+    else -> appearance == NetworkAppearance.GRAPHITE || when (themeMode) {
+      ZdtdThemeMode.SYSTEM -> systemDark
+      ZdtdThemeMode.LIGHT -> false
+      ZdtdThemeMode.DARK -> true
+    }
   }
 
   // Keep system status-bar icons in sync with the app theme. Do not paint
@@ -208,21 +220,36 @@ fun ZdtdTheme(
     }
   }
 
-  val scheme = when {
-    appearance == NetworkAppearance.GRAPHITE -> DarkScheme.copy(
-      background = Color(0xFF1B191D), surface = Color(0xFF242126),
-      primary = Color(0xFFFFB9C1), primaryContainer = Color(0xFF61323C),
-    )
-    useDark -> DarkScheme
-    appearance == NetworkAppearance.GLASS -> LightScheme.copy(
-      background = Color(0xFFFFF8FA), surface = Color(0xFFFFFBFC),
-      surfaceVariant = Color(0xFFF3E9ED), onSurfaceVariant = Color(0xFF52444A),
-    )
-    else -> LightScheme
+  val base = if (useDark) DarkScheme else LightScheme
+  val scheme = when (appearance) {
+    NetworkAppearance.RED -> base
+    NetworkAppearance.GLASS -> tintedScheme(base, useDark, appearance.swatch, Color(0xFFFFABD3), Color(0xFFFFD8EB), Color(0xFF61304B))
+    NetworkAppearance.GRAPHITE -> tintedScheme(base, useDark, appearance.swatch, Color(0xFFDFC8E5), Color(0xFFEFE3F0), Color(0xFF49404B))
+    NetworkAppearance.OCEAN -> tintedScheme(base, useDark, appearance.swatch, Color(0xFFAFC7FF), Color(0xFFDCE6FF), Color(0xFF243D69))
+    NetworkAppearance.SAGE -> tintedScheme(base, useDark, appearance.swatch, Color(0xFF9DDECA), Color(0xFFCFEEE4), Color(0xFF244B40))
+    NetworkAppearance.AMBER -> tintedScheme(base, useDark, appearance.swatch, Color(0xFFFFC58A), Color(0xFFF8E3CA), Color(0xFF573B26))
   }
-  CompositionLocalProvider(LocalNetworkAppearance provides appearance) {
+  CompositionLocalProvider(LocalNetworkAppearance provides appearance, LocalPanelStyle provides panels) {
     MaterialTheme(colorScheme = scheme, typography = MaterialTheme.typography, shapes = ZdtdShapes, content = content)
   }
+}
+
+private fun tintedScheme(
+  base: androidx.compose.material3.ColorScheme,
+  dark: Boolean,
+  lightAccent: Color,
+  darkAccent: Color,
+  lightPanel: Color,
+  darkPanel: Color,
+): androidx.compose.material3.ColorScheme {
+  val accent = if (dark) darkAccent else lightAccent
+  return base.copy(
+    primary = accent,
+    onPrimary = if (dark) Color(0xFF151519) else Color.White,
+    primaryContainer = if (dark) darkPanel else lightPanel,
+    onPrimaryContainer = if (dark) darkAccent else Color(0xFF212126),
+    surfaceTint = accent,
+  )
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

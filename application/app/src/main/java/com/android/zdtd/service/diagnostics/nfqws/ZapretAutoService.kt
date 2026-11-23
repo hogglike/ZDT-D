@@ -67,10 +67,11 @@ class ZapretAutoService : Service() {
     val program = intent?.getStringExtra("program").orEmpty()
     val urls = intent?.getStringArrayListExtra("urls").orEmpty()
     val limit = intent?.getIntExtra("limit", 12)?.coerceIn(1, 100) ?: 12
-    job = scope.launch { withTimeout(30 * 60 * 1000L) { runSession(program, urls, limit) } }
+    val stopModule = intent?.getBooleanExtra("stop_module", false) == true
+    job = scope.launch { withTimeout(30 * 60 * 1000L) { runSession(program, urls, limit, stopModule) } }
     return START_NOT_STICKY
   }
-  private suspend fun runSession(program: String, urls: List<String>, limit: Int) {
+  private suspend fun runSession(program: String, urls: List<String>, limit: Int, stopModule: Boolean) {
     val runner = NfqwsTesterRunner(this)
     val report = JSONObject().put("program", program).put("running", true).put("started", System.currentTimeMillis()).put("results", JSONArray())
     fun publish(message: String) { report.put("message", message); ZapretAutoReport.publish(this, report) }
@@ -78,11 +79,36 @@ class ZapretAutoService : Service() {
     try {
       require(program in listOf("nfqws", "nfqws2")) { "Неизвестное ядро" }
       require(urls.size in 1..4 && urls.all { u -> runCatching { val url = URL(u); url.protocol == "https" && url.host.isNotBlank() && url.userInfo == null && url.port in listOf(-1, 443) && u.toHttpUrlOrNull() != null }.getOrDefault(false) }) { "Нужны 1–4 HTTPS-адреса без пароля, порт 443" }
+      publish("Проверяем состояние модуля…")
       val cm = getSystemService(ConnectivityManager::class.java)
+      fun networkAvailable() {
+        val active = cm.activeNetwork ?: error("Нет подключения к сети")
+        val capabilities = cm.getNetworkCapabilities(active) ?: error("Сеть недоступна")
+        check(!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) { "Выключи системный VPN и повтори подбор" }
+      }
+      networkAvailable()
+      val api = ModeClient.api(this)
+      val initial = api.getStatus() ?: error("Не удалось получить состояние ZDT-D")
+      check(!initial.startInProgress && !initial.stopInProgress) { "Подожди окончания запуска или остановки ZDT-D" }
+      val strategies = runner.listStrategies(program).take(limit)
+      check(strategies.isNotEmpty()) { "Нет стратегий в модуле для $program" }
+      check(!runner.status().optBoolean("active")) { "Другой тест уже запущен" }
+      if (ApiModels.isServiceOn(initial)) {
+        check(stopModule) { "Модуль работает. Нажми «Остановить и подобрать»." }
+        publish("Останавливаем ZDT-D…")
+        check(api.postJsonResult("/api/stop", JSONObject()).optBoolean("accepted")) { "Служба занята. Повтори после завершения операции." }
+        withTimeoutOrNull(60_000) {
+          while (true) {
+            delay(500)
+            val status = api.getStatus() ?: continue
+            if (!ApiModels.isServiceOn(status) && !status.startInProgress && !status.stopInProgress) break
+          }
+          true
+        } ?: error("ZDT-D не остановился за 60 секунд")
+      }
+      networkAvailable()
       val network = cm.activeNetwork ?: error("Нет подключения к сети")
       val caps = cm.getNetworkCapabilities(network) ?: error("Сеть недоступна")
-      check(!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) { "Выключи другой VPN перед подбором" }
-      val api = ModeClient.api(this)
       suspend fun environment() {
         currentCoroutineContext().ensureActive()
         check(cm.activeNetwork == network) { "Сеть сменилась. Результаты сохранены; повтори подбор в новой сети" }
@@ -101,8 +127,6 @@ class ZapretAutoService : Service() {
       val baselineFailed = (0 until baseline.length()).map { baseline.getJSONObject(it) }
         .filterNot { it.optBoolean("ok") }.map { it.optString("url") }.toSet()
       report.put("baseline_failed_urls", JSONArray(baselineFailed.sorted()))
-      val strategies = runner.listStrategies(program).take(limit)
-      check(strategies.isNotEmpty()) { "Нет стратегий в модуле для $program" }
       report.put("total", strategies.size)
       for ((index, file) in strategies.withIndex()) {
         environment()
@@ -134,9 +158,10 @@ class ZapretAutoService : Service() {
     catch (e: Exception) { publish(e.message ?: "Ошибка автоподбора") }
     finally {
       withContext(NonCancellable) { if (nativeOwned) runCatching { runner.stopTester() } }
-      report.put("running", false).put("finished", System.currentTimeMillis()); ZapretAutoReport.publish(this, report)
       if (wake?.isHeld == true) wake?.release()
       ZapretTestOwner.owner.compareAndSet("auto", null); owns = false
+      report.put("running", false).put("finished", System.currentTimeMillis())
+      ZapretAutoReport.publish(this, report)
       stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
     }
   }
@@ -175,8 +200,8 @@ class ZapretAutoService : Service() {
   }
   override fun onDestroy() { job?.cancel(); super.onDestroy() /* finally owns cleanup; native guard covers process death */ }
   companion object {
-    fun start(context: Context, program: String, urls: List<String>, limit: Int) {
-      ContextCompat.startForegroundService(context, Intent(context, ZapretAutoService::class.java).putExtra("program", program).putStringArrayListExtra("urls", ArrayList(urls)).putExtra("limit", limit))
+    fun start(context: Context, program: String, urls: List<String>, limit: Int, stopModule: Boolean) {
+      ContextCompat.startForegroundService(context, Intent(context, ZapretAutoService::class.java).putExtra("program", program).putStringArrayListExtra("urls", ArrayList(urls)).putExtra("limit", limit).putExtra("stop_module", stopModule))
     }
     fun stop(context: Context) { context.startService(Intent(context, ZapretAutoService::class.java).setAction("stop")) }
   }
